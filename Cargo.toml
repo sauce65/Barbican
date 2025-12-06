@@ -1,0 +1,52 @@
+[package]
+name = "barbican"
+version = "0.1.0"
+edition = "2024"
+description = "NIST 800-53 compliant security infrastructure for Axum applications"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/pauljickling/barbican"
+keywords = ["axum", "security", "nist", "postgres", "web"]
+categories = ["web-programming", "authentication"]
+
+[features]
+default = ["observability-stdout"]
+# Database support
+postgres = ["dep:sqlx"]
+# Observability providers (pick one or combine)
+observability-stdout = []           # Default: stdout logging
+observability-loki = ["dep:tracing-loki", "dep:url"]
+observability-otlp = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "dep:tracing-opentelemetry"]
+# Metrics
+metrics-prometheus = ["dep:metrics", "dep:metrics-exporter-prometheus", "dep:axum-prometheus"]
+
+[dependencies]
+# Web framework
+axum = "0.8"
+tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.6", features = ["cors", "trace", "set-header", "limit", "timeout"] }
+tower_governor = "0.8"
+
+# Database (optional)
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "uuid", "chrono", "tls-rustls"], optional = true }
+
+# Security
+subtle = "2.5"
+
+# Core tracing (always included)
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Loki support (optional)
+tracing-loki = { version = "0.2", optional = true }
+url = { version = "2", optional = true }
+
+# OpenTelemetry/OTLP support (optional)
+opentelemetry = { version = "0.27", optional = true }
+opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"], optional = true }
+opentelemetry-otlp = { version = "0.27", features = ["tonic"], optional = true }
+tracing-opentelemetry = { version = "0.28", optional = true }
+
+# Prometheus metrics (optional)
+metrics = { version = "0.24", optional = true }
+metrics-exporter-prometheus = { version = "0.16", optional = true }
+axum-prometheus = { version = "0.8", optional = true }
