@@ -19,7 +19,7 @@ This document describes the security controls, compliance mappings, threat model
 
 #### SC-2: Security Headers
 
-**File**: `src/layers.rs:76-108`
+**File**: `src/layers.rs:75-108`
 
 **NIST 800-53 Mapping**:
 - SC-28: Protection of information at rest (via HSTS)
@@ -146,7 +146,7 @@ This document describes the security controls, compliance mappings, threat model
 
 #### SC-6: CORS Policy
 
-**File**: `src/layers.rs:110-145`
+**File**: `src/layers.rs:110-112, 124-145`
 
 **NIST 800-53 Mapping**:
 - AC-4: Information Flow Enforcement
