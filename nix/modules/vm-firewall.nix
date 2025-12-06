@@ -1,0 +1,160 @@
+# Barbican Security Module: VM Firewall
+# Addresses: CRT-007 (no network segmentation), HIGH-005 (no egress filtering)
+# Standards: NIST SC-7, SC-7(5), NIST SP 800-190 Section 5.2
+{ config, lib, pkgs, ... }:
+
+with lib;
+
+let
+  cfg = config.barbican.vmFirewall;
+in {
+  options.barbican.vmFirewall = {
+    enable = mkEnableOption "Barbican VM firewall";
+
+    defaultPolicy = mkOption {
+      type = types.enum [ "accept" "drop" ];
+      default = "drop";
+      description = "Default policy for incoming connections";
+    };
+
+    allowedInbound = mkOption {
+      type = types.listOf (types.submodule {
+        options = {
+          port = mkOption {
+            type = types.int;
+            description = "TCP port to allow";
+          };
+          from = mkOption {
+            type = types.str;
+            default = "any";
+            description = "Source CIDR or 'any'";
+          };
+          proto = mkOption {
+            type = types.enum [ "tcp" "udp" ];
+            default = "tcp";
+            description = "Protocol";
+          };
+        };
+      });
+      default = [];
+      description = "Inbound firewall rules";
+    };
+
+    allowedOutbound = mkOption {
+      type = types.listOf (types.submodule {
+        options = {
+          port = mkOption {
+            type = types.int;
+            description = "TCP port to allow";
+          };
+          to = mkOption {
+            type = types.str;
+            default = "any";
+            description = "Destination CIDR or 'any'";
+          };
+          proto = mkOption {
+            type = types.enum [ "tcp" "udp" ];
+            default = "tcp";
+            description = "Protocol";
+          };
+        };
+      });
+      default = [];
+      description = "Outbound firewall rules";
+    };
+
+    enableEgressFiltering = mkOption {
+      type = types.bool;
+      default = true;
+      description = "Enable outbound traffic filtering (whitelist mode)";
+    };
+
+    allowDNS = mkOption {
+      type = types.bool;
+      default = true;
+      description = "Allow DNS queries (UDP 53)";
+    };
+
+    allowNTP = mkOption {
+      type = types.bool;
+      default = true;
+      description = "Allow NTP (UDP 123)";
+    };
+
+    logDropped = mkOption {
+      type = types.bool;
+      default = true;
+      description = "Log dropped packets";
+    };
+  };
+
+  config = mkIf cfg.enable {
+    networking.firewall = {
+      enable = true;
+
+      # Allowed TCP ports (from allowedInbound with from="any")
+      allowedTCPPorts = map (r: r.port) (
+        filter (r: r.from == "any" && r.proto == "tcp") cfg.allowedInbound
+      );
+
+      allowedUDPPorts = map (r: r.port) (
+        filter (r: r.from == "any" && r.proto == "udp") cfg.allowedInbound
+      );
+
+      # Custom rules for source-restricted access
+      extraCommands = let
+        inboundRules = filter (r: r.from != "any") cfg.allowedInbound;
+        outboundRules = if cfg.enableEgressFiltering then cfg.allowedOutbound else [];
+      in ''
+        # Default policies
+        iptables -P INPUT ${if cfg.defaultPolicy == "drop" then "DROP" else "ACCEPT"}
+        iptables -P FORWARD DROP
+        ${optionalString cfg.enableEgressFiltering "iptables -P OUTPUT DROP"}
+
+        # Allow loopback
+        iptables -A INPUT -i lo -j ACCEPT
+        iptables -A OUTPUT -o lo -j ACCEPT
+
+        # Allow established connections
+        iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+        iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+
+        # DNS
+        ${optionalString cfg.allowDNS ''
+          iptables -A OUTPUT -p udp --dport 53 -j ACCEPT
+          iptables -A OUTPUT -p tcp --dport 53 -j ACCEPT
+        ''}
+
+        # NTP
+        ${optionalString cfg.allowNTP ''
+          iptables -A OUTPUT -p udp --dport 123 -j ACCEPT
+        ''}
+
+        # Source-restricted inbound rules
+        ${concatMapStringsSep "\n" (r: ''
+          iptables -A INPUT -p ${r.proto} --dport ${toString r.port} -s ${r.from} -j ACCEPT
+        '') inboundRules}
+
+        # Outbound rules (if egress filtering enabled)
+        ${concatMapStringsSep "\n" (r: ''
+          iptables -A OUTPUT -p ${r.proto} --dport ${toString r.port} ${
+            if r.to != "any" then "-d ${r.to}" else ""
+          } -j ACCEPT
+        '') outboundRules}
+
+        # Log and drop
+        ${optionalString cfg.logDropped ''
+          iptables -A INPUT -m limit --limit 5/min -j LOG --log-prefix "IPT_INPUT_DROP: " --log-level 4
+          iptables -A OUTPUT -m limit --limit 5/min -j LOG --log-prefix "IPT_OUTPUT_DROP: " --log-level 4
+        ''}
+      '';
+
+      # Cleanup
+      extraStopCommands = ''
+        iptables -P INPUT ACCEPT
+        iptables -P OUTPUT ACCEPT
+        iptables -F
+      '';
+    };
+  };
+}
