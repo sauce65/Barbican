@@ -192,6 +192,167 @@ This crate supports:
 - **SOC 2 Type II**: CC6.1, CC6.6, CC6.7, CC7.2
 - **FedRAMP**: SC-5, SC-8, SC-28
 
+## NixOS Modules
+
+Barbican provides NixOS modules for hardening MicroVMs and NixOS systems. These modules implement NIST 800-53 controls at the infrastructure level.
+
+### Quick Start (NixOS Flake)
+
+```nix
+{
+  inputs = {
+    nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
+    barbican.url = "github:your-org/barbican";
+  };
+
+  outputs = { self, nixpkgs, barbican, ... }: {
+    nixosConfigurations.myvm = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
+      modules = [
+        # Use a security profile (minimal, standard, or hardened)
+        barbican.nixosModules.hardened
+
+        # Or import individual modules
+        # barbican.nixosModules.secureUsers
+        # barbican.nixosModules.hardenedSSH
+        # barbican.nixosModules.kernelHardening
+
+        {
+          # Configure module options
+          barbican.secureUsers = {
+            enable = true;
+            authorizedKeys = [ "ssh-ed25519 AAAA... user@host" ];
+          };
+          barbican.hardenedSSH = {
+            enable = true;
+            enableFail2ban = true;
+          };
+        }
+      ];
+    };
+  };
+}
+```
+
+### Security Profiles
+
+| Profile | Use Case | Modules Enabled |
+|---------|----------|-----------------|
+| `minimal` | Development/testing | secureUsers, kernelHardening (basic) |
+| `standard` | Staging, internal prod | Above + hardenedSSH, timeSync, resourceLimits |
+| `hardened` | Production, compliance | All modules with strict defaults |
+
+### Available Modules
+
+| Module | Description | Controls Addressed |
+|--------|-------------|-------------------|
+| `secureUsers` | No empty passwords, SSH-only auth, login banners | CRT-001, CRT-002 |
+| `hardenedSSH` | Strong ciphers, fail2ban, key-only auth | CRT-010 |
+| `kernelHardening` | Sysctl hardening, ASLR, audit | MED-001 |
+| `securePostgres` | scram-sha-256, SSL, audit logging, restricted listen | CRT-003, CRT-011-013 |
+| `timeSync` | Chrony NTP with secure servers | HIGH-011 |
+| `resourceLimits` | Cgroups, ulimits, core dump prevention | HIGH-001 |
+| `intrusionDetection` | AIDE file integrity, auditd | CRT-015, CRT-016 |
+| `vmFirewall` | Network segmentation, egress filtering | CRT-007, HIGH-005 |
+| `databaseBackup` | Encrypted automated backups | CRT-009 |
+| `secretsManagement` | sops-nix integration | CRT-004, CRT-005 |
+| `observabilityAuth` | Loki/Prometheus/Grafana auth | CRT-008, CRT-014 |
+| `systemdHardening` | Service sandboxing presets | MED-003 |
+
+### Module Configuration Example
+
+```nix
+{ config, ... }: {
+  barbican.vmFirewall = {
+    enable = true;
+    defaultPolicy = "drop";
+    allowedInbound = [
+      { port = 22; from = "10.0.0.0/8"; proto = "tcp"; }
+      { port = 443; from = "any"; proto = "tcp"; }
+    ];
+    allowedOutbound = [
+      { port = 443; to = "any"; proto = "tcp"; }
+    ];
+    enableEgressFiltering = true;
+    allowDNS = true;
+    logDropped = true;
+  };
+
+  barbican.intrusionDetection = {
+    enable = true;
+    enableAIDE = true;
+    enableAuditd = true;
+    auditRules = [
+      "-a always,exit -F arch=b64 -S execve -k exec"
+      "-w /etc/passwd -p wa -k identity"
+    ];
+  };
+}
+```
+
+### Library Helpers
+
+```nix
+let
+  barbican = inputs.barbican;
+in {
+  # Network zone helpers for segmentation
+  networking = barbican.lib.networkZones.mkZones {
+    dmz = { subnet = "10.0.10.0/24"; vlan = 10; };
+    backend = { subnet = "10.0.20.0/24"; vlan = 20; };
+    monitoring = { subnet = "10.0.30.0/24"; vlan = 30; };
+  };
+
+  # PKI certificate generation scripts
+  environment.systemPackages = [
+    (barbican.lib.pki.mkCAScript { org = "MyOrg"; })
+    (barbican.lib.pki.mkServerCertScript { ca = "/etc/ssl/ca"; })
+  ];
+
+  # Systemd hardening presets
+  systemd.services.myapp = barbican.lib.systemdHardening.webService // {
+    # ... your service config
+  };
+}
+```
+
+## Security Audit & Testing
+
+Run self-contained NixOS VM tests to validate security controls:
+
+```bash
+# Run all security tests
+nix build .#checks.x86_64-linux.all -L
+
+# Run individual module tests
+nix build .#checks.x86_64-linux.secure-users -L
+nix build .#checks.x86_64-linux.hardened-ssh -L
+nix build .#checks.x86_64-linux.kernel-hardening -L
+nix build .#checks.x86_64-linux.secure-postgres -L
+nix build .#checks.x86_64-linux.time-sync -L
+nix build .#checks.x86_64-linux.intrusion-detection -L
+nix build .#checks.x86_64-linux.vm-firewall -L
+nix build .#checks.x86_64-linux.resource-limits -L
+
+# Run audit with report generation
+nix run .#audit
+```
+
+### Test Coverage
+
+| Test | Controls | What It Validates |
+|------|----------|-------------------|
+| `secure-users` | CRT-001, CRT-002 | No empty passwords, no auto-login, SSH keys |
+| `hardened-ssh` | CRT-010 | Strong ciphers, fail2ban, password auth disabled |
+| `kernel-hardening` | MED-001 | ASLR, kptr_restrict, sysctl values |
+| `secure-postgres` | CRT-003, CRT-011-013 | scram-sha-256, restricted listen, audit logs |
+| `time-sync` | HIGH-011 | Chrony service, NTP sources |
+| `intrusion-detection` | CRT-015, CRT-016 | Auditd rules, AIDE installation |
+| `vm-firewall` | CRT-007, HIGH-005 | iptables rules, egress filtering |
+| `resource-limits` | HIGH-001 | Core dumps blocked, ulimits |
+
+The combined test suite generates a JSON audit report with compliance rate.
+
 ## Documentation
 
 - [CONTRIBUTING.md](./CONTRIBUTING.md) - Architecture and development guide
