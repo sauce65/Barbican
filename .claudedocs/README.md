@@ -1,0 +1,154 @@
+# Barbican Security Compliance Documentation
+
+This directory contains comprehensive NIST SP 800-53 Rev 5 compliance analysis and implementation guidance for the barbican security library.
+
+## Documents
+
+### [NIST_800_53_COMPLIANCE_ANALYSIS.md](./NIST_800_53_COMPLIANCE_ANALYSIS.md)
+**Comprehensive analysis of all 18 NIST 800-53 control families**
+
+- 47 controls barbican CAN IMPLEMENT out-of-the-box
+- 62 controls barbican CAN FACILITATE with hooks/helpers
+- 89 controls that are APPLICATION RESPONSIBILITY
+- 134 controls that are OUT OF SCOPE (organizational/physical)
+- Detailed implementation specifications for each control
+- 5-phase implementation roadmap spanning 12 months
+- Priority matrix (Critical, High, Medium, Low)
+
+**Use this document to:**
+- Understand what barbican provides vs what your application must implement
+- Plan implementation priorities
+- Design application architecture around barbican
+- Communicate compliance capabilities to stakeholders
+
+### [SECURITY_CONTROL_REGISTRY.md](./SECURITY_CONTROL_REGISTRY.md)
+**Living registry tracking implementation status of all controls**
+
+- Status tracking: Implemented, Partial, Planned, Facilitated
+- Code locations and test artifacts for each control
+- Gap analysis for incomplete controls
+- Phase assignments and priorities
+- Progress metrics and completion targets
+
+**Use this document to:**
+- Track implementation progress
+- Identify gaps in current implementation
+- Plan sprint work and feature development
+- Generate compliance reports for auditors
+
+### [NIST_800_53_IMPLEMENTATION_GUIDE.md](./NIST_800_53_IMPLEMENTATION_GUIDE.md)
+**Practical quick-start guide for developers**
+
+- 5-minute quick start to compliance
+- Examples of using implemented controls
+- Examples of facilitated controls (what you implement, what barbican provides)
+- Best practices and common pitfalls
+- Testing strategies
+- NixOS infrastructure hardening guide
+
+**Use this document to:**
+- Get started using barbican
+- Understand how to use each control
+- Avoid common security mistakes
+- Build compliant applications quickly
+
+## Quick Reference
+
+### Implementation Status
+
+| Category | Count | Percentage |
+|----------|-------|------------|
+| Implemented | 22 | 20.2% |
+| Partial | 11 | 10.1% |
+| Planned | 50 | 45.9% |
+| Facilitated | 26 | 23.8% |
+| **Total Help** | **109** | **100%** |
+
+### Top Priority Controls (Next to Implement)
+
+1. **SI-10** - Input Validation Framework (CRITICAL)
+2. **AC-3** - RBAC Framework (CRITICAL)
+3. **IA-5(1)** - Password Policy (CRITICAL)
+4. **SC-8** - HTTP TLS Enforcement (CRITICAL)
+5. **IA-2(1)** - Multi-Factor Authentication (CRITICAL)
+6. **AC-7** - Login Attempt Tracking (HIGH)
+7. **AC-11/12** - Session Management (HIGH)
+8. **IA-8** - OAuth/OIDC Client (HIGH)
+
+### Controls Already Implemented
+
+- **AC-4** - CORS Policy (Information Flow Enforcement)
+- **AU-2, AU-3, AU-8, AU-12** - Audit Logging
+- **CM-2, CM-6, CM-7** - Configuration Management (NixOS)
+- **CP-9** - Encrypted Backups (NixOS)
+- **IA-5** - Constant-Time Comparison
+- **RA-5** - Vulnerability Scanning (cargo audit)
+- **SC-5** - Rate Limiting & DoS Protection
+- **SC-7, SC-7(5)** - Network Firewall (NixOS)
+- **SC-8** - Database TLS
+- **SC-10** - Request Timeout
+- **SC-13** - Cryptographic Protection
+- **SI-3** - Malicious Code Detection
+- **SI-4** - Intrusion Detection (NixOS)
+- **SI-16** - Memory Protection (NixOS)
+
+## Usage
+
+### For Developers
+
+1. Start with [NIST_800_53_IMPLEMENTATION_GUIDE.md](./NIST_800_53_IMPLEMENTATION_GUIDE.md)
+2. Follow the quick start guide
+3. Reference specific control examples as needed
+4. Check [SECURITY_CONTROL_REGISTRY.md](./SECURITY_CONTROL_REGISTRY.md) for implementation status
+
+### For Security Engineers
+
+1. Review [NIST_800_53_COMPLIANCE_ANALYSIS.md](./NIST_800_53_COMPLIANCE_ANALYSIS.md)
+2. Understand control categorization (implement/facilitate/app responsibility/out of scope)
+3. Use [SECURITY_CONTROL_REGISTRY.md](./SECURITY_CONTROL_REGISTRY.md) to track progress
+4. Generate compliance reports from registry status
+
+### For Project Managers
+
+1. Review implementation roadmap in [NIST_800_53_COMPLIANCE_ANALYSIS.md](./NIST_800_53_COMPLIANCE_ANALYSIS.md)
+2. Track progress using [SECURITY_CONTROL_REGISTRY.md](./SECURITY_CONTROL_REGISTRY.md)
+3. Use phase completion targets to plan sprints
+4. Monitor compliance percentage metrics
+
+### For Auditors
+
+1. [SECURITY_CONTROL_REGISTRY.md](./SECURITY_CONTROL_REGISTRY.md) provides control status
+2. Each implemented control has code location and test artifact
+3. Gap analysis documents known deficiencies
+4. Test results provide audit evidence
+
+## Compliance Frameworks
+
+Barbican is designed for compliance with:
+
+- **NIST SP 800-53 Rev 5** - Federal security controls
+- **FedRAMP** - Federal cloud security
+- **SOC 2 Type II** - Trust service criteria
+- **NIST SP 800-63B** - Digital identity guidelines
+
+## Contributing
+
+See [CONTRIBUTING.md](../CONTRIBUTING.md) for:
+- Architecture overview
+- Development practices
+- How to add new security controls
+- Testing requirements
+
+## Security
+
+See [SECURITY.md](../SECURITY.md) for:
+- Security control implementations
+- Threat model
+- Audit procedures
+- Security contact
+
+## Updates
+
+This documentation is maintained by the security-auditor-agent and updated as controls are implemented, tested, and verified.
+
+Last updated: 2025-12-11

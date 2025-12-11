@@ -1,0 +1,14 @@
+# Cargo audit configuration
+# See: https://rustsec.org/advisories/
+
+[advisories]
+# Advisories we've reviewed and determined don't apply to our usage
+ignore = [
+    # RUSTSEC-2023-0071: rsa crate - Marvin Attack timing sidechannel
+    # This vulnerability affects PKCS#1 v1.5 decryption operations.
+    # The rsa crate comes in via sqlx-mysql (transitive dependency).
+    # Barbican ONLY uses PostgreSQL (not MySQL) - the MySQL driver is
+    # pulled in by default by sqlx but is never used.
+    # Status: Not vulnerable - acknowledged 2025-12-06
+    "RUSTSEC-2023-0071",
+]

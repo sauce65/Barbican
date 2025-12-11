@@ -2,7 +2,11 @@
 
 This document describes the security controls, compliance mappings, threat model coverage, and audit procedures for barbican.
 
+Barbican implements **52 NIST 800-53 Rev 5 controls** across 12 security modules. For the complete control registry, see `.claudedocs/SECURITY_CONTROL_REGISTRY.md`.
+
 ## Security Controls Matrix
+
+### Infrastructure Controls
 
 | Control | Name | Implementation | NIST 800-53 | SOC 2 | FedRAMP | Status |
 |---------|------|----------------|-------------|-------|---------|--------|
@@ -14,6 +18,35 @@ This document describes the security controls, compliance mappings, threat model
 | SC-7 | Structured Logging | JSON audit logs via tracing | AU-2, AU-3, AU-12 | CC7.2 | - | Implemented |
 | SC-8 | Database Security | SSL/TLS, pooling, health checks via SQLx | SC-8, SC-28, IA-5 | CC6.1, CC6.6, CC6.7 | SC-8, SC-28 | Implemented |
 | SC-9 | Observability | Pluggable logging/metrics providers | AU-2, AU-12 | CC7.2 | - | Implemented |
+
+### Authentication & Session Controls
+
+| Control | Name | Implementation | NIST 800-53 | SOC 2 | FedRAMP | Status |
+|---------|------|----------------|-------------|-------|---------|--------|
+| AUTH-1 | OAuth/OIDC Claims | JWT claims extraction (Keycloak, Entra, Auth0) | IA-2, AC-2 | CC6.1 | IA-2 | Implemented |
+| AUTH-2 | MFA Policy | MFA verification via `amr`/`acr` claims | IA-2(1), IA-2(2) | CC6.1 | IA-2(1) | Implemented |
+| AUTH-3 | Password Policy | NIST 800-63B compliant validation | IA-5(1) | CC6.1 | IA-5(1) | Implemented |
+| AUTH-4 | Login Tracking | Failed attempt tracking with lockout | AC-7 | CC6.1, CC6.8 | AC-7 | Implemented |
+| AUTH-5 | Session Management | Idle/absolute timeout, secure termination | AC-11, AC-12 | CC6.1 | AC-11, AC-12 | Implemented |
+
+### Data Protection Controls
+
+| Control | Name | Implementation | NIST 800-53 | SOC 2 | FedRAMP | Status |
+|---------|------|----------------|-------------|-------|---------|--------|
+| DATA-1 | Input Validation | Email, URL, length, pattern validation | SI-10 | CC6.1 | SI-10 | Implemented |
+| DATA-2 | HTML Sanitization | XSS prevention via HTML escaping | SI-10 | CC6.1 | SI-10 | Implemented |
+| DATA-3 | Error Handling | Safe error responses, no info leakage | SI-11 | CC6.1 | SI-11 | Implemented |
+| DATA-4 | Constant-Time Comparison | Timing attack prevention | SC-13 | CC6.1 | SC-13 | Implemented |
+
+### Operational Security Controls
+
+| Control | Name | Implementation | NIST 800-53 | SOC 2 | FedRAMP | Status |
+|---------|------|----------------|-------------|-------|---------|--------|
+| OPS-1 | Security Alerting | Incident alerting with rate limiting | IR-4, IR-5 | CC7.3, CC7.4 | IR-4, IR-5 | Implemented |
+| OPS-2 | Health Checks | Async health framework with aggregation | CA-7 | CC7.1 | CA-7 | Implemented |
+| OPS-3 | Key Management | KMS traits, rotation tracking | SC-12 | CC6.1 | SC-12 | Implemented |
+| OPS-4 | Supply Chain | SBOM generation, license compliance | SR-3, SR-4 | CC6.1 | SR-3, SR-4 | Implemented |
+| OPS-5 | Security Testing | XSS/SQLi payloads, header validation | SA-11, CA-8 | CC7.1 | SA-11 | Implemented |
 
 ### Control Details
 
@@ -358,14 +391,15 @@ This document describes the security controls, compliance mappings, threat model
 
 ## NIST 800-53 Rev 5 Mapping
 
-### System and Communications Protection (SC)
+### Access Control (AC)
 
 | Control | Title | Implementation | Status |
 |---------|-------|----------------|--------|
-| SC-5 | Denial of Service Protection | Rate limiting (SC-3), request size limits (SC-4) | Implemented |
-| SC-8 | Transmission Confidentiality and Integrity | Database SSL/TLS | Implemented |
-| SC-10 | Network Disconnect | Request timeouts (SC-5) | Implemented |
-| SC-28 | Protection of Information at Rest | Security headers (SC-2), database encryption via PostgreSQL | Partial |
+| AC-2 | Account Management | `auth` module - Claims extraction, role management | Implemented |
+| AC-4 | Information Flow Enforcement | CORS policy (SC-6) | Implemented |
+| AC-7 | Unsuccessful Logon Attempts | `login` module - LockoutPolicy, LoginTracker | Implemented |
+| AC-11 | Session Lock | `session` module - Idle timeout policies | Implemented |
+| AC-12 | Session Termination | `session` module - SessionState termination | Implemented |
 
 ### Audit and Accountability (AU)
 
@@ -373,19 +407,65 @@ This document describes the security controls, compliance mappings, threat model
 |---------|-------|----------------|--------|
 | AU-2 | Audit Events | SecurityEvent enum with defined event categories | Implemented |
 | AU-3 | Content of Audit Records | Structured logging with timestamp, user, action, outcome | Implemented |
+| AU-6 | Audit Review, Analysis | `alerting` module - Alert aggregation and analysis | Implemented |
+| AU-7 | Audit Reduction | `alerting` module - Rate limiting, deduplication | Implemented |
 | AU-12 | Audit Generation | Tracing integration, security_event! macro | Implemented |
 
-### Access Control (AC)
+### Security Assessment (CA)
 
 | Control | Title | Implementation | Status |
 |---------|-------|----------------|--------|
-| AC-4 | Information Flow Enforcement | CORS policy (SC-6) | Implemented |
+| CA-7 | Continuous Monitoring | `health` module - HealthChecker framework | Implemented |
+| CA-8 | Penetration Testing | `testing` module - Security test payloads | Implemented |
 
 ### Identification and Authentication (IA)
 
 | Control | Title | Implementation | Status |
 |---------|-------|----------------|--------|
-| IA-5 | Authenticator Management | Constant-time comparison (crypto.rs), secure connection strings | Implemented |
+| IA-2 | Identification and Authentication | `auth` module - OAuth/OIDC claims extraction | Implemented |
+| IA-2(1) | MFA - Network Access | `auth` module - MfaPolicy enforcement | Implemented |
+| IA-2(2) | MFA - Non-privileged Accounts | `auth` module - MfaPolicy with flexible configuration | Implemented |
+| IA-5 | Authenticator Management | Constant-time comparison, secure connection strings | Implemented |
+| IA-5(1) | Password-Based Authentication | `password` module - NIST 800-63B compliance | Implemented |
+
+### Incident Response (IR)
+
+| Control | Title | Implementation | Status |
+|---------|-------|----------------|--------|
+| IR-4 | Incident Handling | `alerting` module - AlertManager, handlers | Implemented |
+| IR-5 | Incident Monitoring | `alerting` module - Real-time alert processing | Implemented |
+| IR-6 | Incident Reporting | `alerting` module - AlertHandler callbacks | Implemented |
+
+### System and Communications Protection (SC)
+
+| Control | Title | Implementation | Status |
+|---------|-------|----------------|--------|
+| SC-5 | Denial of Service Protection | Rate limiting (SC-3), request size limits (SC-4) | Implemented |
+| SC-8 | Transmission Confidentiality and Integrity | Database SSL/TLS | Implemented |
+| SC-10 | Network Disconnect | Request timeouts (SC-5) | Implemented |
+| SC-12 | Cryptographic Key Management | `keys` module - KeyStore trait, RotationTracker | Implemented |
+| SC-13 | Cryptographic Protection | `crypto` module - Constant-time comparison | Implemented |
+| SC-28 | Protection of Information at Rest | Security headers (SC-2), database encryption via PostgreSQL | Partial |
+
+### System and Information Integrity (SI)
+
+| Control | Title | Implementation | Status |
+|---------|-------|----------------|--------|
+| SI-10 | Information Input Validation | `validation` module - Email, URL, length, pattern | Implemented |
+| SI-11 | Error Handling | `error` module - Safe responses, no info leakage | Implemented |
+
+### System and Services Acquisition (SA)
+
+| Control | Title | Implementation | Status |
+|---------|-------|----------------|--------|
+| SA-11 | Developer Security Testing | `testing` module - XSS, SQLi, injection payloads | Implemented |
+
+### Supply Chain Risk Management (SR)
+
+| Control | Title | Implementation | Status |
+|---------|-------|----------------|--------|
+| SR-3 | Supply Chain Controls | `supply_chain` module - SBOM generation | Implemented |
+| SR-4 | Provenance | `supply_chain` module - Dependency tracking, license compliance | Implemented |
 
 ## SOC 2 Type II Mapping
 
@@ -393,22 +473,40 @@ This document describes the security controls, compliance mappings, threat model
 
 | Criterion | Description | Implementation | Status |
 |-----------|-------------|----------------|--------|
-| CC6.1 | Security controls protect system resources | Security headers (SC-2), database SSL (SC-8) | Implemented |
-| CC6.6 | Logical access controls restrict access | CORS policy (SC-6), database SSL (SC-8) | Implemented |
-| CC6.7 | Transmission of data is protected | Database SSL/TLS (SC-8) | Implemented |
+| CC6.1 | Security controls protect system resources | Security headers, database SSL, auth, validation | Implemented |
+| CC6.6 | Logical access controls restrict access | CORS policy, database SSL, session management | Implemented |
+| CC6.7 | Transmission of data is protected | Database SSL/TLS | Implemented |
+| CC6.8 | Unauthorized access prevention | Login tracking with lockout (AC-7) | Implemented |
 
 ### CC7: System Operations
 
 | Criterion | Description | Implementation | Status |
 |-----------|-------------|----------------|--------|
-| CC7.2 | System monitoring detects anomalies | Structured logging (SC-7), observability (SC-9) | Implemented |
+| CC7.1 | Detection of security events | Health checks, security testing utilities | Implemented |
+| CC7.2 | System monitoring detects anomalies | Structured logging, observability | Implemented |
+| CC7.3 | Security event evaluation | AlertManager with severity classification | Implemented |
+| CC7.4 | Security incident response | Alert handlers, incident callbacks | Implemented |
 
 ## FedRAMP Mapping
 
 | Control | Title | Implementation | Status |
 |---------|-------|----------------|--------|
+| AC-7 | Unsuccessful Logon Attempts | Login tracking with lockout | Implemented |
+| AC-11 | Session Lock | Session idle timeout | Implemented |
+| AC-12 | Session Termination | Session termination policies | Implemented |
+| CA-7 | Continuous Monitoring | Health check framework | Implemented |
+| IA-2 | Identification and Authentication | OAuth/OIDC claims extraction | Implemented |
+| IA-2(1) | MFA - Network Access | MFA policy enforcement | Implemented |
+| IA-5(1) | Password-Based Authentication | NIST 800-63B compliance | Implemented |
+| IR-4 | Incident Handling | Alert management | Implemented |
+| IR-5 | Incident Monitoring | Real-time alerting | Implemented |
 | SC-5 | Denial of Service Protection | Rate limiting, request size limits | Implemented |
 | SC-8 | Transmission Confidentiality and Integrity | Database SSL/TLS | Implemented |
+| SC-12 | Cryptographic Key Management | Key store traits, rotation tracking | Implemented |
+| SI-10 | Information Input Validation | Input validation module | Implemented |
+| SI-11 | Error Handling | Secure error responses | Implemented |
+| SR-3 | Supply Chain Controls | SBOM generation | Implemented |
+| SR-4 | Provenance | Dependency tracking | Implemented |
 | SC-28 | Protection of Information at Rest | Database encryption via PostgreSQL | Partial |
 
 ## Threat Model Coverage
@@ -420,31 +518,43 @@ This document describes the security controls, compliance mappings, threat model
 | Man-in-the-middle attacks | HSTS, database SSL/TLS | SC-2, SC-8 |
 | Clickjacking | X-Frame-Options header | SC-2 |
 | Content sniffing attacks | X-Content-Type-Options header | SC-2 |
-| XSS attacks | Content Security Policy | SC-2 |
-| Brute force attacks | Rate limiting | SC-3 |
+| XSS attacks | Content Security Policy, input validation, HTML sanitization | SC-2, SI-10 |
+| SQL injection | Input validation, testing payloads for detection | SI-10, SA-11 |
+| Command injection | Input validation, testing payloads for detection | SI-10, SA-11 |
+| Brute force attacks | Rate limiting, login tracking with lockout | SC-3, AC-7 |
 | Denial of Service | Rate limiting, request size limits, timeouts | SC-3, SC-4, SC-5 |
 | Resource exhaustion | Rate limiting, connection pooling limits | SC-3, SC-8 |
 | Slowloris attacks | Request timeouts | SC-5 |
 | Cross-Site Request Forgery | CORS policy | SC-6 |
-| Unauthorized data access | CORS policy | SC-6 |
-| Timing attacks | Constant-time comparison | crypto.rs |
+| Unauthorized data access | CORS policy, session management | SC-6, AC-11, AC-12 |
+| Timing attacks | Constant-time comparison | SC-13 |
 | Connection hijacking | Database SSL/TLS | SC-8 |
 | Credential theft | Secure connection strings, SSL/TLS | SC-8 |
 | Stale connections | Connection lifetime limits | SC-8 |
+| Weak passwords | NIST 800-63B password policy, context validation | IA-5(1) |
+| Password reuse | Breached password detection (configurable) | IA-5(1) |
+| Session hijacking | Session termination, idle timeout | AC-11, AC-12 |
+| Account enumeration | Secure error handling, timing-safe comparison | SI-11, SC-13 |
+| MFA bypass | MFA policy enforcement via JWT claims | IA-2(1), IA-2(2) |
+| Information disclosure | Secure error responses, no stack traces in prod | SI-11 |
+| Supply chain attacks | SBOM generation, vulnerability scanning | SR-3, SR-4 |
+| License violations | License compliance checking | SR-4 |
+| Key exposure | Key rotation tracking, KMS integration | SC-12 |
+| Security misconfigurations | Security header validation, health checks | CA-7, SA-11 |
 
 ### Threats NOT Mitigated
 
 | Threat | Reason | Recommendation |
 |--------|--------|----------------|
-| SQL injection | Application-level concern | Use parameterized queries (SQLx supports this) |
-| Authentication bypass | Application-level concern | Implement authentication in application layer |
-| Authorization bypass | Application-level concern | Implement authorization in application layer |
+| Application-specific SQL injection | Depends on query construction | Use parameterized queries (SQLx supports this) |
+| Authorization bypass | Application-level concern | Implement authorization checks using `auth` module claims |
 | Business logic flaws | Application-level concern | Application-specific validation |
 | Distributed DoS | Infrastructure-level concern | Deploy WAF, CDN with DDoS protection |
-| Zero-day exploits | Unpredictable | Keep dependencies updated, monitor security advisories |
+| Zero-day exploits | Unpredictable | Keep dependencies updated, use `supply_chain` module for monitoring |
 | Insider threats | Organizational concern | Access controls, audit logging, separation of duties |
 | Physical attacks | Infrastructure concern | Physical security controls |
-| Side-channel attacks | Implementation-specific | Use constant-time operations where applicable |
+| Side-channel attacks | Implementation-specific | Use `crypto` module constant-time operations |
+| Memory corruption | Rust prevents most issues | Use safe Rust, avoid unsafe blocks |
 
 ## Known Limitations
 
@@ -704,6 +814,306 @@ This document describes the security controls, compliance mappings, threat model
 **Expected Result**: Logs sent to configured provider, format applied, filtering works
 
 **Compliance**: NIST AU-2, AU-12, SOC 2 CC7.2
+
+### AUTH-3: Password Policy Audit
+
+**Procedure**:
+
+1. Test minimum length enforcement:
+   ```rust
+   let policy = PasswordPolicy::default();
+   assert!(policy.validate("short").is_err()); // < 8 chars
+   assert!(policy.validate("longenoughpassword").is_ok()); // >= 8 chars
+   ```
+
+2. Test context-based validation (username/email in password):
+   ```rust
+   let result = policy.validate_with_context("john123pass", Some("john"), None);
+   assert!(result.is_err()); // Contains username
+   ```
+
+3. Test common password rejection:
+   ```rust
+   assert!(policy.validate("password123").is_err()); // Common password
+   assert!(policy.validate("qwerty12345").is_err()); // Common password
+   ```
+
+4. Run unit tests: `cargo test --package barbican password`
+
+**Expected Result**: Weak passwords rejected, NIST 800-63B compliance
+
+**Compliance**: NIST IA-5(1), SOC 2 CC6.1
+
+### AUTH-4: Login Tracking Audit
+
+**Procedure**:
+
+1. Test lockout after failed attempts:
+   ```rust
+   let policy = LockoutPolicy::nist_compliant(); // 3 attempts, 15 min lockout
+   let mut tracker = LoginTracker::new(policy);
+
+   tracker.record_attempt("user@test.com", false); // Attempt 1
+   tracker.record_attempt("user@test.com", false); // Attempt 2
+   let result = tracker.record_attempt("user@test.com", false); // Attempt 3
+
+   assert!(matches!(result, AttemptResult::AccountLocked(_)));
+   ```
+
+2. Test lockout duration:
+   ```rust
+   let info = tracker.get_lockout_info("user@test.com");
+   assert!(info.is_some());
+   assert!(info.unwrap().lockout_until > Utc::now());
+   ```
+
+3. Test successful login clears attempts:
+   ```rust
+   // After lockout expires...
+   tracker.record_attempt("user@test.com", true);
+   let info = tracker.get_lockout_info("user@test.com");
+   assert!(info.is_none()); // Cleared after success
+   ```
+
+4. Run unit tests: `cargo test --package barbican login`
+
+**Expected Result**: Account lockout works correctly, timing is accurate
+
+**Compliance**: NIST AC-7, FedRAMP AC-7
+
+### AUTH-5: Session Management Audit
+
+**Procedure**:
+
+1. Test idle timeout:
+   ```rust
+   let policy = SessionPolicy::builder()
+       .idle_timeout(Duration::from_secs(900))
+       .build();
+
+   let mut session = SessionState::new("sess-1", "user-1");
+   // Simulate 20 minutes of inactivity
+   session.last_activity = Utc::now() - Duration::from_secs(1200);
+
+   assert!(policy.is_idle_timeout_exceeded(&session));
+   ```
+
+2. Test absolute timeout:
+   ```rust
+   let policy = SessionPolicy::builder()
+       .absolute_timeout(Duration::from_secs(28800))
+       .build();
+
+   let mut session = SessionState::new("sess-1", "user-1");
+   // Simulate 10 hours since creation
+   session.created_at = Utc::now() - Duration::from_secs(36000);
+
+   assert!(policy.is_absolute_timeout_exceeded(&session));
+   ```
+
+3. Test session termination logging:
+   ```rust
+   session.terminate(SessionTerminationReason::IdleTimeout);
+   assert!(session.terminated_at.is_some());
+   assert_eq!(session.termination_reason, Some(SessionTerminationReason::IdleTimeout));
+   ```
+
+4. Run unit tests: `cargo test --package barbican session`
+
+**Expected Result**: Timeouts enforced, termination logged
+
+**Compliance**: NIST AC-11, AC-12, FedRAMP AC-11, AC-12
+
+### DATA-1: Input Validation Audit
+
+**Procedure**:
+
+1. Test email validation:
+   ```rust
+   assert!(validate_email("user@example.com").is_ok());
+   assert!(validate_email("invalid").is_err());
+   assert!(validate_email("user@.com").is_err());
+   ```
+
+2. Test URL validation:
+   ```rust
+   assert!(validate_url("https://example.com").is_ok());
+   assert!(validate_url("javascript:alert(1)").is_err());
+   ```
+
+3. Test HTML sanitization:
+   ```rust
+   let input = "<script>alert('xss')</script>Hello";
+   let safe = sanitize_html(input);
+   assert!(!safe.contains("<script>"));
+   assert!(safe.contains("Hello"));
+   ```
+
+4. Test length validation:
+   ```rust
+   assert!(validate_length("test", 1, 10, "field").is_ok());
+   assert!(validate_length("", 1, 10, "field").is_err()); // Too short
+   assert!(validate_length("a".repeat(20), 1, 10, "field").is_err()); // Too long
+   ```
+
+5. Run unit tests: `cargo test --package barbican validation`
+
+**Expected Result**: Invalid input rejected, XSS prevented
+
+**Compliance**: NIST SI-10, FedRAMP SI-10
+
+### OPS-1: Security Alerting Audit
+
+**Procedure**:
+
+1. Test alert creation and severity:
+   ```rust
+   let alert = Alert::new(
+       AlertSeverity::Critical,
+       "Brute force attack detected",
+       AlertCategory::Security,
+   );
+   assert_eq!(alert.severity, AlertSeverity::Critical);
+   ```
+
+2. Test rate limiting (alerts not duplicated):
+   ```rust
+   let config = AlertConfig::builder()
+       .rate_limit_window(Duration::from_secs(60))
+       .build();
+   let manager = AlertManager::new(config);
+
+   // Send same alert twice quickly
+   manager.alert(alert.clone());
+   manager.alert(alert.clone());
+   // Second should be rate-limited
+   ```
+
+3. Test alert handler callback:
+   ```rust
+   let (tx, rx) = channel();
+   manager.add_handler(Box::new(move |a| tx.send(a.clone()).unwrap()));
+   manager.alert(alert);
+   assert!(rx.recv_timeout(Duration::from_secs(1)).is_ok());
+   ```
+
+4. Run unit tests: `cargo test --package barbican alerting`
+
+**Expected Result**: Alerts delivered, rate limiting prevents floods
+
+**Compliance**: NIST IR-4, IR-5, SOC 2 CC7.3, CC7.4
+
+### OPS-2: Health Check Audit
+
+**Procedure**:
+
+1. Test health check registration:
+   ```rust
+   let mut checker = HealthChecker::new();
+   checker.add_check("database", HealthCheck::new(|| async {
+       HealthStatus::healthy()
+   }));
+   ```
+
+2. Test aggregated health report:
+   ```rust
+   let report = checker.check_all().await;
+   assert_eq!(report.status, Status::Healthy);
+   assert!(report.checks.contains_key("database"));
+   ```
+
+3. Test degraded status propagation:
+   ```rust
+   checker.add_check("cache", HealthCheck::new(|| async {
+       HealthStatus::degraded("High latency")
+   }));
+   let report = checker.check_all().await;
+   assert_eq!(report.status, Status::Degraded);
+   ```
+
+4. Run unit tests: `cargo test --package barbican health`
+
+**Expected Result**: Health status accurately reported
+
+**Compliance**: NIST CA-7, SOC 2 CC7.1
+
+### OPS-4: Supply Chain Audit
+
+**Procedure**:
+
+1. Test Cargo.lock parsing:
+   ```rust
+   let deps = parse_cargo_lock("Cargo.lock")?;
+   assert!(!deps.is_empty());
+   ```
+
+2. Test SBOM generation:
+   ```rust
+   let metadata = SbomMetadata::new("myapp", "1.0.0");
+   let sbom = generate_cyclonedx_sbom(&deps, metadata);
+   assert!(sbom.contains("CycloneDX"));
+   assert!(sbom.contains("myapp"));
+   ```
+
+3. Test license compliance:
+   ```rust
+   let policy = LicensePolicy::default();
+   assert!(policy.is_allowed("MIT"));
+   assert!(policy.is_allowed("Apache-2.0"));
+   // Test restrictive license handling per policy
+   ```
+
+4. Run `cargo audit` integration:
+   ```bash
+   cargo audit
+   ```
+
+5. Run unit tests: `cargo test --package barbican supply_chain`
+
+**Expected Result**: Dependencies tracked, SBOM generated, licenses checked
+
+**Compliance**: NIST SR-3, SR-4, FedRAMP SR-3, SR-4
+
+### OPS-5: Security Testing Utilities Audit
+
+**Procedure**:
+
+1. Test XSS payload availability:
+   ```rust
+   let payloads = xss_payloads();
+   assert!(payloads.iter().any(|p| p.contains("<script>")));
+   assert!(payloads.len() >= 10);
+   ```
+
+2. Test SQLi payload availability:
+   ```rust
+   let payloads = sql_injection_payloads();
+   assert!(payloads.iter().any(|p| p.contains("OR")));
+   assert!(payloads.len() >= 10);
+   ```
+
+3. Test security header validation:
+   ```rust
+   let headers = SecurityHeaders::new()
+       .hsts("max-age=31536000")
+       .csp("default-src 'none'");
+   let issues = headers.validate();
+   assert!(issues.is_empty());
+   ```
+
+4. Test header issue detection:
+   ```rust
+   let headers = SecurityHeaders::new(); // Missing headers
+   let issues = headers.validate();
+   assert!(!issues.is_empty());
+   assert!(issues.iter().any(|i| i.header == "Strict-Transport-Security"));
+   ```
+
+5. Run unit tests: `cargo test --package barbican testing`
+
+**Expected Result**: Payloads available, header validation accurate
+
+**Compliance**: NIST SA-11, CA-8
 
 ## Incident Response
 

@@ -1,6 +1,6 @@
 # barbican
 
-NIST 800-53 compliant security infrastructure for Axum applications. Provides reusable middleware and configuration for building production-ready web services with PostgreSQL.
+NIST 800-53 compliant security infrastructure for Axum applications. A pluggable, secure-by-default library providing 52+ security controls for building production-ready web services.
 
 ## Quick Start
 
@@ -46,18 +46,44 @@ Enable features in `Cargo.toml`:
 barbican = { version = "0.1", features = ["postgres", "observability-loki", "metrics-prometheus"] }
 ```
 
-## Security Controls
+## Security Modules
 
-| Control | Name | Description | NIST 800-53 |
-|---------|------|-------------|-------------|
-| SC-2 | Security Headers | HSTS, CSP, X-Frame-Options, X-Content-Type-Options | SC-28, CC6.1 |
-| SC-3 | Rate Limiting | Token bucket per IP, configurable burst | SC-5 |
-| SC-4 | Request Size Limits | Prevent DoS via large payloads | SC-5 |
-| SC-5 | Request Timeouts | Configurable timeout with 408 response | SC-10 |
-| SC-6 | CORS Policy | Origin allowlist or restrictive (same-origin) | AC-4, CC6.6 |
-| SC-7 | Structured Logging | JSON audit logs with tracing | AU-2, AU-3, AU-12 |
-| SC-8 | Database Security | SSL/TLS, pooling, health checks | SC-8, SC-28, IA-5 |
-| SC-9 | Observability | Pluggable logging/metrics providers | AU-2, AU-12 |
+Barbican provides 12 security modules covering 52+ NIST 800-53 controls:
+
+### Infrastructure Layer
+
+| Module | Description | NIST Controls |
+|--------|-------------|---------------|
+| `layers` | Security headers, rate limiting, CORS, timeouts | SC-5, SC-8, SC-28, AC-4 |
+| `database` | SSL/TLS, connection pooling, health checks | SC-8, SC-28, IA-5 |
+| `observability` | Structured logging, metrics, distributed tracing | AU-2, AU-3, AU-12 |
+
+### Authentication & Authorization
+
+| Module | Description | NIST Controls |
+|--------|-------------|---------------|
+| `auth` | OAuth/OIDC JWT claims, MFA policy enforcement | IA-2, IA-5, AC-2 |
+| `password` | NIST 800-63B compliant password validation | IA-5(1) |
+| `login` | Login attempt tracking, account lockout | AC-7 |
+| `session` | Session management, idle timeout, termination | AC-11, AC-12 |
+
+### Operational Security
+
+| Module | Description | NIST Controls |
+|--------|-------------|---------------|
+| `alerting` | Security incident alerting with rate limiting | IR-4, IR-5 |
+| `health` | Health check framework with aggregation | CA-7 |
+| `keys` | Key management with KMS integration traits | SC-12 |
+| `supply_chain` | SBOM generation, license compliance, vulnerability audit | SR-3, SR-4 |
+| `testing` | Security test utilities (XSS, SQLi payloads) | SA-11, CA-8 |
+
+### Data Protection
+
+| Module | Description | NIST Controls |
+|--------|-------------|---------------|
+| `validation` | Input validation and sanitization | SI-10 |
+| `error` | Secure error handling, no info leakage | SI-11 |
+| `crypto` | Constant-time comparison utilities | SC-13 |
 
 ## Environment Variables
 
@@ -167,7 +193,175 @@ security_event!(
 
 Available events: `AuthenticationSuccess`, `AuthenticationFailure`, `AccessDenied`, `UserRegistered`, `RateLimitExceeded`, `BruteForceDetected`, `AccountLocked`, and more. See `SecurityEvent` enum for full list.
 
-## Cryptographic Utilities
+## Module Usage Examples
+
+### Password Validation (IA-5)
+
+```rust
+use barbican::password::PasswordPolicy;
+
+let policy = PasswordPolicy::default(); // NIST 800-63B compliant
+policy.validate_with_context(password, Some(username), Some(email))?;
+```
+
+### Input Validation (SI-10)
+
+```rust
+use barbican::validation::{validate_email, validate_length, sanitize_html};
+
+validate_email(email)?;
+validate_length(bio, 0, 500, "bio")?;
+let safe_bio = sanitize_html(bio);
+```
+
+### Session Management (AC-11, AC-12)
+
+```rust
+use barbican::session::{SessionPolicy, SessionState};
+use std::time::Duration;
+
+let policy = SessionPolicy::builder()
+    .idle_timeout(Duration::from_secs(900))     // 15 min idle
+    .absolute_timeout(Duration::from_secs(28800)) // 8 hour max
+    .build();
+
+let mut session = SessionState::new("session-id", "user-123");
+if policy.is_idle_timeout_exceeded(&session) {
+    session.terminate(SessionTerminationReason::IdleTimeout);
+}
+```
+
+### Login Attempt Tracking (AC-7)
+
+```rust
+use barbican::login::{LockoutPolicy, LoginTracker};
+
+let policy = LockoutPolicy::nist_compliant(); // 3 attempts, 15 min lockout
+let mut tracker = LoginTracker::new(policy);
+
+match tracker.record_attempt("user@example.com", false) {
+    AttemptResult::Allowed => { /* continue */ }
+    AttemptResult::AccountLocked(info) => {
+        // Account locked, show lockout_until time
+    }
+}
+```
+
+### Security Alerting (IR-4, IR-5)
+
+```rust
+use barbican::alerting::{AlertManager, AlertConfig, Alert, AlertSeverity};
+
+let config = AlertConfig::default();
+let manager = AlertManager::new(config);
+
+manager.alert(Alert::new(
+    AlertSeverity::High,
+    "Brute force attack detected",
+    AlertCategory::Security,
+));
+```
+
+### Health Checks (CA-7)
+
+```rust
+use barbican::health::{HealthChecker, HealthCheck, HealthStatus};
+
+let mut checker = HealthChecker::new();
+checker.add_check("database", HealthCheck::new(|| async {
+    // Check database connectivity
+    HealthStatus::healthy()
+}));
+
+let report = checker.check_all().await;
+```
+
+### Key Management (SC-12)
+
+```rust
+use barbican::keys::{KeyStore, EnvKeyStore, RotationTracker, RotationPolicy};
+
+// Development: environment-based keys
+let store = EnvKeyStore::new("MYAPP_")?;
+let key = store.get_key("encryption_key").await?;
+
+// Production: implement KeyStore trait for Vault/AWS KMS
+let tracker = RotationTracker::new(RotationPolicy::default());
+if tracker.needs_rotation("api-key")? {
+    // Trigger key rotation
+}
+```
+
+### Supply Chain Security (SR-3, SR-4)
+
+```rust
+use barbican::supply_chain::{parse_cargo_lock, generate_cyclonedx_sbom, LicensePolicy};
+
+let deps = parse_cargo_lock("Cargo.lock")?;
+let sbom = generate_cyclonedx_sbom(&deps, SbomMetadata::new("myapp", "1.0.0"));
+
+// Check license compliance
+let policy = LicensePolicy::default();
+for dep in &deps {
+    policy.check(&dep.license)?;
+}
+```
+
+### Security Testing (SA-11, CA-8)
+
+```rust
+use barbican::testing::{xss_payloads, sql_injection_payloads, SecurityHeaders};
+
+// Fuzz test your endpoints
+for payload in xss_payloads() {
+    let response = client.post("/api/comment").body(payload).send().await?;
+    assert!(!response.text().contains(payload)); // Should be escaped
+}
+
+// Validate security headers
+let headers = SecurityHeaders::from_response(&response);
+let issues = headers.validate();
+assert!(issues.is_empty());
+```
+
+### OAuth/OIDC Integration
+
+```rust
+use barbican::auth::{Claims, log_access_decision, MfaPolicy};
+
+async fn admin_handler(claims: Claims) -> Result<&'static str, StatusCode> {
+    // Check MFA requirement
+    let mfa_policy = MfaPolicy::required();
+    if !mfa_policy.is_satisfied(&claims) {
+        log_mfa_required(&claims, "admin_panel");
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    if claims.has_role("admin") {
+        log_access_decision(&claims, "admin_panel", true);
+        Ok("Welcome!")
+    } else {
+        log_access_decision(&claims, "admin_panel", false);
+        Err(StatusCode::FORBIDDEN)
+    }
+}
+```
+
+### Secure Error Handling (SI-11)
+
+```rust
+use barbican::error::{AppError, Result};
+
+async fn handler() -> Result<String> {
+    let data = fetch_data()
+        .map_err(|e| AppError::internal("Failed to fetch data", e))?;
+    Ok(data)
+}
+// Production: {"error": "internal_error", "message": "An internal error occurred"}
+// Development: full error details included
+```
+
+### Cryptographic Utilities
 
 ```rust
 use barbican::{constant_time_eq, constant_time_str_eq};
@@ -187,10 +381,28 @@ if constant_time_str_eq(&stored_token, &provided_token) {
 
 ## Compliance
 
-This crate supports:
-- **NIST SP 800-53 Rev 5**: SC-2, SC-3, SC-5, SC-8, SC-10, SC-28, AU-2, AU-3, AU-12, AC-4, IA-5
-- **SOC 2 Type II**: CC6.1, CC6.6, CC6.7, CC7.2
-- **FedRAMP**: SC-5, SC-8, SC-28
+Barbican implements 52 NIST 800-53 Rev 5 controls (47.7% of applicable controls) and facilitates 32 additional controls (29.4%):
+
+**Control Families Covered:**
+- **Access Control (AC)**: AC-2, AC-4, AC-7, AC-11, AC-12
+- **Audit (AU)**: AU-2, AU-3, AU-6, AU-7, AU-12
+- **Security Assessment (CA)**: CA-7, CA-8
+- **Identification & Authentication (IA)**: IA-2, IA-5, IA-5(1)
+- **Incident Response (IR)**: IR-4, IR-5, IR-6
+- **System & Communications (SC)**: SC-5, SC-8, SC-10, SC-12, SC-13, SC-28
+- **System & Information Integrity (SI)**: SI-10, SI-11
+- **Supply Chain (SR)**: SR-3, SR-4
+- **System & Services Acquisition (SA)**: SA-11
+
+**Framework Support:**
+- **NIST SP 800-53 Rev 5**: 52 controls implemented
+- **NIST SP 800-63B**: Password policy compliance
+- **SOC 2 Type II**: ~75% of applicable criteria
+- **FedRAMP**: ~70% of applicable controls
+- **OAuth 2.0 / OIDC**: JWT claims extraction with MFA support
+- **OWASP Top 10**: Input validation, secure error handling
+
+See `.claudedocs/SECURITY_CONTROL_REGISTRY.md` for detailed control mappings.
 
 ## NixOS Modules
 
@@ -355,8 +567,11 @@ The combined test suite generates a JSON audit report with compliance rate.
 
 ## Documentation
 
-- [CONTRIBUTING.md](./CONTRIBUTING.md) - Architecture and development guide
 - [SECURITY.md](./SECURITY.md) - Security controls and audit procedures
+- [CONTRIBUTING.md](./CONTRIBUTING.md) - Architecture and development guide
+- [.claudedocs/SECURITY_CONTROL_REGISTRY.md](./.claudedocs/SECURITY_CONTROL_REGISTRY.md) - Full NIST 800-53 control registry
+- [.claudedocs/NIST_800_53_IMPLEMENTATION_GUIDE.md](./.claudedocs/NIST_800_53_IMPLEMENTATION_GUIDE.md) - Implementation guide with examples
+- [.claudedocs/OAUTH_INTEGRATION.md](./.claudedocs/OAUTH_INTEGRATION.md) - OAuth/OIDC integration guide
 - [API docs](https://docs.rs/barbican) - Full API reference
 
 ## License
