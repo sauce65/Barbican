@@ -29,6 +29,9 @@ pub enum LogProvider {
         endpoint: String,
         /// Additional labels to attach to all logs
         labels: Vec<(String, String)>,
+        /// Tenant ID for multi-tenant Loki (X-Scope-OrgID header)
+        /// Required when Loki has auth_enabled: true
+        tenant_id: Option<String>,
     },
 
     /// Send traces via OpenTelemetry Protocol
@@ -98,6 +101,7 @@ impl ObservabilityConfig {
     /// For Loki (`LOG_PROVIDER=loki`):
     /// - `LOKI_ENDPOINT`: Loki push URL (required)
     /// - `LOKI_LABELS`: Comma-separated key=value pairs (optional)
+    /// - `LOKI_TENANT_ID`: Tenant ID for multi-tenant Loki (optional, sets X-Scope-OrgID header)
     ///
     /// For OTLP (`LOG_PROVIDER=otlp`):
     /// - `OTLP_ENDPOINT`: OTLP collector URL (required)
@@ -115,7 +119,8 @@ impl ObservabilityConfig {
                     let labels = env::var("LOKI_LABELS")
                         .map(|s| parse_labels(&s))
                         .unwrap_or_default();
-                    LogProvider::Loki { endpoint, labels }
+                    let tenant_id = env::var("LOKI_TENANT_ID").ok();
+                    LogProvider::Loki { endpoint, labels, tenant_id }
                 }
                 #[cfg(not(feature = "observability-loki"))]
                 {

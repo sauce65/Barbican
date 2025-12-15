@@ -24,8 +24,8 @@ pub fn init_tracing(config: &ObservabilityConfig) -> Result<(), ObservabilityErr
         LogProvider::Stdout => init_stdout_tracing(config, filter),
 
         #[cfg(feature = "observability-loki")]
-        LogProvider::Loki { endpoint, labels } => {
-            init_loki_tracing(config, filter, endpoint, labels)
+        LogProvider::Loki { endpoint, labels, tenant_id } => {
+            init_loki_tracing(config, filter, endpoint, labels, tenant_id.as_deref())
         }
 
         #[cfg(feature = "observability-otlp")]
@@ -90,6 +90,7 @@ fn init_loki_tracing(
     filter: EnvFilter,
     endpoint: &str,
     labels: &[(String, String)],
+    tenant_id: Option<&str>,
 ) -> Result<(), ObservabilityError> {
     use url::Url;
 
@@ -105,6 +106,14 @@ fn init_loki_tracing(
         builder = builder
             .label(key, value)
             .map_err(|e| ObservabilityError::Provider(format!("Failed to set Loki label: {}", e)))?;
+    }
+
+    // Add X-Scope-OrgID header for multi-tenant Loki (FedRAMP AU-9)
+    if let Some(tenant) = tenant_id {
+        builder = builder
+            .http_header("X-Scope-OrgID", tenant)
+            .map_err(|e| ObservabilityError::Provider(format!("Failed to set Loki tenant header: {}", e)))?;
+        tracing::debug!(tenant_id = tenant, "Loki multi-tenant auth enabled");
     }
 
     let (loki_layer, task) = builder
