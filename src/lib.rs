@@ -10,6 +10,7 @@
 //! ### Infrastructure Layer
 //! - **[`layers`]**: Security headers, rate limiting, CORS, timeouts (SC-5, SC-8, SC-28)
 //! - **[`observability`]**: Structured logging, metrics, distributed tracing (AU-2, AU-3, AU-12)
+//! - **[`observability::stack`]**: FedRAMP-compliant observability infrastructure generator (20 controls)
 //! - **Database** (feature: `postgres`): SSL/TLS, connection pooling, health checks (SC-8, IA-5)
 //!
 //! ### Authentication & Authorization

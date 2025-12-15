@@ -1,8 +1,13 @@
-//! Observability Infrastructure (SC-7, SC-9)
+//! Observability Infrastructure (AU-2, AU-3, AU-12)
 //!
 //! Provides pluggable logging, tracing, and metrics infrastructure.
 //! The application code uses standard `tracing` macros and doesn't know
 //! which provider is configured.
+//!
+//! # Modules
+//!
+//! - **Runtime configuration**: [`ObservabilityConfig`] for initializing logging/metrics at startup
+//! - **[`stack`]**: Generate FedRAMP-compliant observability infrastructure (Loki, Prometheus, Grafana)
 //!
 //! # Architecture
 //!
@@ -43,10 +48,28 @@
 //! init(config).await?;
 //! ```
 //!
+//! # Stack Generation
+//!
+//! Use the [`stack`] submodule to generate complete FedRAMP-compliant observability infrastructure:
+//!
+//! ```ignore
+//! use barbican::observability::stack::{ObservabilityStack, FedRampProfile};
+//!
+//! let stack = ObservabilityStack::builder()
+//!     .app_name("my-app")
+//!     .app_port(3443)
+//!     .output_dir("./observability")
+//!     .fedramp_profile(FedRampProfile::Moderate)
+//!     .build()?;
+//!
+//! stack.generate()?;  // Generates 21 config files
+//! ```
+//!
 //! # Compliance
 //!
 //! - NIST SP 800-53: AU-2 (Audit Events), AU-3 (Content of Audit Records), AU-12 (Audit Generation)
 //! - SOC 2: CC7.2 (System Monitoring)
+//! - FedRAMP: 20 controls via stack generator (AU-*, SC-8, SC-13, IA-2, AC-*, IR-*, SI-4)
 
 mod config;
 mod providers;

@@ -57,6 +57,7 @@ Barbican provides 12 security modules covering 52+ NIST 800-53 controls:
 | `layers` | Security headers, rate limiting, CORS, timeouts | SC-5, SC-8, SC-28, AC-4 |
 | `database` | SSL/TLS, connection pooling, health checks | SC-8, SC-28, IA-5 |
 | `observability` | Structured logging, metrics, distributed tracing | AU-2, AU-3, AU-12 |
+| `observability::stack` | FedRAMP-compliant observability infrastructure generator | AU-9, AU-11, SC-8, SC-28, IR-4, IR-5 |
 
 ### Authentication & Authorization
 
@@ -127,6 +128,7 @@ Barbican provides 12 security modules covering 52+ NIST 800-53 controls:
 **For Loki** (`LOG_PROVIDER=loki`, requires `observability-loki` feature):
 - `LOKI_ENDPOINT`: Loki push URL (e.g., `http://loki:3100`)
 - `LOKI_LABELS`: Comma-separated `key=value` pairs (optional)
+- `LOKI_TENANT_ID`: Tenant ID for multi-tenant Loki (sets `X-Scope-OrgID` header, required when Loki has `auth_enabled: true`)
 
 **For OTLP** (`LOG_PROVIDER=otlp`, requires `observability-otlp` feature):
 - `OTLP_ENDPOINT`: OTLP collector URL (e.g., `http://jaeger:4317`)
@@ -192,6 +194,62 @@ security_event!(
 ```
 
 Available events: `AuthenticationSuccess`, `AuthenticationFailure`, `AccessDenied`, `UserRegistered`, `RateLimitExceeded`, `BruteForceDetected`, `AccountLocked`, and more. See `SecurityEvent` enum for full list.
+
+## Observability Stack Generator
+
+Generate FedRAMP-compliant observability infrastructure (Loki, Prometheus, Grafana, Alertmanager) with a single command:
+
+```rust
+use barbican::observability::stack::{ObservabilityStack, FedRampProfile};
+
+let stack = ObservabilityStack::builder()
+    .app_name("my-app")
+    .app_port(3443)
+    .output_dir("./observability")
+    .fedramp_profile(FedRampProfile::Moderate)
+    .build()?;
+
+// Validate FedRAMP compliance
+let validation = stack.validate()?;
+validation.print_summary();
+
+// Generate all configuration files
+let report = stack.generate()?;
+report.print_summary(); // 21 files generated
+```
+
+Or use the example binary:
+
+```bash
+cargo run --example generate_observability_stack -- my-app ./observability
+```
+
+### Generated Files (21 total)
+
+| Directory | Files | Purpose |
+|-----------|-------|---------|
+| `loki/` | `loki-config.yml`, `tenant-limits.yml` | Multi-tenant log aggregation with 90-day retention |
+| `prometheus/` | `prometheus.yml`, `web.yml`, `rules/security-alerts.yml` | Metrics with TLS, 15+ security alerts |
+| `grafana/` | `grafana.ini`, datasources, dashboards | OIDC SSO, security dashboard |
+| `alertmanager/` | `alertmanager.yml`, `web.yml` | Alert routing with TLS |
+| `scripts/` | `gen-certs.sh`, `backup-audit-logs.sh`, `restore-audit-logs.sh`, `health-check.sh` | Cert generation, encrypted backups |
+| `docs/` | `FEDRAMP_CONTROLS.md`, `SSO_SETUP.md`, `OPERATIONS.md` | Compliance documentation |
+| Root | `docker-compose.yml`, `.env.example` | Hardened container deployment |
+
+### FedRAMP Profiles
+
+| Setting | Low | Moderate | High |
+|---------|-----|----------|------|
+| Log retention | 30 days | 90 days | 365 days |
+| TLS required | Yes | Yes | Yes |
+| mTLS required | No | No | Yes |
+| MFA required | No | Yes | Yes |
+| Session timeout | 30 min | 15 min | 10 min |
+| Container read-only | No | Yes | Yes |
+
+### FedRAMP Controls Implemented (20)
+
+AU-2, AU-3, AU-4, AU-5, AU-6, AU-9, AU-11, AU-12, SC-8, SC-13, SC-28, IA-2, IA-2(1), AC-2, AC-3, AC-6, CP-9, IR-4, IR-5, SI-4
 
 ## Module Usage Examples
 
