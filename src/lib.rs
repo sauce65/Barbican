@@ -305,5 +305,5 @@ pub use testing::{
 #[cfg(feature = "postgres")]
 pub use database::{
     create_pool, health_check, DatabaseConfig, DatabaseConfigBuilder, DatabaseError,
-    HealthStatus, SslMode,
+    HealthStatus as DbHealthStatus, SslMode,
 };

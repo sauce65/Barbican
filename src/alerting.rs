@@ -414,23 +414,66 @@ impl Alert {
 // ============================================================================
 // Alert Manager (IR-5)
 // ============================================================================
+//
+// The AlertManager implements a 5-stage pipeline for processing alerts:
+//
+// ```text
+// ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+// │  STAGE 1        │     │  STAGE 2        │     │  STAGE 3        │
+// │  Severity Gate  │────▶│  Deduplication  │────▶│  Rate Limiting  │
+// │                 │     │                 │     │                 │
+// │  Drop if below  │     │  Drop if same   │     │  Drop if cat.   │
+// │  min_severity   │     │  fingerprint    │     │  over limit     │
+// │                 │     │  in dedup_window│     │  (unless crit.) │
+// └─────────────────┘     └─────────────────┘     └─────────────────┘
+//                                                         │
+//          ┌──────────────────────────────────────────────┘
+//          ▼
+// ┌─────────────────┐     ┌─────────────────┐
+// │  STAGE 4        │     │  STAGE 5        │
+// │  Record State   │────▶│  Dispatch       │
+// │                 │     │                 │
+// │  Update dedup   │     │  Call handlers  │
+// │  and rate limit │     │  then log       │
+// │  tracking       │     │                 │
+// └─────────────────┘     └─────────────────┘
+// ```
+//
+// This design prevents alert storms during incidents while ensuring critical
+// security events always reach operators.
 
-/// Tracks rate limiting for alerts
+/// Tracks rate limiting and deduplication state.
+///
+/// Uses a sliding window approach - stores timestamps rather than simple
+/// counters, allowing precise time-based decisions.
 #[derive(Debug, Default)]
 struct RateLimitState {
-    /// Count per category within the current window
+    /// Timestamps of recent alerts per category (for rate limiting).
+    /// Used in Stage 3 to enforce per-category limits.
     category_counts: HashMap<AlertCategory, Vec<Instant>>,
-    /// Recent fingerprints for deduplication
+
+    /// Recent alert fingerprints mapped to when they were last seen.
+    /// Used in Stage 2 to suppress duplicate alerts.
     recent_fingerprints: HashMap<String, Instant>,
 }
 
-/// Alert handler function type
+/// Alert handler function type.
+///
+/// Handlers are called in Stage 5 for every alert that passes the pipeline.
+/// The `Send + Sync + 'static` bounds allow handlers to be called from any
+/// thread and capture owned data (like HTTP clients for external services).
 pub type AlertHandler = Box<dyn Fn(&Alert) + Send + Sync>;
 
-/// Alert manager for coordinating alert delivery
+/// Alert manager for coordinating alert delivery.
+///
+/// Central coordinator that ensures alerts reach the right systems without
+/// overwhelming operators during an incident. Thread-safe and cheaply
+/// cloneable via internal `Arc` wrappers.
 pub struct AlertManager {
     config: AlertConfig,
+    /// Mutable state for rate limiting and deduplication (Stages 2-4)
     state: Arc<RwLock<RateLimitState>>,
+    /// Registered callbacks for alert dispatch (Stage 5)
     handlers: Arc<RwLock<Vec<AlertHandler>>>,
 }
 
@@ -449,7 +492,25 @@ impl AlertManager {
         Self::new(AlertConfig::default())
     }
 
-    /// Register an alert handler
+    /// Register an alert handler for Stage 5 dispatch.
+    ///
+    /// Handlers are called synchronously for every alert that passes
+    /// through the pipeline. Common integrations include:
+    ///
+    /// - PagerDuty/Opsgenie for on-call notification
+    /// - Slack/Teams webhooks for team channels
+    /// - SIEM systems for correlation
+    /// - Firewall APIs for automated blocking
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// alerts.register_handler(|alert| {
+    ///     if alert.severity == AlertSeverity::Critical {
+    ///         pagerduty.create_incident(&alert.summary);
+    ///     }
+    /// });
+    /// ```
     pub fn register_handler<F>(&self, handler: F)
     where
         F: Fn(&Alert) + Send + Sync + 'static,
@@ -458,36 +519,53 @@ impl AlertManager {
         handlers.push(Box::new(handler));
     }
 
-    /// Send an alert
+    /// Send an alert through the 5-stage pipeline.
     ///
-    /// Returns true if the alert was sent, false if it was rate-limited or deduplicated.
+    /// Returns `true` if the alert was dispatched to handlers, `false` if
+    /// it was dropped by any stage (severity, dedup, or rate limiting).
     pub fn send(&self, alert: Alert) -> bool {
-        // Check severity threshold
+        // =====================================================================
+        // STAGE 1: Severity Gate
+        // =====================================================================
+        // Drop alerts below the configured minimum severity threshold.
+        // With default config (min_severity: Warning), Info alerts are dropped.
         if alert.severity < self.config.min_severity {
             return false;
         }
 
-        // Check rate limiting and deduplication
+        // =====================================================================
+        // STAGES 2-3: Deduplication and Rate Limiting
+        // =====================================================================
+        // Implemented in should_send() - checks fingerprint dedup window and
+        // per-category rate limits (with bypass for critical categories).
         if !self.should_send(&alert) {
             return false;
         }
 
-        // Update state
+        // =====================================================================
+        // STAGE 4: Record State
+        // =====================================================================
+        // Update tracking state for future dedup and rate limit decisions.
         self.record_alert(&alert);
 
-        // Dispatch to handlers
+        // =====================================================================
+        // STAGE 5: Dispatch
+        // =====================================================================
+        // Call all registered handlers, then log via tracing.
         let handlers = self.handlers.read().unwrap();
         for handler in handlers.iter() {
             handler(&alert);
         }
 
-        // Log the alert
         log_alert(&alert);
 
         true
     }
 
-    /// Send an alert from a security event
+    /// Send an alert from a security event.
+    ///
+    /// Convenience method that checks if the event type is in the alertable
+    /// events list before converting and sending.
     pub fn send_event(&self, event: SecurityEvent, description: impl Into<String>) -> bool {
         if !self.config.should_alert(&event) {
             return false;
@@ -497,33 +575,45 @@ impl AlertManager {
         self.send(alert)
     }
 
-    /// Check if an alert should be sent (rate limiting + dedup)
+    /// Stages 2-3: Check deduplication and rate limiting.
+    ///
+    /// Returns `true` if the alert should proceed, `false` if it should
+    /// be dropped.
     fn should_send(&self, alert: &Alert) -> bool {
         let mut state = self.state.write().unwrap();
         let now = Instant::now();
 
-        // Deduplication check
+        // =====================================================================
+        // STAGE 2: Deduplication
+        // =====================================================================
+        // Drop if the same fingerprint (hash of summary+description) was seen
+        // within the dedup_window (default: 5 minutes).
         if let Some(&last_seen) = state.recent_fingerprints.get(&alert.fingerprint) {
             if now.duration_since(last_seen) < self.config.dedup_window {
                 return false;
             }
         }
 
-        // Skip rate limiting for critical categories
+        // =====================================================================
+        // STAGE 3: Rate Limiting (with critical category bypass)
+        // =====================================================================
+        // Critical categories (default: SecurityIncident, Authorization) skip
+        // rate limiting entirely - these always get through.
         if self.config.critical_categories.contains(&alert.category) {
             return true;
         }
 
-        // Rate limiting check
+        // For non-critical categories, enforce per-category limits.
+        // Default: max 10 alerts per category per 60-second window.
         let counts = state
             .category_counts
             .entry(alert.category)
             .or_default();
 
-        // Clean up old entries
+        // Prune timestamps outside the rate limit window (sliding window)
         counts.retain(|&t| now.duration_since(t) < self.config.rate_limit_window);
 
-        // Check if under limit
+        // Reject if at or over the limit
         if counts.len() as u32 >= self.config.rate_limit_per_category {
             return false;
         }
@@ -531,22 +621,25 @@ impl AlertManager {
         true
     }
 
-    /// Record that an alert was sent
+    /// Stage 4: Record alert state for future pipeline decisions.
+    ///
+    /// Updates both the fingerprint map (for dedup) and the category
+    /// timestamp list (for rate limiting).
     fn record_alert(&self, alert: &Alert) {
         let mut state = self.state.write().unwrap();
         let now = Instant::now();
 
-        // Record fingerprint for dedup
+        // Record fingerprint timestamp for Stage 2 (deduplication)
         state.recent_fingerprints.insert(alert.fingerprint.clone(), now);
 
-        // Record category count
+        // Record category timestamp for Stage 3 (rate limiting)
         state
             .category_counts
             .entry(alert.category)
             .or_default()
             .push(now);
 
-        // Cleanup old fingerprints periodically
+        // Memory management: prune expired fingerprints when map grows large
         if state.recent_fingerprints.len() > 1000 {
             state.recent_fingerprints.retain(|_, &mut t| {
                 now.duration_since(t) < self.config.dedup_window
@@ -554,7 +647,10 @@ impl AlertManager {
         }
     }
 
-    /// Get current alert counts by category
+    /// Get current alert counts by category within the rate limit window.
+    ///
+    /// Useful for dashboards and monitoring to show alert volume. Returns
+    /// only alerts within the active `rate_limit_window`, not historical data.
     pub fn get_alert_counts(&self) -> HashMap<AlertCategory, usize> {
         let state = self.state.read().unwrap();
         let now = Instant::now();
@@ -572,7 +668,11 @@ impl AlertManager {
             .collect()
     }
 
-    /// Clear all state (for testing)
+    /// Clear all pipeline state (Stages 2-4 tracking data).
+    ///
+    /// Resets both the fingerprint dedup map and category rate limit counters.
+    /// Primarily useful for testing; in production, state naturally expires
+    /// based on configured time windows.
     pub fn clear(&self) {
         let mut state = self.state.write().unwrap();
         state.category_counts.clear();
