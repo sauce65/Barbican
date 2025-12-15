@@ -51,6 +51,7 @@
 mod config;
 mod providers;
 mod events;
+pub mod stack;
 
 pub use config::{LogFormat, LogProvider, MetricsProvider, ObservabilityConfig, ObservabilityConfigBuilder};
 pub use events::{SecurityEvent, Severity, security_event};
