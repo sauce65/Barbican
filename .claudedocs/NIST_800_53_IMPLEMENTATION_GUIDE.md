@@ -2,7 +2,7 @@
 
 **Quick reference for developers using barbican to build compliant applications**
 
-**Last Updated:** 2025-12-11
+**Last Updated:** 2025-12-16
 
 ---
 

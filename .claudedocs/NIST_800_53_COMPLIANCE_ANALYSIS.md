@@ -1,7 +1,7 @@
 # NIST SP 800-53 Rev 5 Compliance Analysis for Barbican
 
 **Project:** Barbican Security Library
-**Analysis Date:** 2025-12-11
+**Analysis Date:** 2025-12-16
 **Purpose:** Determine which NIST 800-53 controls a reusable Rust/Axum security middleware library can implement, facilitate, or should delegate to consuming applications
 
 ---
@@ -25,13 +25,15 @@ Barbican is a security-focused middleware library for Axum web applications with
 
 ### Current Implementation Status
 
-**Rust/Axum Middleware:**
-- Implemented: SC-5, SC-8, SC-10, SC-28 (partial), AU-2, AU-3, AU-12, AC-4, IA-5 (partial)
-- Coverage: ~15% of implementable controls
+**Rust/Axum Middleware (52 controls implemented, 47.7%):**
+- Authentication & Authorization: AC-3, AC-6, AC-7, AC-11, AC-12, IA-2, IA-2(1), IA-2(2), IA-2(6), IA-5(1), IA-5(4), IA-8
+- Data Protection: SI-10, SI-11, IA-6, SC-13
+- Operational Security: IR-4, IR-5, CA-7, SC-12, SR-3, SR-4, SR-11, SI-2, SI-3, SI-7, CM-8, CM-10, SA-11, CA-8, SI-4(2), SI-4(5)
+- Infrastructure: AC-4, SC-5, SC-10, AU-2, AU-3, AU-8, AU-12
 
 **NixOS Infrastructure Modules:**
-- Implemented: SI-16, AC-2, IA-5, SC-7, AC-17, SI-4, CP-9, CM-7
-- Coverage: ~25% of infrastructure controls
+- Implemented: SI-16, AC-2, IA-5, SC-7, SC-7(5), AC-17, SI-4, CP-9, CM-2, CM-6, CM-7, SC-28(1), SC-39
+- Coverage: All targeted infrastructure controls
 
 ---
 

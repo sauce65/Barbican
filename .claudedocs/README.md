@@ -58,39 +58,54 @@ This directory contains comprehensive NIST SP 800-53 Rev 5 compliance analysis a
 
 | Category | Count | Percentage |
 |----------|-------|------------|
-| Implemented | 22 | 20.2% |
-| Partial | 11 | 10.1% |
-| Planned | 50 | 45.9% |
-| Facilitated | 26 | 23.8% |
-| **Total Help** | **109** | **100%** |
+| Implemented | 52 | 47.7% |
+| Partial | 6 | 5.5% |
+| Planned | 19 | 17.4% |
+| Facilitated | 32 | 29.4% |
+| **Total Barbican Can Help** | **109** | **100%** |
 
-### Top Priority Controls (Next to Implement)
+### Remaining High Priority Controls
 
-1. **SI-10** - Input Validation Framework (CRITICAL)
-2. **AC-3** - RBAC Framework (CRITICAL)
-3. **IA-5(1)** - Password Policy (CRITICAL)
-4. **SC-8** - HTTP TLS Enforcement (CRITICAL)
-5. **IA-2(1)** - Multi-Factor Authentication (CRITICAL)
-6. **AC-7** - Login Attempt Tracking (HIGH)
-7. **AC-11/12** - Session Management (HIGH)
-8. **IA-8** - OAuth/OIDC Client (HIGH)
+1. **SC-8/SC-8(1)** - HTTP TLS Enforcement (CRITICAL)
+2. **IA-5(7)** - Secret Detection Scanner (CRITICAL)
+3. **SC-17** - Certificate Validation Utilities (HIGH)
+4. **SA-15(7)** - CI/CD Security Workflow (MEDIUM)
+5. **AC-5** - Role Conflict Checking (MEDIUM)
+6. **AC-10** - Concurrent Session Control (MEDIUM)
+7. **IA-2(8)** - Nonce-based Replay Protection (HIGH)
 
-### Controls Already Implemented
+### Controls Already Implemented (52 total)
 
-- **AC-4** - CORS Policy (Information Flow Enforcement)
-- **AU-2, AU-3, AU-8, AU-12** - Audit Logging
-- **CM-2, CM-6, CM-7** - Configuration Management (NixOS)
-- **CP-9** - Encrypted Backups (NixOS)
-- **IA-5** - Constant-Time Comparison
-- **RA-5** - Vulnerability Scanning (cargo audit)
-- **SC-5** - Rate Limiting & DoS Protection
-- **SC-7, SC-7(5)** - Network Firewall (NixOS)
-- **SC-8** - Database TLS
-- **SC-10** - Request Timeout
-- **SC-13** - Cryptographic Protection
-- **SI-3** - Malicious Code Detection
-- **SI-4** - Intrusion Detection (NixOS)
-- **SI-16** - Memory Protection (NixOS)
+**Authentication & Authorization:**
+- **AC-3, AC-6** - Access Enforcement, Least Privilege (`src/auth.rs`)
+- **AC-7** - Login Attempt Tracking (`src/login.rs`)
+- **AC-11, AC-12** - Session Management (`src/session.rs`)
+- **IA-2, IA-2(1), IA-2(2), IA-2(6), IA-8** - Authentication & MFA (`src/auth.rs`)
+- **IA-5(1), IA-5(4)** - Password Policy (`src/password.rs`)
+
+**Data Protection:**
+- **SI-10** - Input Validation (`src/validation.rs`)
+- **SI-11, IA-6** - Secure Error Handling (`src/error.rs`)
+- **SC-13** - Cryptographic Protection (`src/crypto.rs`)
+
+**Operational Security:**
+- **IR-4, IR-5, SI-4(2), SI-4(5)** - Alerting (`src/alerting.rs`)
+- **CA-7** - Health Checks (`src/health.rs`)
+- **SC-12** - Key Management (`src/keys.rs`)
+- **SR-3, SR-4, SR-11, SI-2, SI-3, SI-7, CM-8, CM-10** - Supply Chain (`src/supply_chain.rs`)
+- **SA-11, CA-8** - Security Testing (`src/testing.rs`)
+
+**Infrastructure (Rust):**
+- **AC-4** - CORS Policy (`src/layers.rs`)
+- **SC-5** - Rate Limiting & DoS Protection (`src/layers.rs`)
+- **SC-10** - Request Timeout (`src/layers.rs`)
+- **AU-2, AU-3, AU-8, AU-12** - Audit Logging (`src/observability/`)
+
+**Infrastructure (NixOS):**
+- **CM-2, CM-6, CM-7** - Configuration Management
+- **CP-9** - Encrypted Backups
+- **SC-7, SC-7(5)** - Network Firewall
+- **SI-4, SI-16** - Intrusion Detection, Memory Protection
 
 ## Usage
 
@@ -151,4 +166,4 @@ See [SECURITY.md](../SECURITY.md) for:
 
 This documentation is maintained by the security-auditor-agent and updated as controls are implemented, tested, and verified.
 
-Last updated: 2025-12-11
+Last updated: 2025-12-16
