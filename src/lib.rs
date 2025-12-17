@@ -8,7 +8,8 @@
 //! ## Security Modules
 //!
 //! ### Infrastructure Layer
-//! - **[`layers`]**: Security headers, rate limiting, CORS, timeouts (SC-5, SC-8, SC-28)
+//! - **[`layers`]**: Security headers, rate limiting, CORS, timeouts (SC-5, SC-8, CM-6, AC-4)
+//! - **[`audit`]**: Security-aware HTTP audit middleware (AU-2, AU-3, AU-12)
 //! - **[`observability`]**: Structured logging, metrics, distributed tracing (AU-2, AU-3, AU-12)
 //! - **[`observability::stack`]**: FedRAMP-compliant observability infrastructure generator (20 controls)
 //! - **Database** (feature: `postgres`): SSL/TLS, connection pooling, health checks (SC-8, IA-5)
@@ -17,7 +18,7 @@
 //! - **[`auth`]**: OAuth/OIDC JWT claims, MFA policy enforcement (IA-2, IA-5, AC-2)
 //! - **[`password`]**: NIST 800-63B compliant password validation (IA-5(1))
 //! - **[`login`]**: Login attempt tracking, account lockout (AC-7)
-//! - **[`session`]**: Session management, idle/absolute timeout (AC-11, AC-12)
+//! - **[`session`]**: Session management, idle/absolute timeout (AC-11, AC-12, SC-10)
 //!
 //! ### Operational Security
 //! - **[`alerting`]**: Security incident alerting with rate limiting (IR-4, IR-5)
@@ -219,11 +220,11 @@
 //!
 //! ## Compliance Coverage
 //!
-//! Barbican implements 52 NIST 800-53 Rev 5 controls and facilitates 32 additional controls:
+//! Barbican implements 53 NIST 800-53 Rev 5 controls and facilitates 50 additional controls:
 //!
 //! | Framework | Coverage |
 //! |-----------|----------|
-//! | NIST SP 800-53 Rev 5 | 52 controls implemented |
+//! | NIST SP 800-53 Rev 5 | 53 controls implemented |
 //! | NIST SP 800-63B | Password policy compliance |
 //! | SOC 2 Type II | ~75% of applicable criteria |
 //! | FedRAMP | ~70% of applicable controls |
@@ -231,6 +232,7 @@
 //! | OWASP Top 10 | Input validation, secure error handling |
 //!
 //! See `.claudedocs/SECURITY_CONTROL_REGISTRY.md` for the complete control matrix.
+//! See `.claudedocs/NIST_800_53_CROSSWALK.md` for auditor-friendly control-to-code mappings.
 
 mod config;
 mod crypto;
@@ -238,6 +240,9 @@ mod crypto;
 mod database;
 mod layers;
 mod parse;
+
+// Security audit middleware (AU-2, AU-3, AU-12)
+pub mod audit;
 
 // Compliance framework
 pub mod compliance;
@@ -314,3 +319,6 @@ pub use database::{
 
 // Compliance re-exports
 pub use compliance::{ComplianceConfig, ComplianceProfile, ComplianceValidator};
+
+// Audit middleware re-exports (AU-2, AU-3, AU-12)
+pub use audit::{audit_middleware, AuditRecord, AuditOutcome};

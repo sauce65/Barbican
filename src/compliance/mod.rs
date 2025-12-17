@@ -39,6 +39,21 @@ mod config;
 mod profile;
 mod validation;
 
+#[cfg(feature = "compliance-artifacts")]
+pub mod artifacts;
+
+#[cfg(feature = "compliance-artifacts")]
+pub mod control_tests;
+
 pub use config::{config, init, ComplianceConfig};
 pub use profile::ComplianceProfile;
 pub use validation::{ComplianceError, ComplianceReport, ComplianceValidator, ControlStatus};
+
+#[cfg(feature = "compliance-artifacts")]
+pub use artifacts::{
+    ArtifactBuilder, CodeLocation, ComplianceTestReport, ControlTestArtifact, EvidenceCollector,
+    EvidenceItem, EvidenceType, FamilySummary, ReportSignature, SigningError, TestSummary,
+};
+
+#[cfg(feature = "compliance-artifacts")]
+pub use control_tests::{all_control_tests, generate_compliance_report};

@@ -53,16 +53,19 @@ where
     fn with_security(self, config: SecurityConfig) -> Self {
         let mut router = self;
 
-        // SC-5: Request Timeout - NIST 800-53 SC-10
+        // SC-5: Denial of Service Protection - Request timeout prevents
+        // resource exhaustion from slow/hanging requests (not SC-10 which is session-level)
         router = router.layer(TimeoutLayer::with_status_code(
             StatusCode::REQUEST_TIMEOUT,
             config.request_timeout,
         ));
 
-        // SC-4: Request Body Size Limit - NIST 800-53 SC-5
+        // SC-5: Denial of Service Protection - Body size limit prevents
+        // memory exhaustion from oversized requests
         router = router.layer(RequestBodyLimitLayer::new(config.max_request_size));
 
-        // SC-3: Rate Limiting - NIST 800-53 SC-5, FedRAMP SC-5
+        // SC-5: Denial of Service Protection - Rate limiting prevents
+        // resource exhaustion from request floods
         if config.rate_limit_enabled {
             let rate_limit_config = GovernorConfigBuilder::default()
                 .per_second(config.rate_limit_per_second)
@@ -72,7 +75,9 @@ where
             router = router.layer(GovernorLayer::new(rate_limit_config));
         }
 
-        // SC-2: Security Headers - NIST 800-53 SC-28, SOC 2 CC6.1
+        // Security Headers - NIST 800-53 SC-8 (Transmission Confidentiality),
+        // CM-6 (Configuration Settings), SI-11 (Error Handling)
+        // SOC 2 CC6.1, CC6.6
         if config.security_headers_enabled {
             router = router
                 // HSTS: Enforce HTTPS for 1 year, include subdomains
@@ -107,11 +112,14 @@ where
                 ));
         }
 
-        // SC-6: CORS Policy - NIST 800-53 AC-4, SOC 2 CC6.6
+        // AC-4: Information Flow Enforcement - CORS policy controls
+        // cross-origin data flow based on origin allowlist
+        // SOC 2 CC6.6
         let cors_layer = build_cors_layer(&config);
         router = router.layer(cors_layer);
 
-        // SC-7: Structured Logging - NIST 800-53 AU-2, AU-3, AU-12
+        // AU-2, AU-3, AU-12: Audit Logging - Basic HTTP request tracing
+        // For security event logging, use observability::SecurityEvent
         if config.tracing_enabled {
             router = router.layer(TraceLayer::new_for_http());
         }

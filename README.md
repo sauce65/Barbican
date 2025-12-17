@@ -1,6 +1,6 @@
 # barbican
 
-NIST 800-53 compliant security infrastructure for Axum applications. A pluggable, secure-by-default library providing 52+ security controls for building production-ready web services.
+NIST 800-53 compliant security infrastructure for Axum applications. A pluggable, secure-by-default library providing 53+ security controls for building production-ready web services.
 
 ## Quick Start
 
@@ -52,7 +52,7 @@ barbican = { version = "0.1", features = ["postgres", "observability-loki", "met
 
 ## Security Modules
 
-Barbican provides 13 security modules covering 52+ NIST 800-53 controls:
+Barbican provides 14 security modules covering 53+ NIST 800-53 controls:
 
 ### Compliance Configuration
 
@@ -64,7 +64,8 @@ Barbican provides 13 security modules covering 52+ NIST 800-53 controls:
 
 | Module | Description | NIST Controls |
 |--------|-------------|---------------|
-| `layers` | Security headers, rate limiting, CORS, timeouts | SC-5, SC-8, SC-28, AC-4 |
+| `layers` | Security headers, rate limiting, CORS, timeouts | SC-5, SC-8, CM-6, AC-4 |
+| `audit` | Security-aware HTTP audit middleware | AU-2, AU-3, AU-12, AU-16 |
 | `database` | SSL/TLS, connection pooling, health checks | SC-8, SC-28, IA-5 |
 | `observability` | Structured logging, metrics, distributed tracing | AU-2, AU-3, AU-12 |
 | `observability::stack` | FedRAMP-compliant observability infrastructure generator | AU-9, AU-11, SC-8, SC-28, IR-4, IR-5 |
@@ -76,7 +77,7 @@ Barbican provides 13 security modules covering 52+ NIST 800-53 controls:
 | `auth` | OAuth/OIDC JWT claims, MFA policy enforcement | IA-2, IA-5, AC-2 |
 | `password` | NIST 800-63B compliant password validation | IA-5(1) |
 | `login` | Login attempt tracking, account lockout | AC-7 |
-| `session` | Session management, idle timeout, termination | AC-11, AC-12 |
+| `session` | Session management, idle timeout, termination | AC-11, AC-12, SC-10 |
 
 ### Operational Security
 
@@ -521,11 +522,11 @@ if constant_time_str_eq(&stored_token, &provided_token) {
 
 ## Compliance
 
-Barbican implements 52 NIST 800-53 Rev 5 controls (47.7% of applicable controls) and facilitates 32 additional controls (29.4%):
+Barbican implements 53 NIST 800-53 Rev 5 controls (48.6% of applicable controls) and facilitates 50 additional controls (45.9%):
 
 **Control Families Covered:**
 - **Access Control (AC)**: AC-2, AC-4, AC-7, AC-11, AC-12
-- **Audit (AU)**: AU-2, AU-3, AU-6, AU-7, AU-12
+- **Audit (AU)**: AU-2, AU-3, AU-6, AU-7, AU-12, AU-14, AU-16
 - **Security Assessment (CA)**: CA-7, CA-8
 - **Identification & Authentication (IA)**: IA-2, IA-5, IA-5(1)
 - **Incident Response (IR)**: IR-4, IR-5, IR-6
@@ -535,7 +536,7 @@ Barbican implements 52 NIST 800-53 Rev 5 controls (47.7% of applicable controls)
 - **System & Services Acquisition (SA)**: SA-11
 
 **Framework Support:**
-- **NIST SP 800-53 Rev 5**: 52 controls implemented
+- **NIST SP 800-53 Rev 5**: 53 controls implemented
 - **NIST SP 800-63B**: Password policy compliance
 - **SOC 2 Type II**: ~75% of applicable criteria
 - **FedRAMP**: ~70% of applicable controls
@@ -543,6 +544,7 @@ Barbican implements 52 NIST 800-53 Rev 5 controls (47.7% of applicable controls)
 - **OWASP Top 10**: Input validation, secure error handling
 
 See `.claudedocs/SECURITY_CONTROL_REGISTRY.md` for detailed control mappings.
+See `.claudedocs/NIST_800_53_CROSSWALK.md` for auditor-friendly control-to-code mappings.
 
 ## NixOS Modules
 
@@ -710,6 +712,7 @@ The combined test suite generates a JSON audit report with compliance rate.
 - [SECURITY.md](./SECURITY.md) - Security controls and audit procedures
 - [CONTRIBUTING.md](./CONTRIBUTING.md) - Architecture and development guide
 - [.claudedocs/SECURITY_CONTROL_REGISTRY.md](./.claudedocs/SECURITY_CONTROL_REGISTRY.md) - Full NIST 800-53 control registry
+- [.claudedocs/NIST_800_53_CROSSWALK.md](./.claudedocs/NIST_800_53_CROSSWALK.md) - Auditor-friendly control-to-code crosswalk
 - [.claudedocs/NIST_800_53_IMPLEMENTATION_GUIDE.md](./.claudedocs/NIST_800_53_IMPLEMENTATION_GUIDE.md) - Implementation guide with examples
 - [.claudedocs/OAUTH_INTEGRATION.md](./.claudedocs/OAUTH_INTEGRATION.md) - OAuth/OIDC integration guide
 - [API docs](https://docs.rs/barbican) - Full API reference

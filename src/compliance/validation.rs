@@ -23,10 +23,12 @@
 
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
+
 use super::ComplianceConfig;
 
 /// Status of a single compliance control
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ControlStatus {
     /// NIST 800-53 control identifier (e.g., "SC-8", "AC-7")
     pub control_id: String,
@@ -68,7 +70,7 @@ impl ControlStatus {
 }
 
 /// Compliance validation report
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct ComplianceReport {
     /// Status of individual controls
     pub controls: Vec<ControlStatus>,
@@ -117,6 +119,46 @@ impl ComplianceReport {
     pub fn add_warning(&mut self, warning: impl Into<String>) {
         self.warnings.push(warning.into());
     }
+
+    /// Export report as JSON string
+    ///
+    /// Returns a pretty-printed JSON representation of the report.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let report = validator.finish();
+    /// let json = report.to_json()?;
+    /// std::fs::write("compliance_report.json", json)?;
+    /// ```
+    pub fn to_json(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string_pretty(self)
+    }
+
+    /// Export report as compact JSON string (for signing)
+    pub fn to_json_compact(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string(self)
+    }
+
+    /// Export report as serde_json::Value
+    pub fn to_json_value(&self) -> serde_json::Value {
+        serde_json::to_value(self).unwrap_or_default()
+    }
+
+    /// Write report to a file
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let report = validator.finish();
+    /// report.write_to_file(Path::new("compliance_report.json"))?;
+    /// ```
+    pub fn write_to_file(&self, path: &std::path::Path) -> std::io::Result<()> {
+        let json = self
+            .to_json()
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        std::fs::write(path, json)
+    }
 }
 
 impl fmt::Display for ComplianceReport {
@@ -163,7 +205,7 @@ impl fmt::Display for ComplianceReport {
 }
 
 /// Compliance validation errors
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ComplianceError {
     /// SC-8 violation: Transmission confidentiality/integrity
     Sc8Violation(String),
@@ -490,6 +532,86 @@ impl<'a> ComplianceValidator<'a> {
         }
     }
 
+    /// Validate security layer configuration (SC-5, CM-6, AC-4, AU-2)
+    ///
+    /// Validates that the HTTP security layers meet compliance requirements:
+    /// - SC-5: Rate limiting enabled for DoS protection
+    /// - CM-6: Security headers enabled for secure configuration
+    /// - AC-4: CORS not in permissive mode for production
+    /// - AU-2: Tracing enabled for audit logging
+    pub fn validate_security_layers(&mut self, config: &crate::config::SecurityConfig) {
+        // SC-5: Rate limiting must be enabled for DoS protection
+        if !config.rate_limit_enabled {
+            self.report.add_control(ControlStatus::failed(
+                "SC-5",
+                "Denial of Service Protection",
+                "Rate limiting is disabled - required for DoS protection",
+            ));
+        } else {
+            self.report.add_control(ControlStatus::satisfied(
+                "SC-5",
+                "Denial of Service Protection",
+            ));
+        }
+
+        // CM-6: Security headers must be enabled
+        if !config.security_headers_enabled {
+            self.report.add_control(ControlStatus::failed(
+                "CM-6",
+                "Configuration Settings",
+                "Security headers are disabled - required for secure defaults",
+            ));
+        } else {
+            self.report.add_control(ControlStatus::satisfied(
+                "CM-6",
+                "Configuration Settings",
+            ));
+        }
+
+        // AC-4: CORS must not be permissive in production
+        if config.cors_is_permissive() {
+            self.report.add_control(ControlStatus::failed(
+                "AC-4",
+                "Information Flow Enforcement",
+                "CORS allows any origin (*) - not suitable for production",
+            ));
+        } else {
+            self.report.add_control(ControlStatus::satisfied(
+                "AC-4",
+                "Information Flow Enforcement",
+            ));
+        }
+
+        // AU-2: Tracing must be enabled for audit logging
+        if !config.tracing_enabled {
+            self.report.add_control(ControlStatus::failed(
+                "AU-2",
+                "Audit Events",
+                "Request tracing is disabled - required for audit logging",
+            ));
+        } else {
+            self.report.add_control(ControlStatus::satisfied(
+                "AU-2",
+                "Audit Events",
+            ));
+        }
+
+        // Additional warnings for configuration review
+        if config.request_timeout.as_secs() > 120 {
+            self.report.add_warning(format!(
+                "SC-5: Request timeout {}s is longer than recommended 120s",
+                config.request_timeout.as_secs()
+            ));
+        }
+
+        if config.max_request_size > 10 * 1024 * 1024 {
+            self.report.add_warning(format!(
+                "SC-5: Max request size {}MB exceeds recommended 10MB limit",
+                config.max_request_size / (1024 * 1024)
+            ));
+        }
+    }
+
     /// Finish validation and return the report
     pub fn finish(self) -> ComplianceReport {
         self.report
@@ -612,5 +734,164 @@ mod tests {
         let err = ComplianceError::Sc8Violation("TLS not enabled".to_string());
         assert!(err.to_string().contains("SC-8"));
         assert!(err.to_string().contains("TLS not enabled"));
+    }
+
+    #[test]
+    fn test_validator_security_layers_compliant() {
+        let compliance_config = ComplianceConfig::from_profile(ComplianceProfile::FedRampModerate);
+        let mut validator = ComplianceValidator::new(&compliance_config);
+
+        // Default SecurityConfig should be compliant
+        let security_config = crate::config::SecurityConfig::default();
+        validator.validate_security_layers(&security_config);
+
+        let report = validator.finish();
+        assert!(report.is_compliant());
+        assert_eq!(report.success_count(), 4); // SC-5, CM-6, AC-4, AU-2
+    }
+
+    #[test]
+    fn test_validator_security_layers_rate_limit_disabled() {
+        let compliance_config = ComplianceConfig::from_profile(ComplianceProfile::FedRampModerate);
+        let mut validator = ComplianceValidator::new(&compliance_config);
+
+        let security_config = crate::config::SecurityConfig::builder()
+            .disable_rate_limiting()
+            .build();
+        validator.validate_security_layers(&security_config);
+
+        let report = validator.finish();
+        assert!(!report.is_compliant());
+        assert!(report.failed_controls().any(|c| c.control_id == "SC-5"));
+    }
+
+    #[test]
+    fn test_validator_security_layers_headers_disabled() {
+        let compliance_config = ComplianceConfig::from_profile(ComplianceProfile::FedRampModerate);
+        let mut validator = ComplianceValidator::new(&compliance_config);
+
+        let security_config = crate::config::SecurityConfig::builder()
+            .disable_security_headers()
+            .build();
+        validator.validate_security_layers(&security_config);
+
+        let report = validator.finish();
+        assert!(!report.is_compliant());
+        assert!(report.failed_controls().any(|c| c.control_id == "CM-6"));
+    }
+
+    #[test]
+    fn test_validator_security_layers_cors_permissive() {
+        let compliance_config = ComplianceConfig::from_profile(ComplianceProfile::FedRampModerate);
+        let mut validator = ComplianceValidator::new(&compliance_config);
+
+        let security_config = crate::config::SecurityConfig::builder()
+            .cors_permissive()
+            .build();
+        validator.validate_security_layers(&security_config);
+
+        let report = validator.finish();
+        assert!(!report.is_compliant());
+        assert!(report.failed_controls().any(|c| c.control_id == "AC-4"));
+    }
+
+    #[test]
+    fn test_validator_security_layers_tracing_disabled() {
+        let compliance_config = ComplianceConfig::from_profile(ComplianceProfile::FedRampModerate);
+        let mut validator = ComplianceValidator::new(&compliance_config);
+
+        let security_config = crate::config::SecurityConfig::builder()
+            .disable_tracing()
+            .build();
+        validator.validate_security_layers(&security_config);
+
+        let report = validator.finish();
+        assert!(!report.is_compliant());
+        assert!(report.failed_controls().any(|c| c.control_id == "AU-2"));
+    }
+
+    // Serialization tests for Phase 1 compliance artifacts
+
+    #[test]
+    fn test_control_status_serialization_roundtrip() {
+        let satisfied = ControlStatus::satisfied("SC-8", "Transmission Confidentiality");
+        let json = serde_json::to_string(&satisfied).expect("serialize satisfied");
+        let deserialized: ControlStatus = serde_json::from_str(&json).expect("deserialize satisfied");
+        assert_eq!(satisfied.control_id, deserialized.control_id);
+        assert_eq!(satisfied.satisfied, deserialized.satisfied);
+        assert_eq!(satisfied.message, deserialized.message);
+
+        let failed = ControlStatus::failed("IA-5", "Authenticator Management", "Weak password policy");
+        let json = serde_json::to_string(&failed).expect("serialize failed");
+        let deserialized: ControlStatus = serde_json::from_str(&json).expect("deserialize failed");
+        assert_eq!(failed.control_id, deserialized.control_id);
+        assert_eq!(failed.satisfied, deserialized.satisfied);
+        assert_eq!(failed.message, deserialized.message);
+    }
+
+    #[test]
+    fn test_compliance_report_serialization_roundtrip() {
+        let mut report = ComplianceReport::new();
+        report.add_control(ControlStatus::satisfied("SC-8", "TLS"));
+        report.add_control(ControlStatus::failed("SC-28", "Encryption", "Not enabled"));
+        report.add_warning("Review session timeout".to_string());
+
+        let json = serde_json::to_string(&report).expect("serialize report");
+        let deserialized: ComplianceReport = serde_json::from_str(&json).expect("deserialize report");
+
+        assert_eq!(report.controls.len(), deserialized.controls.len());
+        assert_eq!(report.warnings.len(), deserialized.warnings.len());
+        assert_eq!(report.is_compliant(), deserialized.is_compliant());
+    }
+
+    #[test]
+    fn test_compliance_error_serialization_roundtrip() {
+        let errors = vec![
+            ComplianceError::Sc8Violation("TLS disabled".to_string()),
+            ComplianceError::Ac11Violation("Session too long".to_string()),
+            ComplianceError::Ia5Violation("Weak password".to_string()),
+            ComplianceError::Sc28Violation("Encryption at rest".to_string()),
+            ComplianceError::Ac7Violation("Too many failed logins".to_string()),
+        ];
+
+        for error in errors {
+            let json = serde_json::to_string(&error).expect("serialize error");
+            let deserialized: ComplianceError = serde_json::from_str(&json).expect("deserialize error");
+            assert_eq!(format!("{:?}", error), format!("{:?}", deserialized));
+        }
+    }
+
+    #[test]
+    fn test_compliance_report_to_json() {
+        let mut report = ComplianceReport::new();
+        report.add_control(ControlStatus::satisfied("SC-8", "TLS"));
+
+        let json = report.to_json().expect("to_json");
+        assert!(json.contains("SC-8"));
+        assert!(json.contains("TLS"));
+        assert!(json.contains('\n')); // Pretty-printed
+    }
+
+    #[test]
+    fn test_compliance_report_to_json_compact() {
+        let mut report = ComplianceReport::new();
+        report.add_control(ControlStatus::satisfied("SC-8", "TLS"));
+
+        let json = report.to_json_compact().expect("to_json_compact");
+        assert!(json.contains("SC-8"));
+        assert!(!json.contains("\n  ")); // Not pretty-printed
+    }
+
+    #[test]
+    fn test_compliance_report_to_json_value() {
+        let mut report = ComplianceReport::new();
+        report.add_control(ControlStatus::satisfied("SC-8", "TLS"));
+        report.add_control(ControlStatus::failed("IA-5", "Password", "Too short"));
+
+        let value = report.to_json_value();
+        assert!(value.is_object());
+        let controls = value.get("controls").expect("controls field");
+        assert!(controls.is_array());
+        assert_eq!(controls.as_array().unwrap().len(), 2);
     }
 }

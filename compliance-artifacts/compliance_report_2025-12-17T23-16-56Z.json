@@ -1,0 +1,572 @@
+{
+  "schema_version": "1.0.0",
+  "generated_at": "2025-12-17T23:16:56.535546827Z",
+  "barbican_version": "0.1.0",
+  "rust_version": "unknown",
+  "compliance_profile": "FedRAMP Moderate",
+  "artifacts": [
+    {
+      "control_id": "AC-7",
+      "control_name": "Unsuccessful Logon Attempts",
+      "test_name": "lockout_after_max_attempts",
+      "description": "Verify account locks after configured number of failed login attempts (AC-7)",
+      "executed_at": "2025-12-17T23:16:56.535636459Z",
+      "duration_ms": 0,
+      "code_location": {
+        "file": "src/login.rs",
+        "line_start": 418,
+        "line_end": 554,
+        "function": null
+      },
+      "inputs": {
+        "username": "test@example.com",
+        "max_attempts": 3
+      },
+      "expected": {
+        "locked_after_3_attempts": true,
+        "allowed_before_lockout": true
+      },
+      "observed": {
+        "allowed_before_lockout": true,
+        "locked_after_3_attempts": true
+      },
+      "passed": true,
+      "failure_reason": null,
+      "evidence": [
+        {
+          "evidence_type": "configuration",
+          "timestamp": "2025-12-17T23:16:56.535597258Z",
+          "content": {
+            "name": "lockout_policy",
+            "value": {
+              "lockout_duration_secs": 1800,
+              "max_attempts": 3,
+              "progressive_lockout": true
+            }
+          },
+          "description": null
+        },
+        {
+          "evidence_type": "log",
+          "timestamp": "2025-12-17T23:16:56.535616713Z",
+          "content": "Attempt 1: failed_count=1, is_locked=false",
+          "description": null
+        },
+        {
+          "evidence_type": "log",
+          "timestamp": "2025-12-17T23:16:56.535618557Z",
+          "content": "Attempt 2: failed_count=2, is_locked=false",
+          "description": null
+        },
+        {
+          "evidence_type": "log",
+          "timestamp": "2025-12-17T23:16:56.535620590Z",
+          "content": "Attempt 3: failed_count=3, is_locked=true",
+          "description": null
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-17T23:16:56.535621422Z",
+          "content": {
+            "details": {
+              "attempt1_allowed": true,
+              "attempt2_allowed": true
+            },
+            "passed": true
+          },
+          "description": "First two attempts should not lock out"
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-17T23:16:56.535625399Z",
+          "content": {
+            "details": {
+              "locked_after_3": true
+            },
+            "passed": true
+          },
+          "description": "Third attempt should trigger lockout"
+        }
+      ],
+      "related_controls": [
+        "AC-2",
+        "IA-5"
+      ]
+    },
+    {
+      "control_id": "SC-5",
+      "control_name": "Denial of Service Protection",
+      "test_name": "rate_limiting_configuration",
+      "description": "Verify rate limiting is enabled and configured correctly (SC-5)",
+      "executed_at": "2025-12-17T23:16:56.535660703Z",
+      "duration_ms": 0,
+      "code_location": {
+        "file": "src/layers.rs",
+        "line_start": 67,
+        "line_end": 73,
+        "function": "apply_security_layers"
+      },
+      "inputs": {
+        "expected_rate_limit_enabled": true
+      },
+      "expected": {
+        "has_max_request_size": true,
+        "has_request_timeout": true,
+        "rate_limiting_enabled": true
+      },
+      "observed": {
+        "rate_limiting_enabled": true,
+        "has_max_request_size": true,
+        "has_request_timeout": true
+      },
+      "passed": true,
+      "failure_reason": null,
+      "evidence": [
+        {
+          "evidence_type": "configuration",
+          "timestamp": "2025-12-17T23:16:56.535644734Z",
+          "content": {
+            "name": "security_config",
+            "value": {
+              "max_request_size_bytes": 1048576,
+              "rate_limit_burst": 10,
+              "rate_limit_enabled": true,
+              "rate_limit_per_second": 5,
+              "request_timeout_secs": 30
+            }
+          },
+          "description": null
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-17T23:16:56.535649232Z",
+          "content": {
+            "details": {
+              "enabled": true
+            },
+            "passed": true
+          },
+          "description": "Rate limiting should be enabled by default"
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-17T23:16:56.535652328Z",
+          "content": {
+            "details": {
+              "timeout_secs": 30
+            },
+            "passed": true
+          },
+          "description": "Request timeout should be configured"
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-17T23:16:56.535653349Z",
+          "content": {
+            "details": {
+              "max_size_bytes": 1048576
+            },
+            "passed": true
+          },
+          "description": "Max request size should be configured"
+        }
+      ],
+      "related_controls": []
+    },
+    {
+      "control_id": "SI-10",
+      "control_name": "Information Input Validation",
+      "test_name": "email_validation_and_xss_sanitization",
+      "description": "Verify input validation rejects malformed data and sanitizes XSS (SI-10)",
+      "executed_at": "2025-12-17T23:16:56.535694384Z",
+      "duration_ms": 0,
+      "code_location": {
+        "file": "src/validation.rs",
+        "line_start": 237,
+        "line_end": 380,
+        "function": null
+      },
+      "inputs": {
+        "invalid_email": "not-an-email",
+        "valid_email": "user@example.com",
+        "xss_payload": "<script>alert('xss')</script>"
+      },
+      "expected": {
+        "xss_sanitized": true,
+        "invalid_email_rejected": true,
+        "valid_email_accepted": true
+      },
+      "observed": {
+        "valid_email_accepted": true,
+        "xss_sanitized": true,
+        "invalid_email_rejected": true
+      },
+      "passed": true,
+      "failure_reason": null,
+      "evidence": [
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-17T23:16:56.535672965Z",
+          "content": {
+            "details": {
+              "result": "Ok(())"
+            },
+            "passed": true
+          },
+          "description": "Valid email should be accepted"
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-17T23:16:56.535676742Z",
+          "content": {
+            "details": {
+              "result": "Err(ValidationError { field: Some(\"email\"), code: InvalidEmail, message: \"Invalid email format\" })"
+            },
+            "passed": true
+          },
+          "description": "Invalid email should be rejected"
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-17T23:16:56.535684506Z",
+          "content": {
+            "details": {
+              "input": "<script>alert('xss')</script>",
+              "output": "alert('xss')",
+              "script_removed": true
+            },
+            "passed": true
+          },
+          "description": "XSS payload should be sanitized"
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-17T23:16:56.535687121Z",
+          "content": {
+            "details": {
+              "result": "Ok(())"
+            },
+            "passed": true
+          },
+          "description": "Length validation should work"
+        }
+      ],
+      "related_controls": []
+    },
+    {
+      "control_id": "IA-5(1)",
+      "control_name": "Password-Based Authentication",
+      "test_name": "password_policy_enforcement",
+      "description": "Verify password policy meets NIST 800-63B requirements (IA-5(1))",
+      "executed_at": "2025-12-17T23:16:56.535724959Z",
+      "duration_ms": 0,
+      "code_location": {
+        "file": "src/password.rs",
+        "line_start": 61,
+        "line_end": 265,
+        "function": null
+      },
+      "inputs": {
+        "weak_password": "password123",
+        "min_length": 12,
+        "strong_password": "K9$mP2vL#nQr5xWz",
+        "short_password": "short"
+      },
+      "expected": {
+        "strong_password_accepted": true,
+        "weak_password_rejected": true,
+        "short_password_rejected": true
+      },
+      "observed": {
+        "weak_password_rejected": true,
+        "strong_password_accepted": true,
+        "short_password_rejected": true
+      },
+      "passed": true,
+      "failure_reason": null,
+      "evidence": [
+        {
+          "evidence_type": "configuration",
+          "timestamp": "2025-12-17T23:16:56.535702979Z",
+          "content": {
+            "name": "password_policy",
+            "value": {
+              "check_common_passwords": true,
+              "disallow_username_in_password": true,
+              "max_length": 128,
+              "min_length": 12
+            }
+          },
+          "description": null
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-17T23:16:56.535708489Z",
+          "content": {
+            "details": {
+              "result": "Err(TooShort { min: 12, actual: 11 })"
+            },
+            "passed": true
+          },
+          "description": "Weak/common password should be rejected"
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-17T23:16:56.535712006Z",
+          "content": {
+            "details": {
+              "result": "Err(TooShort { min: 12, actual: 5 })"
+            },
+            "passed": true
+          },
+          "description": "Short password should be rejected"
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-17T23:16:56.535717556Z",
+          "content": {
+            "details": {
+              "result": "Ok(())"
+            },
+            "passed": true
+          },
+          "description": "Strong password should be accepted"
+        }
+      ],
+      "related_controls": []
+    },
+    {
+      "control_id": "AC-11",
+      "control_name": "Session Lock",
+      "test_name": "session_timeout_configuration",
+      "description": "Verify session policy includes idle and absolute timeout (AC-11)",
+      "executed_at": "2025-12-17T23:16:56.535747870Z",
+      "duration_ms": 0,
+      "code_location": {
+        "file": "src/session.rs",
+        "line_start": 43,
+        "line_end": 167,
+        "function": null
+      },
+      "inputs": {
+        "expected_idle_timeout": true,
+        "expected_max_lifetime": true
+      },
+      "expected": {
+        "fresh_session_valid": true,
+        "idle_timeout_configured": true,
+        "max_lifetime_configured": true
+      },
+      "observed": {
+        "idle_timeout_configured": true,
+        "max_lifetime_configured": true,
+        "fresh_session_valid": true
+      },
+      "passed": true,
+      "failure_reason": null,
+      "evidence": [
+        {
+          "evidence_type": "configuration",
+          "timestamp": "2025-12-17T23:16:56.535732152Z",
+          "content": {
+            "name": "session_policy",
+            "value": {
+              "allow_extension": false,
+              "idle_timeout_secs": 900,
+              "max_lifetime_secs": 14400,
+              "require_reauth_for_sensitive": true
+            }
+          },
+          "description": null
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-17T23:16:56.535735779Z",
+          "content": {
+            "details": {
+              "idle_timeout_secs": 900
+            },
+            "passed": true
+          },
+          "description": "Idle timeout should be configured"
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-17T23:16:56.535738524Z",
+          "content": {
+            "details": {
+              "max_lifetime_secs": 14400
+            },
+            "passed": true
+          },
+          "description": "Max lifetime should be configured"
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-17T23:16:56.535740738Z",
+          "content": {
+            "details": {
+              "termination_reason": "None"
+            },
+            "passed": true
+          },
+          "description": "Fresh session should not be terminated"
+        }
+      ],
+      "related_controls": [
+        "AC-12",
+        "SC-10"
+      ]
+    },
+    {
+      "control_id": "CM-6",
+      "control_name": "Configuration Management",
+      "test_name": "security_headers_enabled",
+      "description": "Verify security headers are enabled by default (CM-6)",
+      "executed_at": "2025-12-17T23:16:56.535764020Z",
+      "duration_ms": 0,
+      "code_location": {
+        "file": "src/config.rs",
+        "line_start": 35,
+        "line_end": 93,
+        "function": null
+      },
+      "inputs": {},
+      "expected": {
+        "tracing_enabled": true,
+        "security_headers_enabled": true
+      },
+      "observed": {
+        "security_headers_enabled": true,
+        "tracing_enabled": true
+      },
+      "passed": true,
+      "failure_reason": null,
+      "evidence": [
+        {
+          "evidence_type": "configuration",
+          "timestamp": "2025-12-17T23:16:56.535754222Z",
+          "content": {
+            "name": "security_config",
+            "value": {
+              "security_headers_enabled": true,
+              "tracing_enabled": true
+            }
+          },
+          "description": null
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-17T23:16:56.535758740Z",
+          "content": {
+            "details": {
+              "enabled": true
+            },
+            "passed": true
+          },
+          "description": "Security headers should be enabled by default"
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-17T23:16:56.535759942Z",
+          "content": {
+            "details": {
+              "enabled": true
+            },
+            "passed": true
+          },
+          "description": "Tracing should be enabled by default"
+        }
+      ],
+      "related_controls": [
+        "SC-8"
+      ]
+    },
+    {
+      "control_id": "AC-4",
+      "control_name": "Information Flow Enforcement",
+      "test_name": "cors_not_permissive_by_default",
+      "description": "Verify CORS is not permissive by default (AC-4)",
+      "executed_at": "2025-12-17T23:16:56.535779438Z",
+      "duration_ms": 0,
+      "code_location": {
+        "file": "src/config.rs",
+        "line_start": 155,
+        "line_end": 165,
+        "function": null
+      },
+      "inputs": {},
+      "expected": {
+        "permissive_detected": true,
+        "default_not_permissive": true
+      },
+      "observed": {
+        "permissive_detected": true,
+        "default_not_permissive": true
+      },
+      "passed": true,
+      "failure_reason": null,
+      "evidence": [
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-17T23:16:56.535772866Z",
+          "content": {
+            "details": {
+              "cors_origins": [],
+              "is_permissive": false
+            },
+            "passed": true
+          },
+          "description": "Default CORS should not be permissive"
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-17T23:16:56.535775430Z",
+          "content": {
+            "details": {
+              "is_permissive": true
+            },
+            "passed": true
+          },
+          "description": "Permissive CORS should be detected"
+        }
+      ],
+      "related_controls": []
+    }
+  ],
+  "summary": {
+    "total_controls": 7,
+    "passed": 7,
+    "failed": 0,
+    "skipped": 0,
+    "total_duration_ms": 0,
+    "pass_rate": 100.0,
+    "by_family": {
+      "AC": {
+        "total": 3,
+        "passed": 3,
+        "failed": 0
+      },
+      "SI": {
+        "total": 1,
+        "passed": 1,
+        "failed": 0
+      },
+      "CM": {
+        "total": 1,
+        "passed": 1,
+        "failed": 0
+      },
+      "SC": {
+        "total": 1,
+        "passed": 1,
+        "failed": 0
+      },
+      "IA": {
+        "total": 1,
+        "passed": 1,
+        "failed": 0
+      }
+    }
+  }
+}

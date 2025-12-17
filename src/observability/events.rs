@@ -26,6 +26,7 @@
 //! );
 //! ```
 
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
 /// Security event categories for audit logging.
@@ -33,7 +34,7 @@ use std::fmt;
 /// These categories align with NIST SP 800-53 AU-2 auditable events.
 /// This enum contains generic security events that apply to any application.
 /// Application-specific events (OAuth, etc.) should be defined in the application.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SecurityEvent {
     // Authentication events
     /// Successful user authentication
@@ -194,7 +195,7 @@ impl fmt::Display for SecurityEvent {
 }
 
 /// Event severity levels
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Severity {
     /// Routine operations
     Low,
@@ -325,5 +326,51 @@ mod tests {
     fn test_event_name() {
         assert_eq!(SecurityEvent::AuthenticationSuccess.name(), "authentication_success");
         assert_eq!(SecurityEvent::BruteForceDetected.name(), "brute_force_detected");
+    }
+
+    // Serialization tests for Phase 1 compliance artifacts
+
+    #[test]
+    fn test_security_event_serialization_roundtrip() {
+        let events = vec![
+            SecurityEvent::AuthenticationSuccess,
+            SecurityEvent::AuthenticationFailure,
+            SecurityEvent::AccessDenied,
+            SecurityEvent::BruteForceDetected,
+            SecurityEvent::SystemStartup,
+        ];
+
+        for event in events {
+            let json = serde_json::to_string(&event).expect("serialize event");
+            let deserialized: SecurityEvent = serde_json::from_str(&json).expect("deserialize event");
+            assert_eq!(event, deserialized);
+        }
+    }
+
+    #[test]
+    fn test_severity_serialization_roundtrip() {
+        let severities = vec![Severity::Low, Severity::Medium, Severity::High, Severity::Critical];
+
+        for severity in severities {
+            let json = serde_json::to_string(&severity).expect("serialize severity");
+            let deserialized: Severity = serde_json::from_str(&json).expect("deserialize severity");
+            assert_eq!(severity, deserialized);
+        }
+    }
+
+    #[test]
+    fn test_security_event_json_format() {
+        // Verify the JSON representation is readable
+        let event = SecurityEvent::AuthenticationSuccess;
+        let json = serde_json::to_string(&event).expect("serialize");
+        assert_eq!(json, "\"AuthenticationSuccess\"");
+    }
+
+    #[test]
+    fn test_severity_json_format() {
+        // Verify the JSON representation is readable
+        let severity = Severity::Critical;
+        let json = serde_json::to_string(&severity).expect("serialize");
+        assert_eq!(json, "\"Critical\"");
     }
 }

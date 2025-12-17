@@ -1,7 +1,7 @@
 # Security Control Registry
 
 ## Project: Barbican Security Library
-## Last Updated: 2025-12-16
+## Last Updated: 2025-12-17
 ## Frameworks: NIST SP 800-53 Rev 5
 
 ### Control Status Legend
@@ -21,7 +21,7 @@
 |------------|-------------|--------|----------------|---------------|---------------|----------|-------|
 | AC-2 | Account Management | 🎯 FACILITATED | Audit logging hooks for account events | `src/observability/events.rs` | `SecurityEvent` enum | HIGH | 1 |
 | AC-3 | Access Enforcement | ✅ IMPLEMENTED | OAuth claims bridge for RBAC | `src/auth.rs` | `test_claims_*` | CRITICAL | 1 |
-| AC-4 | Information Flow Enforcement | ✅ IMPLEMENTED | CORS middleware with origin allowlist | `src/layers.rs:124-145` | `test_cors_*` | HIGH | - |
+| AC-4 | Information Flow Enforcement | ✅ IMPLEMENTED | CORS middleware with origin allowlist | `src/layers.rs:115-145` | `test_cors_*`, `test_validator_security_layers_cors_permissive` | HIGH | - |
 | AC-5 | Separation of Duties | 📋 PLANNED | Role conflict checking middleware | TBD | TBD | MEDIUM | 5 |
 | AC-6 | Least Privilege | ✅ IMPLEMENTED | Claims-based role/scope checking | `src/auth.rs` | `test_has_role`, `test_has_scope` | HIGH | 1 |
 | AC-7 | Unsuccessful Logon Attempts | ✅ IMPLEMENTED | Login attempt tracker + lockout | `src/login.rs` | `test_lockout_*` | HIGH | 2 |
@@ -43,8 +43,8 @@
 
 | Control ID | Requirement | Status | Implementation | Code Location | Test Artifact | Priority | Phase |
 |------------|-------------|--------|----------------|---------------|---------------|----------|-------|
-| AU-2 | Audit Events | ✅ IMPLEMENTED | SecurityEvent enum with 25+ events | `src/observability/events.rs` | `test_event_categories` | CRITICAL | - |
-| AU-3 | Content of Audit Records | ✅ IMPLEMENTED | Structured logging with required fields | `src/observability/events.rs` | `security_event!` macro | CRITICAL | - |
+| AU-2 | Audit Events | ✅ IMPLEMENTED | SecurityEvent enum with 25+ events + HTTP audit middleware | `src/observability/events.rs`, `src/audit.rs` | `test_event_categories`, `test_validator_security_layers_*` | CRITICAL | - |
+| AU-3 | Content of Audit Records | ✅ IMPLEMENTED | Structured logging with required fields (who, what, when, where, outcome) | `src/observability/events.rs`, `src/audit.rs:65-107` | `security_event!` macro, `audit_middleware` | CRITICAL | - |
 | AU-4 | Audit Log Storage Capacity | 🎯 FACILITATED | Log rotation via alerting framework | `src/alerting.rs` | Rate limiting tests | HIGH | 3 |
 | AU-5 | Response to Audit Failure | 🎯 FACILITATED | Alerting on log pipeline failure | `src/alerting.rs` | `test_alert_*` | HIGH | 3 |
 | AU-6 | Audit Review | 🎯 FACILITATED | Log query helpers | TBD | TBD | MEDIUM | 3 |
@@ -54,9 +54,9 @@
 | AU-9 | Protection of Audit Information | 📋 PLANNED | Write-only log destinations | TBD | TBD | HIGH | 3 |
 | AU-10 | Non-repudiation | 📋 PLANNED | Log signing (optional) | TBD | TBD | MEDIUM | 4 |
 | AU-11 | Audit Record Retention | 📋 PLANNED | Retention policy configuration | TBD | TBD | HIGH | 3 |
-| AU-12 | Audit Record Generation | ✅ IMPLEMENTED | security_event! macro | `src/observability/events.rs` | `test_event_severity` | CRITICAL | - |
+| AU-12 | Audit Record Generation | ✅ IMPLEMENTED | security_event! macro + HTTP audit middleware | `src/observability/events.rs`, `src/audit.rs` | `test_event_severity`, `test_audit_*` | CRITICAL | - |
 | AU-14 | Session Audit | ✅ IMPLEMENTED | Session lifecycle logging | `src/session.rs` | `log_session_*` | MEDIUM | 2 |
-| AU-16 | Cross-Org Audit | 🎯 FACILITATED | Correlation ID middleware | TBD | TBD | LOW | 5 |
+| AU-16 | Cross-Org Audit | ✅ IMPLEMENTED | Correlation ID extraction/generation in audit middleware | `src/audit.rs:193-212` | `test_generate_request_id` | LOW | 5 |
 
 **Gap Analysis:**
 - AU-9: Need write-only destination configuration
@@ -87,7 +87,7 @@
 | CM-3 | Configuration Change Control | ⚠️ PARTIAL | Audit logging on config changes | `src/config.rs` | Logs config on load | HIGH | 3 |
 | CM-4 | Impact Analysis | 🎯 FACILITATED | Configuration validation | TBD | TBD | MEDIUM | 5 |
 | CM-5 | Access Restrictions | 🎯 FACILITATED | Config file permissions (NixOS) | `nix/modules/` | NixOS enforces | HIGH | - |
-| CM-6 | Configuration Settings | ✅ IMPLEMENTED | Secure defaults for all settings | `src/config.rs` | `Default` impl | CRITICAL | - |
+| CM-6 | Configuration Settings | ✅ IMPLEMENTED | Secure defaults + security headers (HSTS, CSP, X-Frame-Options) | `src/config.rs`, `src/layers.rs:75-113` | `Default` impl, `test_validator_security_layers_headers_disabled` | CRITICAL | - |
 | CM-7 | Least Functionality | ✅ IMPLEMENTED | Minimal NixOS system profiles | `nix/profiles/minimal.nix` | VM tests | HIGH | - |
 | CM-7(5) | Authorized Software | ⚠️ PARTIAL | NixOS package allowlist | NixOS config | NixOS enforces | MEDIUM | - |
 | CM-8 | System Component Inventory | ✅ IMPLEMENTED | SBOM generation (Cargo.lock) | `src/supply_chain.rs` | `test_generate_sbom` | MEDIUM | 4 |
@@ -242,14 +242,14 @@
 |------------|-------------|--------|----------------|---------------|---------------|----------|-------|
 | SC-2 | Separation of Functions | 📋 PLANNED | Admin/user API separation | TBD | TBD | MEDIUM | 5 |
 | SC-4 | Information in Shared Resources | 🎯 FACILITATED | Memory zeroing utilities | `src/keys.rs` | `KeyMaterial` drop | HIGH | 1 |
-| SC-5 | Denial of Service Protection | ✅ IMPLEMENTED | Rate limiting + size limits | `src/layers.rs` | Rate limit tests | CRITICAL | - |
+| SC-5 | Denial of Service Protection | ✅ IMPLEMENTED | Rate limiting + request body size limits + request timeout | `src/layers.rs:56-73` | `test_validator_security_layers_rate_limit_disabled` | CRITICAL | - |
 | SC-6 | Resource Availability | 🎯 FACILITATED | Resource limit configuration | `nix/modules/resource-limits.nix` | NixOS tests | HIGH | - |
 | SC-7 | Boundary Protection | ✅ IMPLEMENTED | Network firewall rules | `nix/modules/vm-firewall.nix` | Firewall tests | HIGH | - |
 | SC-7(4) | External Telecom Services | 🎯 FACILITATED | VPN/tunnel configuration | TBD | TBD | MEDIUM | 5 |
 | SC-7(5) | Deny by Default | ✅ IMPLEMENTED | Default-deny firewall | `nix/modules/vm-firewall.nix` | Firewall tests | CRITICAL | - |
-| SC-8 | Transmission Confidentiality | ⚠️ PARTIAL | TLS enforcement (DB only) | `src/database.rs` | SSL tests | CRITICAL | 1 |
+| SC-8 | Transmission Confidentiality | ⚠️ PARTIAL | TLS enforcement (DB), HSTS header enforcement (HTTP) | `src/database.rs`, `src/layers.rs:80-82` | SSL tests, security header tests | CRITICAL | 1 |
 | SC-8(1) | Cryptographic Protection | 📋 PLANNED | TLS 1.3 with strong ciphers | TBD | TBD | CRITICAL | 1 |
-| SC-10 | Network Disconnect | ✅ IMPLEMENTED | Request timeout | `src/layers.rs` | Timeout tests | HIGH | - |
+| SC-10 | Network Disconnect | ✅ IMPLEMENTED | Session termination after idle/absolute timeout | `src/session.rs:47-80` | `test_session_*`, `test_idle_timeout_*` | HIGH | - |
 | SC-11 | Trusted Path | 🎯 FACILITATED | Secure connection indicators | TBD | TBD | MEDIUM | 5 |
 | SC-12 | Cryptographic Key Management | ✅ IMPLEMENTED | Key rotation utilities | `src/keys.rs` | `test_rotation_*` | HIGH | 4 |
 | SC-13 | Cryptographic Protection | ✅ IMPLEMENTED | Approved algorithms (constant-time) | `src/crypto.rs` | Crypto tests | HIGH | - |
@@ -315,10 +315,10 @@
 
 | Category | Count | Percentage |
 |----------|-------|------------|
-| ✅ Implemented | 52 | 47.7% |
+| ✅ Implemented | 53 | 48.6% |
 | ⚠️ Partial | 6 | 5.5% |
 | 🔨 In Progress | 0 | 0.0% |
-| 📋 Planned | 19 | 17.4% |
+| 📋 Planned | 18 | 16.5% |
 | 🎯 Facilitated | 32 | 29.4% |
 | **Total Barbican Can Help** | **109** | **100%** |
 
@@ -327,7 +327,7 @@
 | Family | Implemented | Partial | Planned | Facilitated | Total |
 |--------|-------------|---------|---------|-------------|-------|
 | AC | 6 | 1 | 2 | 3 | 12 |
-| AU | 5 | 1 | 3 | 5 | 14 |
+| AU | 6 | 1 | 3 | 4 | 14 |
 | CA | 2 | 0 | 0 | 2 | 4 |
 | CM | 5 | 2 | 0 | 4 | 11 |
 | CP | 1 | 1 | 0 | 4 | 6 |
@@ -341,7 +341,7 @@
 | SC | 11 | 2 | 5 | 5 | 23 |
 | SI | 9 | 0 | 0 | 2 | 11 |
 | SR | 4 | 0 | 0 | 3 | 7 |
-| **Total** | **52** | **6** | **16** | **51** | **135** |
+| **Total** | **53** | **6** | **16** | **50** | **135** |
 
 ### Implementation Priority Breakdown
 
@@ -357,10 +357,12 @@
 | Module | NIST Controls | Tests |
 |--------|---------------|-------|
 | `src/auth.rs` | AC-3, AC-6, IA-2, IA-2(1), IA-2(2), IA-2(6), IA-8 | 15+ |
+| `src/audit.rs` | AU-2, AU-3, AU-12, AU-16 | 2+ |
+| `src/layers.rs` | SC-5, SC-8, AC-4, CM-6 | 5+ (via compliance validation) |
 | `src/validation.rs` | SI-10 | 20+ |
 | `src/password.rs` | IA-5(1), IA-5(4) | 10+ |
 | `src/error.rs` | SI-11, IA-6 | 8+ |
-| `src/session.rs` | AC-11, AC-12, AU-14, SC-23 | 12+ |
+| `src/session.rs` | AC-11, AC-12, AU-14, SC-10, SC-23 | 12+ |
 | `src/login.rs` | AC-7 | 10+ |
 | `src/alerting.rs` | IR-4, IR-5, SI-4(2), SI-4(5) | 14+ |
 | `src/health.rs` | CA-7 | 12+ |
@@ -368,6 +370,7 @@
 | `src/supply_chain.rs` | SR-3, SR-4, SR-11, SI-2, SI-3, SI-7, CM-8, CM-10 | 15+ |
 | `src/testing.rs` | SA-11, CA-8 | 18+ |
 | `src/observability/` | AU-2, AU-3, AU-8, AU-12 | 10+ |
+| `src/compliance/` | Validates all controls | 15+ |
 
 ---
 
