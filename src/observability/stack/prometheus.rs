@@ -2,10 +2,10 @@
 //!
 //! Generates FedRAMP-compliant Prometheus configuration files.
 
-use std::path::Path;
 use std::fs;
+use std::path::Path;
 
-use super::{StackResult, GeneratedFile, FedRampConfig, FedRampProfile};
+use super::{ComplianceProfile, GeneratedFile, ObservabilityComplianceConfig, StackResult};
 
 /// Prometheus-specific configuration
 #[derive(Debug, Clone)]
@@ -52,10 +52,10 @@ pub struct ScrapeTarget {
 }
 
 impl PrometheusConfig {
-    /// Create default configuration for a FedRAMP profile
-    pub fn default_for_profile(profile: &FedRampProfile) -> Self {
+    /// Create default configuration for a compliance profile
+    pub fn default_for_profile(profile: ComplianceProfile) -> Self {
         match profile {
-            FedRampProfile::Low => Self {
+            ComplianceProfile::FedRampLow => Self {
                 http_port: 9090,
                 scrape_interval_secs: 30,
                 evaluation_interval_secs: 30,
@@ -66,7 +66,9 @@ impl PrometheusConfig {
                 basic_auth_password_hash: None,
                 additional_targets: Vec::new(),
             },
-            FedRampProfile::Moderate => Self {
+            ComplianceProfile::FedRampModerate
+            | ComplianceProfile::Soc2
+            | ComplianceProfile::Custom => Self {
                 http_port: 9090,
                 scrape_interval_secs: 15,
                 evaluation_interval_secs: 15,
@@ -77,7 +79,7 @@ impl PrometheusConfig {
                 basic_auth_password_hash: None,
                 additional_targets: Vec::new(),
             },
-            FedRampProfile::High => Self {
+            ComplianceProfile::FedRampHigh => Self {
                 http_port: 9090,
                 scrape_interval_secs: 10,
                 evaluation_interval_secs: 10,
@@ -116,7 +118,7 @@ impl PrometheusConfig {
 pub fn generate(
     output_dir: &Path,
     config: &PrometheusConfig,
-    fedramp: &FedRampConfig,
+    fedramp: &ObservabilityComplianceConfig,
     app_name: &str,
     app_port: u16,
 ) -> StackResult<Vec<GeneratedFile>> {
@@ -129,17 +131,17 @@ pub fn generate(
     fs::write(&config_path, prom_config)?;
     files.push(
         GeneratedFile::new(&config_path, "Prometheus server configuration")
-            .with_controls(vec!["SI-4", "AU-6"])
+            .with_controls(vec!["SI-4", "AU-6"]),
     );
 
     // Web configuration (TLS + auth)
-    if fedramp.tls_enabled || config.basic_auth_enabled {
+    if fedramp.tls_enabled() || config.basic_auth_enabled {
         let web_config = generate_web_config(config, fedramp);
         let web_path = prom_dir.join("web.yml");
         fs::write(&web_path, web_config)?;
         files.push(
             GeneratedFile::new(&web_path, "Prometheus web/TLS configuration")
-                .with_controls(vec!["SC-8", "IA-2"])
+                .with_controls(vec!["SC-8", "IA-2"]),
         );
     }
 
@@ -148,13 +150,13 @@ pub fn generate(
 
 fn generate_prometheus_config(
     config: &PrometheusConfig,
-    fedramp: &FedRampConfig,
+    fedramp: &ObservabilityComplianceConfig,
     app_name: &str,
     app_port: u16,
 ) -> String {
-    let scheme = if fedramp.tls_enabled { "https" } else { "http" };
+    let scheme = if fedramp.tls_enabled() { "https" } else { "http" };
 
-    let tls_config = if fedramp.tls_enabled {
+    let tls_config = if fedramp.tls_enabled() {
         format!(
             r#"
     tls_config:
@@ -259,12 +261,12 @@ rule_files:
 scrape_configs:
 {scrape_configs}
 "#,
-        profile = fedramp.profile.name(),
+        profile = fedramp.profile().name(),
         scrape_interval = config.scrape_interval_secs,
         eval_interval = config.evaluation_interval_secs,
         app_name = app_name,
         scheme = scheme,
-        tls_config = if fedramp.tls_enabled {
+        tls_config = if fedramp.tls_enabled() {
             format!(
                 r#"
       tls_config:
@@ -277,8 +279,8 @@ scrape_configs:
     )
 }
 
-fn generate_web_config(config: &PrometheusConfig, fedramp: &FedRampConfig) -> String {
-    let tls_section = if fedramp.tls_enabled {
+fn generate_web_config(config: &PrometheusConfig, fedramp: &ObservabilityComplianceConfig) -> String {
+    let tls_section = if fedramp.tls_enabled() {
         r#"tls_server_config:
   cert_file: /certs/prometheus/server.crt
   key_file: /certs/prometheus/server.key
@@ -316,7 +318,7 @@ fn generate_web_config(config: &PrometheusConfig, fedramp: &FedRampConfig) -> St
 # Controls: SC-8 (TLS), IA-2 (Authentication)
 
 {tls_section}{auth_section}"#,
-        profile = fedramp.profile.name(),
+        profile = fedramp.profile().name(),
         tls_section = tls_section,
         auth_section = auth_section,
     )
@@ -328,14 +330,14 @@ mod tests {
 
     #[test]
     fn test_default_config_moderate() {
-        let config = PrometheusConfig::default_for_profile(&FedRampProfile::Moderate);
+        let config = PrometheusConfig::default_for_profile(ComplianceProfile::FedRampModerate);
         assert!(config.basic_auth_enabled);
         assert_eq!(config.retention_days, 90);
     }
 
     #[test]
     fn test_config_with_target() {
-        let config = PrometheusConfig::default_for_profile(&FedRampProfile::Moderate)
+        let config = PrometheusConfig::default_for_profile(ComplianceProfile::FedRampModerate)
             .with_target(ScrapeTarget {
                 job_name: "custom".to_string(),
                 targets: vec!["custom-app:8080".to_string()],

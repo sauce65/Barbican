@@ -4,8 +4,8 @@
 
 use barbican::observability::stack::{
     ObservabilityStack,
-    FedRampProfile,
-    GrafanaSso,
+    ComplianceProfile,
+    // GrafanaSso,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -26,11 +26,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .app_name(&app_name)
         .app_port(3443)
         .output_dir(&output_dir)
-        .fedramp_profile(FedRampProfile::Moderate);
+        .compliance_profile(ComplianceProfile::FedRampModerate);
 
     // Optionally configure SSO
     // builder = builder.grafana(
-    //     GrafanaConfig::default_for_profile(&FedRampProfile::Moderate)
+    //     GrafanaConfig::default_for_profile(ComplianceProfile::FedRampModerate)
     //         .with_sso(GrafanaSso {
     //             client_id: "grafana".to_string(),
     //             client_secret_env: "GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET".to_string(),

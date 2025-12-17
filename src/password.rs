@@ -121,6 +121,37 @@ impl PasswordPolicy {
         }
     }
 
+    /// Create policy from compliance configuration
+    ///
+    /// Derives password requirements from the compliance profile. Higher
+    /// profiles require longer passwords and breach database checking.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use barbican::compliance::ComplianceConfig;
+    /// use barbican::password::PasswordPolicy;
+    ///
+    /// let compliance = barbican::compliance::config();
+    /// let policy = PasswordPolicy::from_compliance(compliance);
+    /// ```
+    pub fn from_compliance(config: &crate::compliance::ComplianceConfig) -> Self {
+        use crate::compliance::ComplianceProfile;
+
+        let is_low = matches!(config.profile, ComplianceProfile::FedRampLow);
+
+        Self {
+            min_length: config.password_min_length,
+            max_length: 128,
+            check_common_passwords: !is_low,
+            check_breach_database: config.password_check_breach_db,
+            disallow_username_in_password: true,
+            disallow_email_in_password: true,
+            blocked_passwords: HashSet::new(),
+            disallow_all_numeric: true,
+        }
+    }
+
     /// Validate a password against the policy
     pub fn validate(&self, password: &str) -> Result<(), PasswordError> {
         self.validate_with_context(password, None, None)

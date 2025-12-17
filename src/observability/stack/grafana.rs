@@ -2,10 +2,10 @@
 //!
 //! Generates FedRAMP-compliant Grafana configuration files.
 
-use std::path::Path;
 use std::fs;
+use std::path::Path;
 
-use super::{StackResult, GeneratedFile, FedRampConfig, FedRampProfile};
+use super::{ComplianceProfile, GeneratedFile, ObservabilityComplianceConfig, StackResult};
 
 /// Grafana-specific configuration
 #[derive(Debug, Clone)]
@@ -61,10 +61,10 @@ pub struct GrafanaSso {
 }
 
 impl GrafanaConfig {
-    /// Create default configuration for a FedRAMP profile
-    pub fn default_for_profile(profile: &FedRampProfile) -> Self {
+    /// Create default configuration for a compliance profile
+    pub fn default_for_profile(profile: ComplianceProfile) -> Self {
         match profile {
-            FedRampProfile::Low => Self {
+            ComplianceProfile::FedRampLow => Self {
                 http_port: 3000,
                 root_url: "http://localhost:3000".to_string(),
                 admin_user: "admin".to_string(),
@@ -73,7 +73,10 @@ impl GrafanaConfig {
                 allowed_origins: Vec::new(),
                 alerting_enabled: true,
             },
-            FedRampProfile::Moderate | FedRampProfile::High => Self {
+            ComplianceProfile::FedRampModerate
+            | ComplianceProfile::FedRampHigh
+            | ComplianceProfile::Soc2
+            | ComplianceProfile::Custom => Self {
                 http_port: 3000,
                 root_url: "https://grafana.localhost".to_string(),
                 admin_user: "admin".to_string(),
@@ -108,7 +111,7 @@ impl GrafanaConfig {
 pub fn generate(
     output_dir: &Path,
     config: &GrafanaConfig,
-    fedramp: &FedRampConfig,
+    fedramp: &ObservabilityComplianceConfig,
     app_name: &str,
 ) -> StackResult<Vec<GeneratedFile>> {
     let mut files = Vec::new();
@@ -153,10 +156,10 @@ pub fn generate(
     Ok(files)
 }
 
-fn generate_grafana_ini(config: &GrafanaConfig, fedramp: &FedRampConfig) -> String {
-    let protocol = if fedramp.tls_enabled { "https" } else { "http" };
+fn generate_grafana_ini(config: &GrafanaConfig, fedramp: &ObservabilityComplianceConfig) -> String {
+    let protocol = if fedramp.tls_enabled() { "https" } else { "http" };
 
-    let tls_section = if fedramp.tls_enabled {
+    let tls_section = if fedramp.tls_enabled() {
         r#"
 cert_file = /certs/grafana/server.crt
 cert_key = /certs/grafana/server.key"#
@@ -199,8 +202,8 @@ allow_assign_grafana_admin = false
         String::new()
     };
 
-    let session_timeout_mins = fedramp.session_timeout.as_secs() / 60;
-    let idle_timeout_mins = fedramp.idle_timeout.as_secs() / 60;
+    let session_timeout_mins = fedramp.session_timeout().as_secs() / 60;
+    let idle_timeout_mins = fedramp.idle_timeout().as_secs() / 60;
 
     format!(
         r#"# Grafana Configuration - FedRAMP {profile} Profile
@@ -282,14 +285,14 @@ basic_auth_password = ${{GF_METRICS_BASIC_AUTH_PASSWORD}}
 reporting_enabled = false
 check_for_updates = false
 "#,
-        profile = fedramp.profile.name(),
+        profile = fedramp.profile().name(),
         protocol = protocol,
         http_port = config.http_port,
         root_url = config.root_url,
         tls_section = tls_section,
         admin_user = config.admin_user,
-        cookie_secure = fedramp.tls_enabled,
-        hsts = fedramp.tls_enabled,
+        cookie_secure = fedramp.tls_enabled(),
+        hsts = fedramp.tls_enabled(),
         disable_login_form = config.sso.is_some(),
         oauth_auto_login = config.sso.as_ref().map(|s| s.auto_login).unwrap_or(false),
         anonymous_enabled = !config.disable_anonymous,
@@ -300,10 +303,10 @@ check_for_updates = false
     )
 }
 
-fn generate_datasources(fedramp: &FedRampConfig, _app_name: &str) -> String {
-    let scheme = if fedramp.tls_enabled { "https" } else { "http" };
+fn generate_datasources(fedramp: &ObservabilityComplianceConfig, _app_name: &str) -> String {
+    let scheme = if fedramp.tls_enabled() { "https" } else { "http" };
 
-    let tls_config = if fedramp.tls_enabled {
+    let tls_config = if fedramp.tls_enabled() {
         r#"
       tlsAuth: true
       tlsAuthWithCACert: true
@@ -314,7 +317,7 @@ fn generate_datasources(fedramp: &FedRampConfig, _app_name: &str) -> String {
         ""
     };
 
-    let loki_header = if fedramp.tenant_isolation {
+    let loki_header = if fedramp.tenant_isolation() {
         format!(
             r#"
       httpHeaderName1: X-Scope-OrgID
@@ -364,7 +367,7 @@ datasources:
     jsonData:
       implementation: prometheus{tls_config}
 "#,
-        profile = fedramp.profile.name(),
+        profile = fedramp.profile().name(),
         scheme = scheme,
         tls_config = tls_config,
         loki_header = loki_header,
@@ -542,21 +545,25 @@ mod tests {
 
     #[test]
     fn test_default_config_moderate() {
-        let config = GrafanaConfig::default_for_profile(&FedRampProfile::Moderate);
+        let config = GrafanaConfig::default_for_profile(ComplianceProfile::FedRampModerate);
         assert!(config.disable_anonymous);
         assert!(config.sso.is_none());
     }
 
     #[test]
     fn test_config_with_sso() {
-        let config = GrafanaConfig::default_for_profile(&FedRampProfile::Moderate)
+        let config = GrafanaConfig::default_for_profile(ComplianceProfile::FedRampModerate)
             .with_sso(GrafanaSso {
                 client_id: "grafana".to_string(),
                 client_secret_env: "GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET".to_string(),
                 auth_url: "https://auth.example.com/authorize".to_string(),
                 token_url: "https://auth.example.com/token".to_string(),
                 api_url: "https://auth.example.com/userinfo".to_string(),
-                scopes: vec!["openid".to_string(), "email".to_string(), "profile".to_string()],
+                scopes: vec![
+                    "openid".to_string(),
+                    "email".to_string(),
+                    "profile".to_string(),
+                ],
                 role_attribute_path: None,
                 auto_login: true,
             });

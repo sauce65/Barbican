@@ -225,6 +225,57 @@ impl DatabaseConfig {
     pub fn is_production_safe(&self) -> bool {
         self.requires_ssl() && self.max_connections <= 20
     }
+
+    /// Validate configuration against compliance requirements
+    ///
+    /// Checks that database configuration meets the requirements of the
+    /// selected compliance profile.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - TLS is required but SSL mode is Disable or Prefer
+    /// - mTLS is required but SSL mode is not VerifyFull
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use barbican::{DatabaseConfig, compliance::ComplianceConfig};
+    ///
+    /// let db_config = DatabaseConfig::from_env();
+    /// let compliance = barbican::compliance::config();
+    /// db_config.validate_compliance(compliance)?;
+    /// ```
+    pub fn validate_compliance(
+        &self,
+        config: &crate::compliance::ComplianceConfig,
+    ) -> Result<(), crate::compliance::ComplianceError> {
+        use crate::compliance::ComplianceError;
+
+        // SC-8: Transmission confidentiality
+        if config.require_tls && !self.requires_ssl() {
+            return Err(ComplianceError::Sc8Violation(
+                "TLS required but database SSL mode is Disable or Prefer".into(),
+            ));
+        }
+
+        // SC-8(1): mTLS requirement
+        if config.require_mtls && !matches!(self.ssl_mode, SslMode::VerifyFull) {
+            return Err(ComplianceError::Sc8Violation(
+                "mTLS required but database SSL mode is not VerifyFull".into(),
+            ));
+        }
+
+        // SC-28: Encryption at rest - we can't verify this from config,
+        // but we log a warning in health checks
+        if config.require_encryption_at_rest {
+            tracing::debug!(
+                "SC-28: Encryption at rest required - verify PostgreSQL TDE or disk encryption"
+            );
+        }
+
+        Ok(())
+    }
 }
 
 /// Builder for DatabaseConfig

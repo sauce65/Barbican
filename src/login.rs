@@ -152,6 +152,42 @@ impl LockoutPolicy {
         }
     }
 
+    /// Create policy from compliance configuration
+    ///
+    /// Derives lockout parameters from the compliance profile. Higher
+    /// profiles have stricter lockout policies.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use barbican::compliance::ComplianceConfig;
+    /// use barbican::login::LockoutPolicy;
+    ///
+    /// let compliance = barbican::compliance::config();
+    /// let policy = LockoutPolicy::from_compliance(compliance);
+    /// ```
+    pub fn from_compliance(config: &crate::compliance::ComplianceConfig) -> Self {
+        use crate::compliance::ComplianceProfile;
+
+        let is_strict = !matches!(config.profile, ComplianceProfile::FedRampLow);
+
+        Self {
+            max_attempts: config.max_login_attempts,
+            attempt_window: if is_strict {
+                Duration::from_secs(60 * 60) // 1 hour for stricter profiles
+            } else {
+                Duration::from_secs(30 * 60) // 30 minutes for low
+            },
+            lockout_duration: config.lockout_duration,
+            progressive_lockout: true,
+            max_lockout_duration: Duration::from_secs(24 * 60 * 60),
+            lockout_multiplier: if is_strict { 3.0 } else { 2.0 },
+            track_by_ip: true,
+            max_ip_attempts: if is_strict { 10 } else { 20 },
+            ip_lockout_duration: config.lockout_duration * 2,
+        }
+    }
+
     /// Calculate lockout duration based on lockout count (for progressive lockout)
     pub fn calculate_lockout_duration(&self, lockout_count: u32) -> Duration {
         if !self.progressive_lockout || lockout_count == 0 {

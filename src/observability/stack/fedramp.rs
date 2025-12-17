@@ -1,136 +1,27 @@
-//! FedRAMP Compliance Configuration
+//! FedRAMP Compliance for Observability Stack
 //!
-//! Defines FedRAMP impact levels and their corresponding security requirements
-//! for observability infrastructure.
+//! Extends core compliance configuration with observability-specific settings.
+//! This module provides the bridge between the application-wide `ComplianceConfig`
+//! and observability infrastructure requirements.
 
-use std::path::Path;
 use std::fs;
+use std::path::Path;
 use std::time::Duration;
 
-use super::{StackResult, GeneratedFile, ValidationReport, ControlStatus, ObservabilityStack};
+use crate::compliance::{ComplianceConfig, ComplianceProfile};
 
-/// FedRAMP impact level profiles
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum FedRampProfile {
-    /// Low impact - basic security controls
-    Low,
-    /// Moderate impact - enhanced security controls (most common)
-    #[default]
-    Moderate,
-    /// High impact - maximum security controls
-    High,
-}
+use super::{ControlStatus, GeneratedFile, ObservabilityStack, StackResult, ValidationReport};
 
-impl FedRampProfile {
-    /// Get the minimum log retention period for this profile
-    pub fn min_retention_days(&self) -> u32 {
-        match self {
-            FedRampProfile::Low => 30,
-            FedRampProfile::Moderate => 90,
-            FedRampProfile::High => 365,
-        }
-    }
-
-    /// Whether TLS is required for all communications
-    pub fn requires_tls(&self) -> bool {
-        true // All FedRAMP levels require TLS
-    }
-
-    /// Whether mTLS is required for service-to-service communication
-    pub fn requires_mtls(&self) -> bool {
-        match self {
-            FedRampProfile::Low => false,
-            FedRampProfile::Moderate => false, // Recommended but not required
-            FedRampProfile::High => true,
-        }
-    }
-
-    /// Whether encryption at rest is required
-    pub fn requires_encryption_at_rest(&self) -> bool {
-        match self {
-            FedRampProfile::Low => false,
-            FedRampProfile::Moderate => true,
-            FedRampProfile::High => true,
-        }
-    }
-
-    /// Whether multi-tenant isolation is required
-    pub fn requires_tenant_isolation(&self) -> bool {
-        match self {
-            FedRampProfile::Low => false,
-            FedRampProfile::Moderate => true,
-            FedRampProfile::High => true,
-        }
-    }
-
-    /// Whether MFA is required for admin access
-    pub fn requires_mfa(&self) -> bool {
-        match self {
-            FedRampProfile::Low => false,
-            FedRampProfile::Moderate => true,
-            FedRampProfile::High => true,
-        }
-    }
-
-    /// Get session timeout duration
-    pub fn session_timeout(&self) -> Duration {
-        match self {
-            FedRampProfile::Low => Duration::from_secs(30 * 60),      // 30 minutes
-            FedRampProfile::Moderate => Duration::from_secs(15 * 60), // 15 minutes
-            FedRampProfile::High => Duration::from_secs(10 * 60),     // 10 minutes
-        }
-    }
-
-    /// Get idle timeout duration
-    pub fn idle_timeout(&self) -> Duration {
-        match self {
-            FedRampProfile::Low => Duration::from_secs(15 * 60),     // 15 minutes
-            FedRampProfile::Moderate => Duration::from_secs(10 * 60), // 10 minutes
-            FedRampProfile::High => Duration::from_secs(5 * 60),      // 5 minutes
-        }
-    }
-
-    /// Profile name as string
-    pub fn name(&self) -> &'static str {
-        match self {
-            FedRampProfile::Low => "Low",
-            FedRampProfile::Moderate => "Moderate",
-            FedRampProfile::High => "High",
-        }
-    }
-}
-
-/// FedRAMP compliance configuration derived from profile
+/// Observability-specific configuration extending ComplianceConfig
+///
+/// Wraps the core `ComplianceConfig` and adds observability-specific settings
+/// like tenant identification, CA certificates, and backup configuration.
 #[derive(Debug, Clone)]
-pub struct FedRampConfig {
-    /// The impact level profile
-    pub profile: FedRampProfile,
+pub struct ObservabilityComplianceConfig {
+    /// Base compliance configuration (from crate::compliance)
+    base: ComplianceConfig,
 
-    /// Log retention period in days
-    pub retention_days: u32,
-
-    /// Enable TLS for all communications
-    pub tls_enabled: bool,
-
-    /// Enable mTLS for service-to-service
-    pub mtls_enabled: bool,
-
-    /// Enable encryption at rest
-    pub encryption_at_rest: bool,
-
-    /// Enable multi-tenant isolation
-    pub tenant_isolation: bool,
-
-    /// Require MFA for admin access
-    pub require_mfa: bool,
-
-    /// Session timeout
-    pub session_timeout: Duration,
-
-    /// Idle timeout
-    pub idle_timeout: Duration,
-
-    /// Organization/tenant identifier
+    /// Organization/tenant identifier (for Loki multi-tenancy)
     pub tenant_id: String,
 
     /// CA certificate path (for TLS verification)
@@ -143,24 +34,28 @@ pub struct FedRampConfig {
     pub backup_retention_days: u32,
 }
 
-impl FedRampConfig {
-    /// Create configuration from a FedRAMP profile
-    pub fn from_profile(profile: &FedRampProfile) -> Self {
+impl ObservabilityComplianceConfig {
+    /// Create from the global compliance configuration
+    pub fn from_global() -> Self {
+        Self::from_compliance(crate::compliance::config().clone())
+    }
+
+    /// Create from explicit compliance configuration
+    pub fn from_compliance(config: ComplianceConfig) -> Self {
+        let backup_encryption = config.require_encryption_at_rest;
+        let backup_retention_days = config.min_retention_days;
         Self {
-            profile: *profile,
-            retention_days: profile.min_retention_days(),
-            tls_enabled: profile.requires_tls(),
-            mtls_enabled: profile.requires_mtls(),
-            encryption_at_rest: profile.requires_encryption_at_rest(),
-            tenant_isolation: profile.requires_tenant_isolation(),
-            require_mfa: profile.requires_mfa(),
-            session_timeout: profile.session_timeout(),
-            idle_timeout: profile.idle_timeout(),
+            base: config,
             tenant_id: "default".to_string(),
             ca_cert_path: None,
-            backup_encryption: profile.requires_encryption_at_rest(),
-            backup_retention_days: profile.min_retention_days(),
+            backup_encryption,
+            backup_retention_days,
         }
+    }
+
+    /// Create from a compliance profile
+    pub fn from_profile(profile: ComplianceProfile) -> Self {
+        Self::from_compliance(ComplianceConfig::from_profile(profile))
     }
 
     /// Set the tenant identifier
@@ -177,9 +72,61 @@ impl FedRampConfig {
 
     /// Override retention days (must meet minimum for profile)
     pub fn with_retention_days(mut self, days: u32) -> Self {
-        let min = self.profile.min_retention_days();
-        self.retention_days = days.max(min);
+        let min = self.base.min_retention_days;
+        self.backup_retention_days = days.max(min);
         self
+    }
+
+    // Convenience accessors that delegate to base compliance config
+
+    /// Get the active compliance profile
+    pub fn profile(&self) -> ComplianceProfile {
+        self.base.profile
+    }
+
+    /// Get log retention days
+    pub fn retention_days(&self) -> u32 {
+        self.base.min_retention_days
+    }
+
+    /// Whether TLS is required
+    pub fn tls_enabled(&self) -> bool {
+        self.base.require_tls
+    }
+
+    /// Whether mTLS is required
+    pub fn mtls_enabled(&self) -> bool {
+        self.base.require_mtls
+    }
+
+    /// Whether encryption at rest is required
+    pub fn encryption_at_rest(&self) -> bool {
+        self.base.require_encryption_at_rest
+    }
+
+    /// Whether tenant isolation is required
+    pub fn tenant_isolation(&self) -> bool {
+        self.base.require_tenant_isolation
+    }
+
+    /// Whether MFA is required
+    pub fn require_mfa(&self) -> bool {
+        self.base.require_mfa
+    }
+
+    /// Get session timeout
+    pub fn session_timeout(&self) -> Duration {
+        self.base.session_max_lifetime
+    }
+
+    /// Get idle timeout
+    pub fn idle_timeout(&self) -> Duration {
+        self.base.session_idle_timeout
+    }
+
+    /// Check if this is a low-security profile (for conditional logic)
+    pub fn is_low_security(&self) -> bool {
+        matches!(self.base.profile, ComplianceProfile::FedRampLow)
     }
 }
 
@@ -361,9 +308,9 @@ pub fn validate_stack(stack: &ObservabilityStack) -> StackResult<ValidationRepor
     let mut report = ValidationReport::new();
 
     // AU-9: Protection of Audit Information
-    if stack.fedramp.tenant_isolation {
+    if stack.fedramp.tenant_isolation() {
         report.add_control(ControlStatus::satisfied("AU-9", "Protection of Audit Information"));
-    } else if stack.fedramp.profile != FedRampProfile::Low {
+    } else if !stack.fedramp.is_low_security() {
         report.add_control(ControlStatus::failed(
             "AU-9",
             "Protection of Audit Information",
@@ -372,8 +319,9 @@ pub fn validate_stack(stack: &ObservabilityStack) -> StackResult<ValidationRepor
     }
 
     // AU-11: Audit Record Retention
-    let min_retention = stack.fedramp.profile.min_retention_days();
-    if stack.fedramp.retention_days >= min_retention {
+    let min_retention = stack.fedramp.retention_days();
+    let configured_retention = stack.fedramp.backup_retention_days;
+    if configured_retention >= min_retention {
         report.add_control(ControlStatus::satisfied("AU-11", "Audit Record Retention"));
     } else {
         report.add_control(ControlStatus::failed(
@@ -381,15 +329,15 @@ pub fn validate_stack(stack: &ObservabilityStack) -> StackResult<ValidationRepor
             "Audit Record Retention",
             format!(
                 "Retention {} days is below minimum {} days for {} profile",
-                stack.fedramp.retention_days,
+                configured_retention,
                 min_retention,
-                stack.fedramp.profile.name()
+                stack.fedramp.profile().name()
             ),
         ));
     }
 
     // SC-8: Transmission Confidentiality and Integrity
-    if stack.fedramp.tls_enabled {
+    if stack.fedramp.tls_enabled() {
         report.add_control(ControlStatus::satisfied("SC-8", "Transmission Confidentiality"));
     } else {
         report.add_control(ControlStatus::failed(
@@ -400,7 +348,7 @@ pub fn validate_stack(stack: &ObservabilityStack) -> StackResult<ValidationRepor
     }
 
     // SC-28: Protection of Information at Rest
-    if stack.fedramp.encryption_at_rest || stack.fedramp.profile == FedRampProfile::Low {
+    if stack.fedramp.encryption_at_rest() || stack.fedramp.is_low_security() {
         report.add_control(ControlStatus::satisfied("SC-28", "Protection at Rest"));
     } else {
         report.add_control(ControlStatus::failed(
@@ -411,7 +359,7 @@ pub fn validate_stack(stack: &ObservabilityStack) -> StackResult<ValidationRepor
     }
 
     // IA-2(1): Multi-Factor Authentication
-    if stack.fedramp.require_mfa || stack.fedramp.profile == FedRampProfile::Low {
+    if stack.fedramp.require_mfa() || stack.fedramp.is_low_security() {
         report.add_control(ControlStatus::satisfied("IA-2(1)", "Multi-Factor Authentication"));
     } else {
         report.add_control(ControlStatus::failed(
@@ -422,7 +370,9 @@ pub fn validate_stack(stack: &ObservabilityStack) -> StackResult<ValidationRepor
     }
 
     // mTLS for High profile
-    if stack.fedramp.profile == FedRampProfile::High && !stack.fedramp.mtls_enabled {
+    if matches!(stack.fedramp.profile(), ComplianceProfile::FedRampHigh)
+        && !stack.fedramp.mtls_enabled()
+    {
         report.add_control(ControlStatus::failed(
             "SC-8(1)",
             "Cryptographic Protection",
@@ -431,18 +381,19 @@ pub fn validate_stack(stack: &ObservabilityStack) -> StackResult<ValidationRepor
     }
 
     // Add controls that are always satisfied by the generated configs
-    for control in CONTROLS.iter().filter(|c| {
-        !["AU-9", "AU-11", "SC-8", "SC-28", "IA-2(1)"].contains(&c.id)
-    }) {
+    for control in CONTROLS
+        .iter()
+        .filter(|c| !["AU-9", "AU-11", "SC-8", "SC-28", "IA-2(1)"].contains(&c.id))
+    {
         report.add_control(ControlStatus::satisfied(control.id, control.name));
     }
 
     // Warnings for best practices
-    if stack.fedramp.ca_cert_path.is_none() && stack.fedramp.tls_enabled {
+    if stack.fedramp.ca_cert_path.is_none() && stack.fedramp.tls_enabled() {
         report.add_warning("No CA certificate path configured; TLS verification may be incomplete");
     }
 
-    if !stack.fedramp.backup_encryption && stack.fedramp.profile != FedRampProfile::Low {
+    if !stack.fedramp.backup_encryption && !stack.fedramp.is_low_security() {
         report.add_warning("Backup encryption recommended for Moderate/High profiles");
     }
 
@@ -452,7 +403,7 @@ pub fn validate_stack(stack: &ObservabilityStack) -> StackResult<ValidationRepor
 /// Generate FedRAMP compliance documentation
 pub fn generate_docs(
     output_dir: &Path,
-    config: &FedRampConfig,
+    config: &ObservabilityComplianceConfig,
     app_name: &str,
 ) -> StackResult<Vec<GeneratedFile>> {
     let mut files = Vec::new();
@@ -468,7 +419,7 @@ pub fn generate_docs(
     );
 
     // Generate SSO setup guide if MFA is required
-    if config.require_mfa {
+    if config.require_mfa() {
         let sso_guide = generate_sso_guide(app_name);
         let sso_path = docs_dir.join("SSO_SETUP.md");
         fs::write(&sso_path, sso_guide)?;
@@ -490,7 +441,7 @@ pub fn generate_docs(
     Ok(files)
 }
 
-fn generate_control_matrix(config: &FedRampConfig, app_name: &str) -> String {
+fn generate_control_matrix(config: &ObservabilityComplianceConfig, app_name: &str) -> String {
     let mut doc = format!(
         r#"# FedRAMP Control Matrix - {} Observability Stack
 
@@ -503,8 +454,8 @@ fn generate_control_matrix(config: &FedRampConfig, app_name: &str) -> String {
 |------------|--------------|--------|----------------|
 "#,
         app_name,
-        config.profile.name(),
-        config.profile.name()
+        config.profile().name(),
+        config.profile().name()
     );
 
     for control in CONTROLS {
@@ -537,19 +488,19 @@ fn generate_control_matrix(config: &FedRampConfig, app_name: &str) -> String {
 
 This observability stack is configured for FedRAMP {} compliance.
 "#,
-        config.retention_days,
-        if config.tenant_isolation { "Enabled" } else { "Disabled" },
+        config.retention_days(),
+        if config.tenant_isolation() { "Enabled" } else { "Disabled" },
         if config.backup_encryption { "Enabled" } else { "Disabled" },
-        if config.tls_enabled { "Enabled" } else { "Disabled" },
-        if config.mtls_enabled { "Enabled" } else { "Disabled" },
-        if config.encryption_at_rest { "Enabled" } else { "Disabled" },
-        if config.require_mfa { "Enabled" } else { "Disabled" },
-        config.session_timeout.as_secs() / 60,
-        config.idle_timeout.as_secs() / 60,
-        config.profile.name()
+        if config.tls_enabled() { "Enabled" } else { "Disabled" },
+        if config.mtls_enabled() { "Enabled" } else { "Disabled" },
+        if config.encryption_at_rest() { "Enabled" } else { "Disabled" },
+        if config.require_mfa() { "Enabled" } else { "Disabled" },
+        config.session_timeout().as_secs() / 60,
+        config.idle_timeout().as_secs() / 60,
+        config.profile().name()
     ));
 
-    if config.profile == FedRampProfile::High {
+    if matches!(config.profile(), ComplianceProfile::FedRampHigh) {
         doc.push_str(r#"
 ### High Impact Additional Requirements
 
@@ -621,7 +572,7 @@ This satisfies FedRAMP IA-2(1) requirements.
     )
 }
 
-fn generate_operations_runbook(config: &FedRampConfig, app_name: &str) -> String {
+fn generate_operations_runbook(config: &ObservabilityComplianceConfig, app_name: &str) -> String {
     format!(
         r#"# Operations Runbook - {} Observability Stack
 
@@ -712,9 +663,9 @@ curl -G -s "https://localhost:3100/loki/api/v1/query_range" \
         app_name,
         config.backup_retention_days,
         app_name,
-        config.retention_days,
+        config.retention_days(),
         app_name,
-        config.retention_days + 1
+        config.retention_days() + 1
     )
 }
 
@@ -724,34 +675,35 @@ mod tests {
 
     #[test]
     fn test_profile_retention() {
-        assert_eq!(FedRampProfile::Low.min_retention_days(), 30);
-        assert_eq!(FedRampProfile::Moderate.min_retention_days(), 90);
-        assert_eq!(FedRampProfile::High.min_retention_days(), 365);
+        // Tests now use ComplianceProfile from crate::compliance
+        assert_eq!(ComplianceProfile::FedRampLow.min_retention_days(), 30);
+        assert_eq!(ComplianceProfile::FedRampModerate.min_retention_days(), 90);
+        assert_eq!(ComplianceProfile::FedRampHigh.min_retention_days(), 365);
     }
 
     #[test]
     fn test_profile_requirements() {
-        assert!(!FedRampProfile::Low.requires_mtls());
-        assert!(!FedRampProfile::Moderate.requires_mtls());
-        assert!(FedRampProfile::High.requires_mtls());
+        assert!(!ComplianceProfile::FedRampLow.requires_mtls());
+        assert!(!ComplianceProfile::FedRampModerate.requires_mtls());
+        assert!(ComplianceProfile::FedRampHigh.requires_mtls());
 
-        assert!(FedRampProfile::Moderate.requires_encryption_at_rest());
-        assert!(FedRampProfile::High.requires_encryption_at_rest());
+        assert!(ComplianceProfile::FedRampModerate.requires_encryption_at_rest());
+        assert!(ComplianceProfile::FedRampHigh.requires_encryption_at_rest());
     }
 
     #[test]
     fn test_config_from_profile() {
-        let config = FedRampConfig::from_profile(&FedRampProfile::Moderate);
-        assert_eq!(config.retention_days, 90);
-        assert!(config.tls_enabled);
-        assert!(config.tenant_isolation);
-        assert!(config.require_mfa);
+        let config = ObservabilityComplianceConfig::from_profile(ComplianceProfile::FedRampModerate);
+        assert_eq!(config.retention_days(), 90);
+        assert!(config.tls_enabled());
+        assert!(config.tenant_isolation());
+        assert!(config.require_mfa());
     }
 
     #[test]
     fn test_config_retention_minimum() {
-        let config = FedRampConfig::from_profile(&FedRampProfile::Moderate)
+        let config = ObservabilityComplianceConfig::from_profile(ComplianceProfile::FedRampModerate)
             .with_retention_days(30); // Try to set below minimum
-        assert_eq!(config.retention_days, 90); // Should be clamped to minimum
+        assert_eq!(config.backup_retention_days, 90); // Should be clamped to minimum
     }
 }

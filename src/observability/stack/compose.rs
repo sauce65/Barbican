@@ -3,10 +3,10 @@
 //! Generates FedRAMP-compliant Docker Compose configurations for the
 //! observability stack.
 
-use std::path::Path;
 use std::fs;
+use std::path::Path;
 
-use super::{StackResult, GeneratedFile, FedRampConfig, FedRampProfile};
+use super::{ComplianceProfile, GeneratedFile, ObservabilityComplianceConfig, StackResult};
 
 /// Docker Compose-specific configuration
 #[derive(Debug, Clone, Default)]
@@ -105,7 +105,7 @@ impl ComposeConfig {
 pub fn generate(
     output_dir: &Path,
     config: &ComposeConfig,
-    fedramp: &FedRampConfig,
+    fedramp: &ObservabilityComplianceConfig,
     app_name: &str,
 ) -> StackResult<Vec<GeneratedFile>> {
     let mut files = Vec::new();
@@ -131,7 +131,7 @@ pub fn generate(
     Ok(files)
 }
 
-fn generate_compose(config: &ComposeConfig, fedramp: &FedRampConfig, app_name: &str) -> String {
+fn generate_compose(config: &ComposeConfig, fedramp: &ObservabilityComplianceConfig, app_name: &str) -> String {
     let network_name = if config.network_name.is_empty() {
         format!("{}-observability", app_name)
     } else {
@@ -152,13 +152,13 @@ fn generate_compose(config: &ComposeConfig, fedramp: &FedRampConfig, app_name: &
     cap_drop:
       - ALL"#;
 
-    let read_only = if fedramp.profile != FedRampProfile::Low {
+    let read_only = if !fedramp.is_low_security() {
         "\n    read_only: true"
     } else {
         ""
     };
 
-    let loki_tmpfs = if fedramp.profile != FedRampProfile::Low {
+    let loki_tmpfs = if !fedramp.is_low_security() {
         r#"
     tmpfs:
       - /tmp:size=100M,mode=1777"#
@@ -184,10 +184,10 @@ fn generate_compose(config: &ComposeConfig, fedramp: &FedRampConfig, app_name: &
         )
     };
 
-    let healthcheck_interval = match fedramp.profile {
-        FedRampProfile::Low => "30s",
-        FedRampProfile::Moderate => "15s",
-        FedRampProfile::High => "10s",
+    let healthcheck_interval = match fedramp.profile() {
+        ComplianceProfile::FedRampLow => "30s",
+        ComplianceProfile::FedRampHigh => "10s",
+        _ => "15s",
     };
 
     format!(
@@ -340,7 +340,7 @@ volumes:
 {network_config}
 "#,
         app_name = app_name,
-        profile = fedramp.profile.name(),
+        profile = fedramp.profile().name(),
         restart = config.restart_policy.as_str(),
         security_opts = security_opts,
         cap_drop = cap_drop,
@@ -349,11 +349,11 @@ volumes:
         volume_prefix = volume_prefix,
         network_name = network_name,
         healthcheck_interval = healthcheck_interval,
-        retention = fedramp.retention_days,
-        retention_size = match fedramp.profile {
-            FedRampProfile::Low => 10,
-            FedRampProfile::Moderate => 50,
-            FedRampProfile::High => 200,
+        retention = fedramp.retention_days(),
+        retention_size = match fedramp.profile() {
+            ComplianceProfile::FedRampLow => 10,
+            ComplianceProfile::FedRampHigh => 200,
+            _ => 50,
         },
         loki_memory = config.resource_limits.loki_memory,
         prometheus_memory = config.resource_limits.prometheus_memory,
@@ -363,7 +363,7 @@ volumes:
     )
 }
 
-fn generate_env_template(fedramp: &FedRampConfig, app_name: &str) -> String {
+fn generate_env_template(fedramp: &ObservabilityComplianceConfig, app_name: &str) -> String {
     format!(
         r#"# Environment Variables - {app_name} Observability Stack
 # FedRAMP {profile} Profile
@@ -402,7 +402,7 @@ GRAFANA_OAUTH_CLIENT_SECRET=
 LOKI_TENANT_ID={tenant_id}
 "#,
         app_name = app_name,
-        profile = fedramp.profile.name(),
+        profile = fedramp.profile().name(),
         tenant_id = fedramp.tenant_id,
     )
 }

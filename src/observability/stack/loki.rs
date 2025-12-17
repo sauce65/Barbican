@@ -2,10 +2,10 @@
 //!
 //! Generates FedRAMP-compliant Loki configuration files.
 
-use std::path::Path;
 use std::fs;
+use std::path::Path;
 
-use super::{StackResult, GeneratedFile, FedRampConfig, FedRampProfile};
+use super::{ComplianceProfile, GeneratedFile, ObservabilityComplianceConfig, StackResult};
 
 /// Loki-specific configuration
 #[derive(Debug, Clone)]
@@ -45,10 +45,10 @@ pub struct LokiConfig {
 }
 
 impl LokiConfig {
-    /// Create default configuration for a FedRAMP profile
-    pub fn default_for_profile(profile: &FedRampProfile) -> Self {
+    /// Create default configuration for a compliance profile
+    pub fn default_for_profile(profile: ComplianceProfile) -> Self {
         match profile {
-            FedRampProfile::Low => Self {
+            ComplianceProfile::FedRampLow => Self {
                 http_port: 3100,
                 grpc_port: 9096,
                 storage_path: "/loki/data".to_string(),
@@ -61,7 +61,7 @@ impl LokiConfig {
                 reject_old_samples_max_age_hours: 168, // 7 days
                 structured_metadata_enabled: true,
             },
-            FedRampProfile::Moderate => Self {
+            ComplianceProfile::FedRampModerate | ComplianceProfile::Soc2 | ComplianceProfile::Custom => Self {
                 http_port: 3100,
                 grpc_port: 9096,
                 storage_path: "/loki/data".to_string(),
@@ -74,7 +74,7 @@ impl LokiConfig {
                 reject_old_samples_max_age_hours: 168,
                 structured_metadata_enabled: true,
             },
-            FedRampProfile::High => Self {
+            ComplianceProfile::FedRampHigh => Self {
                 http_port: 3100,
                 grpc_port: 9096,
                 storage_path: "/loki/data".to_string(),
@@ -113,7 +113,7 @@ impl LokiConfig {
 pub fn generate(
     output_dir: &Path,
     config: &LokiConfig,
-    fedramp: &FedRampConfig,
+    fedramp: &ObservabilityComplianceConfig,
     app_name: &str,
 ) -> StackResult<Vec<GeneratedFile>> {
     let mut files = Vec::new();
@@ -125,25 +125,25 @@ pub fn generate(
     fs::write(&config_path, loki_config)?;
     files.push(
         GeneratedFile::new(&config_path, "Loki server configuration")
-            .with_controls(vec!["AU-2", "AU-4", "AU-9", "AU-11"])
+            .with_controls(vec!["AU-2", "AU-4", "AU-9", "AU-11"]),
     );
 
     // Tenant limits configuration (for multi-tenant mode)
-    if fedramp.tenant_isolation {
+    if fedramp.tenant_isolation() {
         let tenant_limits = generate_tenant_limits(config, fedramp, app_name);
         let limits_path = loki_dir.join("tenant-limits.yml");
         fs::write(&limits_path, tenant_limits)?;
         files.push(
             GeneratedFile::new(&limits_path, "Per-tenant rate limits and quotas")
-                .with_controls(vec!["AU-9", "AC-3"])
+                .with_controls(vec!["AU-9", "AC-3"]),
         );
     }
 
     Ok(files)
 }
 
-fn generate_loki_config(config: &LokiConfig, fedramp: &FedRampConfig) -> String {
-    let tls_config = if fedramp.tls_enabled {
+fn generate_loki_config(config: &LokiConfig, fedramp: &ObservabilityComplianceConfig) -> String {
+    let tls_config = if fedramp.tls_enabled() {
         r#"
   http_tls_config:
     cert_file: /certs/loki/server.crt
@@ -160,7 +160,7 @@ fn generate_loki_config(config: &LokiConfig, fedramp: &FedRampConfig) -> String 
         ""
     };
 
-    let runtime_config = if fedramp.tenant_isolation {
+    let runtime_config = if fedramp.tenant_isolation() {
         "\nruntime_config:\n  file: /etc/loki/tenant-limits.yml"
     } else {
         ""
@@ -241,14 +241,14 @@ compactor:
 analytics:
   reporting_enabled: false
 "#,
-        profile = fedramp.profile.name(),
+        profile = fedramp.profile().name(),
         auth_enabled = config.auth_enabled,
         http_port = config.http_port,
         grpc_port = config.grpc_port,
         tls_config = tls_config,
         runtime_config = runtime_config,
         storage_path = config.storage_path,
-        retention = fedramp.retention_days,
+        retention = fedramp.retention_days(),
         reject_old_samples_max_age = config.reject_old_samples_max_age_hours,
         max_streams = config.max_streams_per_user,
         max_entries = config.max_entries_limit,
@@ -260,7 +260,11 @@ analytics:
     )
 }
 
-fn generate_tenant_limits(config: &LokiConfig, fedramp: &FedRampConfig, _app_name: &str) -> String {
+fn generate_tenant_limits(
+    config: &LokiConfig,
+    fedramp: &ObservabilityComplianceConfig,
+    _app_name: &str,
+) -> String {
     // Calculate tenant-specific limits (can be customized per tenant)
     let tenant_streams = config.max_streams_per_user;
     let tenant_ingestion_rate = config.ingestion_rate_mb;
@@ -302,12 +306,12 @@ overrides:
 # Example with tracing-loki:
 #   LOKI_TENANT_ID={tenant_id}
 "#,
-        profile = fedramp.profile.name(),
+        profile = fedramp.profile().name(),
         tenant_id = fedramp.tenant_id,
         tenant_streams = tenant_streams,
         tenant_ingestion_rate = tenant_ingestion_rate,
         tenant_burst = tenant_burst,
-        retention = fedramp.retention_days,
+        retention = fedramp.retention_days(),
         system_streams = tenant_streams / 2,
         system_rate = tenant_ingestion_rate / 2,
         system_burst = tenant_burst / 2,
@@ -315,10 +319,10 @@ overrides:
         security_rate = tenant_ingestion_rate,
         security_burst = tenant_burst,
         // Security logs get longer retention for High profile
-        security_retention = if fedramp.profile == FedRampProfile::High {
-            fedramp.retention_days * 2
+        security_retention = if matches!(fedramp.profile(), ComplianceProfile::FedRampHigh) {
+            fedramp.retention_days() * 2
         } else {
-            fedramp.retention_days
+            fedramp.retention_days()
         },
     )
 }
@@ -329,14 +333,14 @@ mod tests {
 
     #[test]
     fn test_default_config_moderate() {
-        let config = LokiConfig::default_for_profile(&FedRampProfile::Moderate);
+        let config = LokiConfig::default_for_profile(ComplianceProfile::FedRampModerate);
         assert!(config.auth_enabled);
         assert_eq!(config.http_port, 3100);
     }
 
     #[test]
     fn test_config_builder() {
-        let config = LokiConfig::default_for_profile(&FedRampProfile::Moderate)
+        let config = LokiConfig::default_for_profile(ComplianceProfile::FedRampModerate)
             .with_http_port(3200)
             .with_storage_path("/data/loki");
 

@@ -2,16 +2,16 @@
 //!
 //! Generates helper scripts for the observability stack.
 
-use std::path::Path;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
 
-use super::{StackResult, GeneratedFile, FedRampConfig, FedRampProfile};
+use super::{ComplianceProfile, GeneratedFile, ObservabilityComplianceConfig, StackResult};
 
 /// Generate helper scripts
 pub fn generate(
     output_dir: &Path,
-    fedramp: &FedRampConfig,
+    fedramp: &ObservabilityComplianceConfig,
     app_name: &str,
 ) -> StackResult<Vec<GeneratedFile>> {
     let mut files = Vec::new();
@@ -79,11 +79,10 @@ fn make_executable(path: &Path) -> StackResult<()> {
     Ok(())
 }
 
-fn generate_cert_script(fedramp: &FedRampConfig, app_name: &str) -> String {
-    let validity_days = match fedramp.profile {
-        FedRampProfile::Low => 365,
-        FedRampProfile::Moderate => 365,
-        FedRampProfile::High => 90, // Shorter validity for High
+fn generate_cert_script(fedramp: &ObservabilityComplianceConfig, app_name: &str) -> String {
+    let validity_days = match fedramp.profile() {
+        ComplianceProfile::FedRampHigh => 90, // Shorter validity for High
+        _ => 365,
     };
 
     format!(
@@ -244,12 +243,12 @@ echo "  2. Add CA to your system trust store if needed"
 echo "  3. Start the observability stack: docker-compose up -d"
 "#,
         app_name = app_name,
-        profile = fedramp.profile.name(),
+        profile = fedramp.profile().name(),
         validity_days = validity_days,
     )
 }
 
-fn generate_backup_script(fedramp: &FedRampConfig, app_name: &str) -> String {
+fn generate_backup_script(fedramp: &ObservabilityComplianceConfig, app_name: &str) -> String {
     format!(
         r#"#!/bin/bash
 # Encrypted Backup Script - {app_name} Observability Stack
@@ -350,12 +349,12 @@ echo "Remaining backups:"
 ls -lh "${{BACKUP_DIR}}"/{app_name}_observability_*.tar.gz.enc 2>/dev/null || echo "  (no backups found)"
 "#,
         app_name = app_name,
-        profile = fedramp.profile.name(),
+        profile = fedramp.profile().name(),
         retention_days = fedramp.backup_retention_days,
     )
 }
 
-fn generate_restore_script(fedramp: &FedRampConfig, app_name: &str) -> String {
+fn generate_restore_script(fedramp: &ObservabilityComplianceConfig, app_name: &str) -> String {
     format!(
         r#"#!/bin/bash
 # Backup Restore Script - {app_name} Observability Stack
@@ -466,11 +465,11 @@ echo "Restore complete!"
 echo "Verify services are running: docker-compose ps"
 "#,
         app_name = app_name,
-        profile = fedramp.profile.name(),
+        profile = fedramp.profile().name(),
     )
 }
 
-fn generate_health_script(_fedramp: &FedRampConfig, app_name: &str) -> String {
+fn generate_health_script(_fedramp: &ObservabilityComplianceConfig, app_name: &str) -> String {
     format!(
         r#"#!/bin/bash
 # Health Check Script - {app_name} Observability Stack
@@ -621,7 +620,7 @@ mod tests {
 
     #[test]
     fn test_cert_script_generation() {
-        let fedramp = FedRampConfig::from_profile(&FedRampProfile::Moderate);
+        let fedramp = ObservabilityComplianceConfig::from_profile(ComplianceProfile::FedRampModerate);
         let script = generate_cert_script(&fedramp, "test-app");
         assert!(script.contains("mkcert"));
         assert!(script.contains("openssl"));

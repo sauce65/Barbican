@@ -537,6 +537,36 @@ impl MfaPolicy {
         }
     }
 
+    /// Create policy from compliance configuration
+    ///
+    /// Derives MFA requirements from the compliance profile. FedRAMP Moderate
+    /// and above require MFA; FedRAMP High additionally requires hardware tokens.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use barbican::compliance::ComplianceConfig;
+    /// use barbican::auth::MfaPolicy;
+    ///
+    /// let compliance = barbican::compliance::config();
+    /// let policy = MfaPolicy::from_compliance(compliance);
+    /// ```
+    pub fn from_compliance(config: &crate::compliance::ComplianceConfig) -> Self {
+        use crate::compliance::ComplianceProfile;
+
+        Self {
+            required_methods: HashSet::new(),
+            require_any_mfa: config.require_mfa,
+            require_hardware: config.require_hardware_mfa,
+            min_acr_level: match config.profile {
+                ComplianceProfile::FedRampHigh => {
+                    Some("urn:mace:incommon:iap:silver".to_string())
+                }
+                _ => None,
+            },
+        }
+    }
+
     /// Check if the policy is satisfied by the given claims
     pub fn is_satisfied(&self, claims: &Claims) -> bool {
         // Check hardware requirement

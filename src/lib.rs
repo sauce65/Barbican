@@ -239,6 +239,9 @@ mod database;
 mod layers;
 mod parse;
 
+// Compliance framework
+pub mod compliance;
+
 // Authentication & Authorization modules
 pub mod auth;
 pub mod login;
@@ -308,3 +311,6 @@ pub use database::{
     create_pool, health_check, DatabaseConfig, DatabaseConfigBuilder, DatabaseError,
     HealthStatus as DbHealthStatus, SslMode,
 };
+
+// Compliance re-exports
+pub use compliance::{ComplianceConfig, ComplianceProfile, ComplianceValidator};

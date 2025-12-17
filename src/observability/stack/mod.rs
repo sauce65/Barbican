@@ -6,13 +6,13 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use barbican::observability::stack::{ObservabilityStack, FedRampProfile};
+//! use barbican::observability::stack::{ObservabilityStack, ComplianceProfile};
 //!
 //! let stack = ObservabilityStack::builder()
 //!     .app_name("my-app")
 //!     .app_port(3443)
 //!     .output_dir("./observability")
-//!     .fedramp_profile(FedRampProfile::Moderate)
+//!     .compliance_profile(ComplianceProfile::FedRampModerate)
 //!     .build()?;
 //!
 //! // Generate all configuration files
@@ -22,15 +22,17 @@
 //! let report = stack.validate()?;
 //! ```
 
+mod alerts;
+mod compose;
 mod fedramp;
+mod grafana;
 mod loki;
 mod prometheus;
-mod grafana;
-mod compose;
-mod alerts;
 mod scripts;
 
-pub use fedramp::{FedRampProfile, FedRampConfig};
+// Re-export compliance types for convenience
+pub use crate::compliance::ComplianceProfile;
+pub use fedramp::ObservabilityComplianceConfig;
 pub use loki::LokiConfig;
 pub use prometheus::PrometheusConfig;
 pub use grafana::{GrafanaConfig, GrafanaSso};
@@ -99,8 +101,8 @@ pub struct ObservabilityStack {
     /// Output directory for generated configs
     pub output_dir: PathBuf,
 
-    /// FedRAMP compliance profile
-    pub fedramp: FedRampConfig,
+    /// Compliance configuration for observability
+    pub fedramp: ObservabilityComplianceConfig,
 
     /// Loki configuration
     pub loki: LokiConfig,
@@ -220,7 +222,7 @@ pub struct ObservabilityStackBuilder {
     app_name: Option<String>,
     app_port: Option<u16>,
     output_dir: Option<PathBuf>,
-    fedramp_profile: Option<FedRampProfile>,
+    compliance_profile: Option<ComplianceProfile>,
     loki: Option<LokiConfig>,
     prometheus: Option<PrometheusConfig>,
     grafana: Option<GrafanaConfig>,
@@ -247,9 +249,16 @@ impl ObservabilityStackBuilder {
         self
     }
 
-    /// Set the FedRAMP compliance profile
-    pub fn fedramp_profile(mut self, profile: FedRampProfile) -> Self {
-        self.fedramp_profile = Some(profile);
+    /// Set the compliance profile
+    pub fn compliance_profile(mut self, profile: ComplianceProfile) -> Self {
+        self.compliance_profile = Some(profile);
+        self
+    }
+
+    /// Alias for backwards compatibility - prefer compliance_profile()
+    #[deprecated(since = "0.2.0", note = "Use compliance_profile() instead")]
+    pub fn fedramp_profile(mut self, profile: ComplianceProfile) -> Self {
+        self.compliance_profile = Some(profile);
         self
     }
 
@@ -285,21 +294,34 @@ impl ObservabilityStackBuilder {
 
     /// Build the ObservabilityStack
     pub fn build(self) -> StackResult<ObservabilityStack> {
-        let app_name = self.app_name
+        let app_name = self
+            .app_name
             .ok_or_else(|| StackError::MissingField("app_name".to_string()))?;
-        let app_port = self.app_port
+        let app_port = self
+            .app_port
             .ok_or_else(|| StackError::MissingField("app_port".to_string()))?;
-        let output_dir = self.output_dir
+        let output_dir = self
+            .output_dir
             .ok_or_else(|| StackError::MissingField("output_dir".to_string()))?;
 
-        let fedramp_profile = self.fedramp_profile.unwrap_or(FedRampProfile::Moderate);
-        let fedramp = FedRampConfig::from_profile(&fedramp_profile);
+        let profile = self
+            .compliance_profile
+            .unwrap_or(ComplianceProfile::FedRampModerate);
+        let fedramp = ObservabilityComplianceConfig::from_profile(profile);
 
-        let loki = self.loki.unwrap_or_else(|| LokiConfig::default_for_profile(&fedramp_profile));
-        let prometheus = self.prometheus.unwrap_or_else(|| PrometheusConfig::default_for_profile(&fedramp_profile));
-        let grafana = self.grafana.unwrap_or_else(|| GrafanaConfig::default_for_profile(&fedramp_profile));
+        let loki = self
+            .loki
+            .unwrap_or_else(|| LokiConfig::default_for_profile(profile));
+        let prometheus = self
+            .prometheus
+            .unwrap_or_else(|| PrometheusConfig::default_for_profile(profile));
+        let grafana = self
+            .grafana
+            .unwrap_or_else(|| GrafanaConfig::default_for_profile(profile));
         let compose = self.compose.unwrap_or_default();
-        let alerts = self.alerts.unwrap_or_else(|| AlertRules::default_for_profile(&fedramp_profile));
+        let alerts = self
+            .alerts
+            .unwrap_or_else(|| AlertRules::default_for_profile(profile));
 
         Ok(ObservabilityStack {
             app_name,

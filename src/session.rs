@@ -110,6 +110,36 @@ impl SessionPolicy {
         }
     }
 
+    /// Create policy from compliance configuration
+    ///
+    /// Derives session timeouts and re-authentication requirements from the
+    /// compliance profile. Use this to ensure session management aligns with
+    /// your compliance requirements.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use barbican::compliance::ComplianceConfig;
+    /// use barbican::session::SessionPolicy;
+    ///
+    /// let compliance = barbican::compliance::config();
+    /// let policy = SessionPolicy::from_compliance(compliance);
+    /// ```
+    pub fn from_compliance(config: &crate::compliance::ComplianceConfig) -> Self {
+        use crate::compliance::ComplianceProfile;
+
+        let is_low_security = matches!(config.profile, ComplianceProfile::FedRampLow);
+
+        Self {
+            max_lifetime: config.session_max_lifetime,
+            idle_timeout: config.session_idle_timeout,
+            require_reauth_for_sensitive: !is_low_security,
+            reauth_timeout: config.reauth_timeout,
+            allow_extension: is_low_security,
+            max_extensions: if is_low_security { 3 } else { 0 },
+        }
+    }
+
     /// Check if a session should be terminated based on this policy
     pub fn should_terminate(&self, state: &SessionState) -> SessionTerminationReason {
         let now = Instant::now();

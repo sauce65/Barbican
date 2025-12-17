@@ -346,6 +346,32 @@ impl RotationPolicy {
         self.warn_before = warn_before;
         self
     }
+
+    /// Create policy from compliance configuration
+    ///
+    /// Derives key rotation interval from the compliance profile. Higher
+    /// profiles require more frequent key rotation.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use barbican::compliance::ComplianceConfig;
+    /// use barbican::keys::RotationPolicy;
+    ///
+    /// let compliance = barbican::compliance::config();
+    /// let policy = RotationPolicy::from_compliance(compliance);
+    /// ```
+    pub fn from_compliance(config: &crate::compliance::ComplianceConfig) -> Self {
+        use crate::compliance::ComplianceProfile;
+
+        Self {
+            interval: config.key_rotation_interval,
+            warn_before: match config.profile {
+                ComplianceProfile::FedRampHigh => Duration::from_secs(14 * 24 * 60 * 60), // 14 days
+                _ => Duration::from_secs(7 * 24 * 60 * 60), // 7 days
+            },
+        }
+    }
 }
 
 impl Default for RotationPolicy {
