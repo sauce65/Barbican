@@ -8,20 +8,30 @@ barbican is structured as a layered security infrastructure crate:
 
 ```
 ┌─────────────────────────────────────────────────┐
-│         Application (uses barbican)          │
+│         Application (uses barbican)             │
+│  - Calls ComplianceConfig::from_env() at startup│
 │  - Uses standard tracing macros (provider-agnostic)
-│  - Calls SecurityConfig::from_env()             │
 │  - Uses SecureRouter trait extension            │
 └──────────────────┬──────────────────────────────┘
                    │
 ┌──────────────────▼──────────────────────────────┐
-│              barbican crate                  │
-│  ┌─────────────┬──────────────┬──────────────┐ │
+│              barbican crate                     │
+│  ┌──────────────────────────────────────────┐  │
+│  │         compliance (single source)        │  │
+│  │  config.rs, profile.rs, validation.rs     │  │
+│  │  (AC-7, AC-11, AC-12, IA-2, IA-5, SC-12)  │  │
+│  └──────────────────┬───────────────────────┘  │
+│                     │ from_compliance()         │
+│  ┌─────────────┬────▼─────────┬──────────────┐ │
 │  │   config    │   layers     │ observability│ │
 │  │  (SC-2-7)   │ (applies MW) │   (SC-7,9)   │ │
 │  └─────────────┴──────────────┴──────────────┘ │
+│  ┌─────────────┬──────────────┬──────────────┐ │
+│  │  password   │   session    │    login     │ │
+│  │   (IA-5)    │  (AC-11,12)  │   (AC-7)     │ │
+│  └─────────────┴──────────────┴──────────────┘ │
 │  ┌──────────────────────────────────────────┐  │
-│  │  database (SC-8)  │  crypto  │  parse    │  │
+│  │  database (SC-8)  │  crypto  │   keys    │  │
 │  │  (postgres feature)                      │  │
 │  └──────────────────────────────────────────┘  │
 └──────────────────┬──────────────────────────────┘
@@ -36,13 +46,77 @@ barbican is structured as a layered security infrastructure crate:
 
 Key design principles:
 
-1. **Opt-in via features**: Core is minimal, database and observability providers are optional
-2. **Configuration over code**: All security settings configurable via env vars or builder
-3. **Trait-based extension**: `SecureRouter` trait extends any `Router<S>`
-4. **Provider-agnostic observability**: Application uses `tracing::info!()`, provider configured at startup
-5. **Secure defaults**: All defaults chosen for security over convenience
+1. **Compliance-driven configuration**: Single source of truth via `ComplianceConfig` drives all security settings
+2. **Opt-in via features**: Core is minimal, database and observability providers are optional
+3. **Configuration over code**: All security settings configurable via env vars or builder
+4. **Trait-based extension**: `SecureRouter` trait extends any `Router<S>`
+5. **Provider-agnostic observability**: Application uses `tracing::info!()`, provider configured at startup
+6. **Secure defaults**: All defaults chosen for security over convenience
 
 ## Module Responsibilities
+
+### `compliance/` - Unified Compliance Configuration (AC-7, AC-11, AC-12, AU-11, IA-2, IA-5, SC-8, SC-12, SC-28)
+
+**Files**: `src/compliance/mod.rs`, `config.rs`, `profile.rs`, `validation.rs`
+
+**Purpose**: Single source of truth for all compliance-related security settings. Provides profile-based configuration that drives settings across all security modules.
+
+**Key types**:
+- `ComplianceProfile`: Enum defining FedRAMP Low/Moderate/High, SOC 2, Custom profiles
+- `ComplianceConfig`: Unified configuration struct derived from profile
+- `ComplianceValidator`: Validation framework for checking compliance
+- `config()`: Global accessor function for compliance configuration
+- `init()`: Initialization function (call once at startup)
+
+**Profile-driven settings**:
+- Session timeouts (AC-11, AC-12)
+- Password requirements (IA-5)
+- MFA requirements (IA-2)
+- Login attempt limits (AC-7)
+- Key rotation intervals (SC-12)
+- Encryption requirements (SC-8, SC-28)
+- Log retention (AU-11)
+
+**Integration pattern**:
+
+Security modules should derive their settings from compliance config:
+
+```rust
+// In your module
+impl YourPolicy {
+    pub fn from_compliance(config: &ComplianceConfig) -> Self {
+        Self {
+            setting: config.relevant_setting,
+            // ...
+        }
+    }
+}
+```
+
+**Adding new compliance-driven settings**:
+
+1. Add field to `ComplianceConfig`:
+   ```rust
+   pub new_setting: Duration,
+   ```
+
+2. Add profile method in `profile.rs`:
+   ```rust
+   pub fn new_setting(&self) -> Duration {
+       match self {
+           Self::FedRampLow => Duration::from_secs(300),
+           Self::FedRampHigh => Duration::from_secs(60),
+           // ...
+       }
+   }
+   ```
+
+3. Wire it in `ComplianceConfig::from_profile()`:
+   ```rust
+   new_setting: profile.new_setting(),
+   ```
+
+4. Update consumer modules to use `from_compliance()`
 
 ### `config.rs` - Security Configuration (SC-2 through SC-7)
 

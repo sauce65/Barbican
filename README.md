@@ -7,10 +7,14 @@ NIST 800-53 compliant security infrastructure for Axum applications. A pluggable
 ```rust
 use axum::{Router, routing::get};
 use barbican::{SecurityConfig, SecureRouter, DatabaseConfig, create_pool};
+use barbican::compliance::{ComplianceConfig, init as init_compliance};
 use barbican::observability::{ObservabilityConfig, init};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Initialize compliance configuration (single source of truth)
+    init_compliance(ComplianceConfig::from_env());
+
     // Initialize observability
     init(ObservabilityConfig::from_env()).await?;
 
@@ -48,7 +52,13 @@ barbican = { version = "0.1", features = ["postgres", "observability-loki", "met
 
 ## Security Modules
 
-Barbican provides 12 security modules covering 52+ NIST 800-53 controls:
+Barbican provides 13 security modules covering 52+ NIST 800-53 controls:
+
+### Compliance Configuration
+
+| Module | Description | NIST Controls |
+|--------|-------------|---------------|
+| `compliance` | Unified compliance profiles (FedRAMP, SOC 2) - single source of truth | AC-7, AC-11, AC-12, AU-11, IA-2, IA-5, SC-8, SC-12, SC-28 |
 
 ### Infrastructure Layer
 
@@ -87,6 +97,27 @@ Barbican provides 12 security modules covering 52+ NIST 800-53 controls:
 | `crypto` | Constant-time comparison utilities | SC-13 |
 
 ## Environment Variables
+
+### Compliance Configuration
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `COMPLIANCE_PROFILE` | string | `fedramp-moderate` | Compliance profile: `fedramp-low`, `fedramp-moderate`, `fedramp-high`, `soc2`, `custom` |
+
+The compliance profile determines security settings across all modules:
+
+| Setting | Low | Moderate | High | SOC 2 |
+|---------|-----|----------|------|-------|
+| Session Timeout | 30 min | 15 min | 10 min | 15 min |
+| Idle Timeout | 15 min | 10 min | 5 min | 10 min |
+| MFA Required | No | Yes | Yes | Yes |
+| Password Min | 8 | 12 | 14 | 12 |
+| Encryption at Rest | No | Yes | Yes | Yes |
+| mTLS Required | No | No | Yes | No |
+| Key Rotation | 90 days | 90 days | 30 days | 90 days |
+| Max Login Attempts | 5 | 3 | 3 | 3 |
+| Lockout Duration | 15 min | 30 min | 30 min | 30 min |
+| Log Retention | 30 days | 90 days | 365 days | 90 days |
 
 ### Security Configuration
 
@@ -253,12 +284,48 @@ AU-2, AU-3, AU-4, AU-5, AU-6, AU-9, AU-11, AU-12, SC-8, SC-13, SC-28, IA-2, IA-2
 
 ## Module Usage Examples
 
+### Compliance Configuration
+
+```rust
+use barbican::compliance::{ComplianceConfig, ComplianceProfile, config, init};
+
+// Initialize at application startup (call once)
+let compliance = ComplianceConfig::from_env(); // Reads COMPLIANCE_PROFILE env var
+init(compliance);
+
+// Or initialize with explicit profile
+let compliance = ComplianceConfig::from_profile(ComplianceProfile::FedRampHigh);
+init(compliance);
+
+// Access globally anywhere in the application
+let compliance = config();
+if compliance.require_mfa {
+    // Enforce MFA
+}
+
+// Security modules derive settings from compliance config
+use barbican::password::PasswordPolicy;
+let password_policy = PasswordPolicy::from_compliance(config());
+
+use barbican::session::SessionPolicy;
+let session_policy = SessionPolicy::from_compliance(config());
+
+use barbican::login::LockoutPolicy;
+let lockout_policy = LockoutPolicy::from_compliance(config());
+```
+
 ### Password Validation (IA-5)
 
 ```rust
 use barbican::password::PasswordPolicy;
+use barbican::compliance::config;
 
-let policy = PasswordPolicy::default(); // NIST 800-63B compliant
+// Derive policy from compliance profile (recommended)
+let policy = PasswordPolicy::from_compliance(config());
+
+// Or use NIST 800-63B compliant defaults
+let policy = PasswordPolicy::default();
+
 policy.validate_with_context(password, Some(username), Some(email))?;
 ```
 
@@ -275,9 +342,14 @@ let safe_bio = sanitize_html(bio);
 ### Session Management (AC-11, AC-12)
 
 ```rust
-use barbican::session::{SessionPolicy, SessionState};
+use barbican::session::{SessionPolicy, SessionState, SessionTerminationReason};
+use barbican::compliance::config;
 use std::time::Duration;
 
+// Derive from compliance profile (recommended)
+let policy = SessionPolicy::from_compliance(config());
+
+// Or configure manually
 let policy = SessionPolicy::builder()
     .idle_timeout(Duration::from_secs(900))     // 15 min idle
     .absolute_timeout(Duration::from_secs(28800)) // 8 hour max
@@ -292,9 +364,15 @@ if policy.is_idle_timeout_exceeded(&session) {
 ### Login Attempt Tracking (AC-7)
 
 ```rust
-use barbican::login::{LockoutPolicy, LoginTracker};
+use barbican::login::{LockoutPolicy, LoginTracker, AttemptResult};
+use barbican::compliance::config;
 
+// Derive from compliance profile (recommended)
+let policy = LockoutPolicy::from_compliance(config());
+
+// Or use NIST defaults
 let policy = LockoutPolicy::nist_compliant(); // 3 attempts, 15 min lockout
+
 let mut tracker = LoginTracker::new(policy);
 
 match tracker.record_attempt("user@example.com", false) {
@@ -338,13 +416,15 @@ let report = checker.check_all().await;
 
 ```rust
 use barbican::keys::{KeyStore, EnvKeyStore, RotationTracker, RotationPolicy};
+use barbican::compliance::config;
 
 // Development: environment-based keys
 let store = EnvKeyStore::new("MYAPP_")?;
 let key = store.get_key("encryption_key").await?;
 
 // Production: implement KeyStore trait for Vault/AWS KMS
-let tracker = RotationTracker::new(RotationPolicy::default());
+// Derive rotation policy from compliance profile
+let tracker = RotationTracker::new(RotationPolicy::from_compliance(config()));
 if tracker.needs_rotation("api-key")? {
     // Trigger key rotation
 }
@@ -385,11 +465,13 @@ assert!(issues.is_empty());
 ### OAuth/OIDC Integration
 
 ```rust
-use barbican::auth::{Claims, log_access_decision, MfaPolicy};
+use barbican::auth::{Claims, log_access_decision, log_mfa_required, MfaPolicy};
+use barbican::compliance::config;
+use axum::http::StatusCode;
 
 async fn admin_handler(claims: Claims) -> Result<&'static str, StatusCode> {
-    // Check MFA requirement
-    let mfa_policy = MfaPolicy::required();
+    // Check MFA requirement based on compliance profile
+    let mfa_policy = MfaPolicy::from_compliance(config());
     if !mfa_policy.is_satisfied(&claims) {
         log_mfa_required(&claims, "admin_panel");
         return Err(StatusCode::FORBIDDEN);

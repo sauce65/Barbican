@@ -2,7 +2,36 @@
 
 This document describes the security controls, compliance mappings, threat model coverage, and audit procedures for barbican.
 
-Barbican implements **52 NIST 800-53 Rev 5 controls** across 12 security modules. For the complete control registry, see `.claudedocs/SECURITY_CONTROL_REGISTRY.md`.
+Barbican implements **52 NIST 800-53 Rev 5 controls** across 13 security modules. For the complete control registry, see `.claudedocs/SECURITY_CONTROL_REGISTRY.md`.
+
+## Compliance Configuration
+
+Barbican provides a unified compliance configuration system (`src/compliance/`) that serves as the **single source of truth** for all security settings. Set `COMPLIANCE_PROFILE` environment variable to select a profile:
+
+| Profile | Description | Use Case |
+|---------|-------------|----------|
+| `fedramp-low` | Basic security controls | Limited adverse effect systems |
+| `fedramp-moderate` | Enhanced security controls (default) | Serious adverse effect systems |
+| `fedramp-high` | Maximum security controls | Severe/catastrophic impact systems |
+| `soc2` | SOC 2 Type II baseline | Trust services compliance |
+| `custom` | Custom configuration | Non-standard requirements |
+
+**Profile-Driven Settings:**
+
+| Setting | Low | Moderate | High | SOC 2 |
+|---------|-----|----------|------|-------|
+| Session Timeout | 30 min | 15 min | 10 min | 15 min |
+| Idle Timeout | 15 min | 10 min | 5 min | 10 min |
+| MFA Required | No | Yes | Yes | Yes |
+| Password Min | 8 | 12 | 14 | 12 |
+| Encryption at Rest | No | Yes | Yes | Yes |
+| mTLS Required | No | No | Yes | No |
+| Key Rotation | 90 days | 90 days | 30 days | 90 days |
+| Max Login Attempts | 5 | 3 | 3 | 3 |
+| Lockout Duration | 15 min | 30 min | 30 min | 30 min |
+| Log Retention | 30 days | 90 days | 365 days | 90 days |
+
+All security modules derive their settings from the compliance configuration via `from_compliance()` methods.
 
 ## Security Controls Matrix
 

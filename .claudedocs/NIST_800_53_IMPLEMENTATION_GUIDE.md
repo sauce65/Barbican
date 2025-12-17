@@ -2,7 +2,7 @@
 
 **Quick reference for developers using barbican to build compliant applications**
 
-**Last Updated:** 2025-12-16
+**Last Updated:** 2025-12-17
 
 ---
 
@@ -62,21 +62,27 @@ barbican = { version = "0.1", features = ["postgres", "observability-loki"] }
 ```rust
 use axum::{Router, routing::get};
 use barbican::{SecurityConfig, SecureRouter};
+use barbican::compliance::{ComplianceConfig, init as init_compliance};
 use barbican::observability::{ObservabilityConfig, init};
 use barbican::error::{ErrorConfig, init as init_error};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Step 1: Initialize observability (AU-2, AU-3, AU-12)
+    // Step 1: Initialize compliance configuration (single source of truth)
+    // Reads COMPLIANCE_PROFILE env var: fedramp-low, fedramp-moderate, fedramp-high, soc2
+    init_compliance(ComplianceConfig::from_env());
+
+    // Step 2: Initialize observability (AU-2, AU-3, AU-12)
     init(ObservabilityConfig::from_env()).await?;
     init_error(ErrorConfig::from_env());
 
-    // Step 2: Apply security middleware (SC-5, SC-8, AC-4, etc.)
+    // Step 3: Apply security middleware (SC-5, SC-8, AC-4, etc.)
     let app = Router::new()
         .route("/api/users", get(list_users))
         .with_security(SecurityConfig::from_env());
 
     // You now have:
+    // ✅ Unified compliance profile (AC-7, AC-11, AC-12, IA-2, IA-5, SC-12)
     // ✅ Rate limiting (SC-5)
     // ✅ Request size limits (SC-5)
     // ✅ Request timeouts (SC-10)
@@ -93,6 +99,9 @@ async fn main() -> anyhow::Result<()> {
 ### 3. Configure via Environment Variables
 
 ```bash
+# Compliance profile (single source of truth for security settings)
+COMPLIANCE_PROFILE=fedramp-moderate    # fedramp-low, fedramp-moderate, fedramp-high, soc2
+
 # Security controls (all have secure defaults)
 MAX_REQUEST_SIZE=10MB
 REQUEST_TIMEOUT=30s
@@ -114,6 +123,23 @@ LOKI_ENDPOINT=http://loki:3100
 # Error handling (SI-11)
 ERROR_EXPOSE_DETAILS=false             # Production: hide internal errors
 ```
+
+### Compliance Profile Settings
+
+The `COMPLIANCE_PROFILE` environment variable drives security settings across all modules:
+
+| Setting | FedRAMP Low | FedRAMP Moderate | FedRAMP High | SOC 2 |
+|---------|-------------|------------------|--------------|-------|
+| Session Timeout | 30 min | 15 min | 10 min | 15 min |
+| Idle Timeout | 15 min | 10 min | 5 min | 10 min |
+| MFA Required | No | Yes | Yes | Yes |
+| Password Min | 8 | 12 | 14 | 12 |
+| Encryption at Rest | No | Yes | Yes | Yes |
+| mTLS Required | No | No | Yes | No |
+| Key Rotation | 90 days | 90 days | 30 days | 90 days |
+| Max Login Attempts | 5 | 3 | 3 | 3 |
+| Lockout Duration | 15 min | 30 min | 30 min | 30 min |
+| Log Retention | 30 days | 90 days | 365 days | 90 days |
 
 **You're now compliant with 20+ NIST controls!**
 
@@ -189,8 +215,12 @@ let policy = MfaPolicy::require_any(&["hwk", "fpt", "face"]);
 
 ```rust
 use barbican::password::{PasswordPolicy, PasswordStrength};
+use barbican::compliance::config;
 
-// Use NIST 800-63B compliant defaults (12 char min, no composition rules)
+// Derive from compliance profile (recommended - automatically enforces correct settings)
+let policy = PasswordPolicy::from_compliance(config());
+
+// Or use NIST 800-63B compliant defaults (12 char min, no composition rules)
 let policy = PasswordPolicy::default();
 
 // Validate with user context (prevents password = username)
@@ -241,9 +271,13 @@ AppError::validation(validation_errors);
 
 ```rust
 use barbican::session::{SessionPolicy, SessionState, SessionTerminationReason};
+use barbican::compliance::config;
 use std::time::Duration;
 
-// Create session policy
+// Derive from compliance profile (recommended)
+let policy = SessionPolicy::from_compliance(config());
+
+// Or create with presets
 let policy = SessionPolicy::default();  // 30 min idle, 8 hour max
 let strict = SessionPolicy::strict();   // 15 min idle, 4 hour max
 let custom = SessionPolicy::builder()
@@ -273,9 +307,13 @@ session.record_activity();
 
 ```rust
 use barbican::login::{LoginTracker, LockoutPolicy, LockoutInfo};
+use barbican::compliance::config;
 use std::time::Duration;
 
-// Create tracker with policy
+// Derive from compliance profile (recommended)
+let policy = LockoutPolicy::from_compliance(config());
+
+// Or use presets
 let policy = LockoutPolicy::default();  // 5 attempts, 15 min lockout
 let tracker = LoginTracker::new(policy);
 
@@ -371,6 +409,7 @@ let json = report.to_json();
 
 ```rust
 use barbican::keys::{KeyStore, KeyMetadata, RotationTracker, RotationPolicy, EnvKeyStore};
+use barbican::compliance::config;
 
 // Implement KeyStore trait for your KMS (Vault, AWS KMS, etc.)
 struct VaultKeyStore { /* ... */ }
@@ -385,10 +424,13 @@ impl KeyStore for VaultKeyStore {
 // Or use EnvKeyStore for development
 let store = EnvKeyStore::new("APP_KEYS");  // Reads APP_KEYS_JWT_SIGNING, etc.
 
+// Derive rotation policy from compliance profile (recommended)
+let rotation_policy = RotationPolicy::from_compliance(config());
+
 // Track rotation schedules
 let mut tracker = RotationTracker::new();
-tracker.register("jwt-signing", RotationPolicy::days(90));
-tracker.register("api-key", RotationPolicy::days(30));
+tracker.register("jwt-signing", rotation_policy.clone());
+tracker.register("api-key", rotation_policy);
 
 // Check what needs rotation
 for key_id in tracker.keys_needing_rotation() {
@@ -541,12 +583,28 @@ let amr = extract_amr(&token_claims);  // Auth methods ["pwd", "mfa"]
 
 ## Best Practices
 
-### 1. Always Use Secure Defaults
+### 1. Always Initialize Compliance First
 
 ```rust
-// ✅ Good: Use from_env() or default()
+use barbican::compliance::{ComplianceConfig, init as init_compliance, config};
+
+// ✅ Good: Initialize compliance at startup, derive all policies from it
+init_compliance(ComplianceConfig::from_env());
+
+let password_policy = PasswordPolicy::from_compliance(config());
+let session_policy = SessionPolicy::from_compliance(config());
+let lockout_policy = LockoutPolicy::from_compliance(config());
+
+// ❌ Bad: Hardcoding values that should come from profile
+let password_policy = PasswordPolicy::builder().min_length(8).build();
+```
+
+### 2. Always Use Secure Defaults
+
+```rust
+// ✅ Good: Use from_env() or from_compliance()
 let config = SecurityConfig::from_env();
-let policy = PasswordPolicy::default();
+let policy = PasswordPolicy::from_compliance(config());
 let alerts = AlertConfig::default();
 
 // ❌ Bad: Don't weaken security
@@ -555,7 +613,7 @@ let config = SecurityConfig::builder()
     .build();
 ```
 
-### 2. Log All Security Events
+### 3. Log All Security Events
 
 ```rust
 use barbican::observability::{SecurityEvent, security_event};
@@ -571,7 +629,7 @@ security_event!(
 // ❌ Bad: Silent authentication
 ```
 
-### 3. Use Constant-Time Comparisons
+### 4. Use Constant-Time Comparisons
 
 ```rust
 // ✅ Good: Constant-time comparison
@@ -586,7 +644,7 @@ if stored_hash == provided_hash {
 }
 ```
 
-### 4. Validate All Inputs
+### 5. Validate All Inputs
 
 ```rust
 // ✅ Good: Validate and sanitize
@@ -597,7 +655,7 @@ let safe_bio = sanitize_html(bio);
 let query = format!("SELECT * FROM users WHERE email = '{}'", email);
 ```
 
-### 5. Enable All Security Layers
+### 6. Enable All Security Layers
 
 ```rust
 // ✅ Good: Full security stack

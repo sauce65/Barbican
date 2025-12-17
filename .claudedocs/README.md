@@ -137,6 +137,40 @@ This directory contains comprehensive NIST SP 800-53 Rev 5 compliance analysis a
 3. Gap analysis documents known deficiencies
 4. Test results provide audit evidence
 
+## Compliance Configuration (Single Source of Truth)
+
+As of December 2025, barbican provides a unified compliance configuration module (`src/compliance/`) that serves as the **single source of truth** for all security settings across the application.
+
+### Key Components
+
+| File | Description |
+|------|-------------|
+| `mod.rs` | Module exports and documentation |
+| `profile.rs` | Compliance profile definitions (FedRAMP Low/Moderate/High, SOC 2) |
+| `config.rs` | Unified `ComplianceConfig` struct with global singleton access |
+| `validation.rs` | Compliance validation and reporting framework |
+
+### Usage Pattern
+
+```rust
+// Initialize at application startup
+use barbican::compliance::{ComplianceConfig, init, config};
+
+init(ComplianceConfig::from_env());  // Reads COMPLIANCE_PROFILE env var
+
+// Access globally anywhere
+let compliance = config();
+
+// Security modules derive settings from compliance config
+let password_policy = PasswordPolicy::from_compliance(config());
+let session_policy = SessionPolicy::from_compliance(config());
+let lockout_policy = LockoutPolicy::from_compliance(config());
+```
+
+### Environment Variable
+
+Set `COMPLIANCE_PROFILE` to: `fedramp-low`, `fedramp-moderate` (default), `fedramp-high`, `soc2`, or `custom`.
+
 ## Compliance Frameworks
 
 Barbican is designed for compliance with:
@@ -166,4 +200,4 @@ See [SECURITY.md](../SECURITY.md) for:
 
 This documentation is maintained by the security-auditor-agent and updated as controls are implemented, tested, and verified.
 
-Last updated: 2025-12-16
+Last updated: 2025-12-17
