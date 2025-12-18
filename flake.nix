@@ -93,6 +93,11 @@
       checks = flake-utils.lib.eachDefaultSystemMap (system:
         let
           pkgs = import nixpkgs { inherit system; };
+          # pkgs with Vault's BSL license allowed (for vault-pki tests)
+          pkgsWithVault = import nixpkgs {
+            inherit system;
+            config.allowUnfreePredicate = pkg: builtins.elem (nixpkgs.lib.getName pkg) [ "vault" ];
+          };
           overlays = [ (import rust-overlay) ];
           pkgsWithRust = import nixpkgs { inherit system overlays; };
           rustToolchain = pkgsWithRust.rust-bin.stable.latest.default;
@@ -175,7 +180,7 @@ with open('${./Cargo.lock}', 'rb') as f:
           intrusion-detection = import ./nix/tests/intrusion-detection.nix { inherit pkgs lib; };
           vm-firewall = import ./nix/tests/vm-firewall.nix { inherit pkgs lib; };
           resource-limits = import ./nix/tests/resource-limits.nix { inherit pkgs lib; };
-          vault-pki = import ./nix/tests/vault-pki.nix { inherit pkgs lib; };
+          vault-pki = import ./nix/tests/vault-pki.nix { pkgs = pkgsWithVault; inherit lib; };
 
           # Combined security suite (all tests)
           all = (import ./nix/tests/default.nix { inherit pkgs; lib = pkgs.lib; }).all;

@@ -55,6 +55,12 @@ let
         description = "Allow bare domain names (no subdomain)";
       };
 
+      allowAnyName = mkOption {
+        type = types.bool;
+        default = false;
+        description = "Allow any common name (useful for client certs)";
+      };
+
       allowIpSans = mkOption {
         type = types.bool;
         default = true;

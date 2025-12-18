@@ -27,6 +27,7 @@ rec {
       allowedDomains = [ "localhost" "local" ];
       allowSubdomains = true;
       allowBareDomains = true;
+      allowAnyName = false;
       allowIpSans = true;
       serverFlag = true;
       clientFlag = false;
@@ -35,9 +36,10 @@ rec {
       maxTtl = "8760h";  # 1 year
     };
     client = {
-      allowedDomains = [ "localhost" "local" ];
-      allowSubdomains = true;
-      allowBareDomains = true;
+      allowedDomains = [];  # Not used when allow_any_name is true
+      allowSubdomains = false;
+      allowBareDomains = false;
+      allowAnyName = true;  # Client certs can have any CN (service identifiers)
       allowIpSans = false;
       serverFlag = false;
       clientFlag = true;
@@ -49,6 +51,7 @@ rec {
       allowedDomains = [ "postgres" "localhost" "local" ];
       allowSubdomains = true;
       allowBareDomains = true;
+      allowAnyName = false;
       allowIpSans = true;
       serverFlag = true;
       clientFlag = true;  # PostgreSQL can use same cert for both
@@ -179,6 +182,7 @@ rec {
         allowed_domains="${concatStringsSep "," role.allowedDomains}" \
         allow_subdomains=${boolToString role.allowSubdomains} \
         allow_bare_domains=${boolToString role.allowBareDomains} \
+        allow_any_name=${boolToString (role.allowAnyName or false)} \
         allow_ip_sans=${boolToString role.allowIpSans} \
         server_flag=${boolToString role.serverFlag} \
         client_flag=${boolToString role.clientFlag} \

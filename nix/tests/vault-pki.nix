@@ -5,11 +5,8 @@
 pkgs.testers.nixosTest {
   name = "barbican-vault-pki";
 
-  nodes.machine = { config, pkgs, lib, ... }: {
+  nodes.machine = { config, pkgs, ... }: {
     imports = [ ../modules/vault-pki.nix ];
-
-    # Allow Vault's BSL license
-    nixpkgs.config.allowUnfreePredicate = pkg: builtins.elem (lib.getName pkg) [ "vault" ];
 
     barbican.vault = {
       enable = true;
@@ -154,7 +151,7 @@ pkgs.testers.nixosTest {
 
       # Verify it's marked for client auth
       ext = machine.succeed("openssl x509 -in /tmp/client.pem -noout -ext extendedKeyUsage")
-      assert "clientAuth" in ext.lower(), f"Client auth not in extended key usage: {ext}"
+      assert "client authentication" in ext.lower(), f"Client auth not in extended key usage: {ext}"
 
     with subtest("Can issue postgres certificate"):
       result = machine.succeed(
@@ -170,8 +167,8 @@ pkgs.testers.nixosTest {
 
       # Verify it's marked for both server and client auth
       ext = machine.succeed("openssl x509 -in /tmp/postgres.pem -noout -ext extendedKeyUsage")
-      assert "serverAuth" in ext.lower(), f"Server auth not in extended key usage: {ext}"
-      assert "clientAuth" in ext.lower(), f"Client auth not in extended key usage: {ext}"
+      assert "server authentication" in ext.lower(), f"Server auth not in extended key usage: {ext}"
+      assert "client authentication" in ext.lower(), f"Client auth not in extended key usage: {ext}"
 
     with subtest("Certificate TTL is respected"):
       # Issue cert with 1 hour TTL
