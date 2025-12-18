@@ -26,6 +26,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use super::ComplianceConfig;
+use crate::tls::TlsMode;
 
 /// Status of a single compliance control
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -335,6 +336,49 @@ impl<'a> ComplianceValidator<'a> {
                 "SC-8(1)",
                 "Cryptographic Protection",
             ));
+        }
+    }
+
+    /// Validate HTTP TLS enforcement mode (SC-8)
+    ///
+    /// Checks that the TLS mode meets the profile's requirements:
+    /// - All profiles require TLS enforcement (Required or Strict mode)
+    /// - Disabled and Opportunistic modes fail compliance
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use barbican::tls::TlsMode;
+    ///
+    /// let config = ComplianceConfig::from_profile(ComplianceProfile::FedRampModerate);
+    /// let mut validator = ComplianceValidator::new(&config);
+    ///
+    /// validator.validate_http_tls(TlsMode::Required);
+    /// let report = validator.finish();
+    /// assert!(report.is_compliant());
+    /// ```
+    pub fn validate_http_tls(&mut self, mode: TlsMode) {
+        if self.config.require_tls && !mode.is_compliant() {
+            self.report.add_control(ControlStatus::failed(
+                "SC-8",
+                "HTTP TLS Enforcement",
+                format!(
+                    "TLS mode '{}' is not compliant - Required or Strict mode needed",
+                    mode
+                ),
+            ));
+        } else if self.config.require_tls {
+            self.report.add_control(ControlStatus::satisfied(
+                "SC-8",
+                "HTTP TLS Enforcement",
+            ));
+        }
+
+        // Additional warning for Strict mode benefits
+        if mode == TlsMode::Required {
+            self.report.add_warning(
+                "SC-8(1): Consider using TlsMode::Strict for TLS version validation",
+            );
         }
     }
 
@@ -893,5 +937,49 @@ mod tests {
         let controls = value.get("controls").expect("controls field");
         assert!(controls.is_array());
         assert_eq!(controls.as_array().unwrap().len(), 2);
+    }
+
+    // TLS Mode validation tests
+
+    #[test]
+    fn test_validator_http_tls_required_mode() {
+        let config = ComplianceConfig::from_profile(ComplianceProfile::FedRampModerate);
+        let mut validator = ComplianceValidator::new(&config);
+
+        validator.validate_http_tls(TlsMode::Required);
+        let report = validator.finish();
+        assert!(report.is_compliant());
+    }
+
+    #[test]
+    fn test_validator_http_tls_strict_mode() {
+        let config = ComplianceConfig::from_profile(ComplianceProfile::FedRampModerate);
+        let mut validator = ComplianceValidator::new(&config);
+
+        validator.validate_http_tls(TlsMode::Strict);
+        let report = validator.finish();
+        assert!(report.is_compliant());
+    }
+
+    #[test]
+    fn test_validator_http_tls_disabled_fails() {
+        let config = ComplianceConfig::from_profile(ComplianceProfile::FedRampModerate);
+        let mut validator = ComplianceValidator::new(&config);
+
+        validator.validate_http_tls(TlsMode::Disabled);
+        let report = validator.finish();
+        assert!(!report.is_compliant());
+        assert!(report.failed_controls().any(|c| c.control_id == "SC-8"));
+    }
+
+    #[test]
+    fn test_validator_http_tls_opportunistic_fails() {
+        let config = ComplianceConfig::from_profile(ComplianceProfile::FedRampModerate);
+        let mut validator = ComplianceValidator::new(&config);
+
+        validator.validate_http_tls(TlsMode::Opportunistic);
+        let report = validator.finish();
+        assert!(!report.is_compliant());
+        assert!(report.failed_controls().any(|c| c.control_id == "SC-8"));
     }
 }

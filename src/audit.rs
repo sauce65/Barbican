@@ -212,7 +212,14 @@ fn generate_request_id() -> String {
 }
 
 /// Extract client IP from request headers
-fn extract_client_ip(request: &Request<Body>) -> String {
+///
+/// Checks headers in priority order:
+/// 1. `X-Forwarded-For` (standard, may contain chain - takes first)
+/// 2. `X-Real-IP` (single IP from reverse proxy)
+/// 3. `CF-Connecting-IP` (Cloudflare)
+///
+/// Returns "unknown" if no client IP can be determined.
+pub fn extract_client_ip(request: &Request<Body>) -> String {
     let headers = request.headers();
 
     // X-Forwarded-For (may contain multiple IPs, take first)

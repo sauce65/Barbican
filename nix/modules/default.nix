@@ -13,4 +13,5 @@
   timeSync = import ./time-sync.nix;
   intrusionDetection = import ./intrusion-detection.nix;
   systemdHardening = import ./systemd-hardening.nix;
+  vaultPki = import ./vault-pki.nix;  # SC-12, SC-17: PKI/Key Management
 }

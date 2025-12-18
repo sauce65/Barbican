@@ -4,6 +4,7 @@
 
 use std::time::Duration;
 use crate::parse::{parse_duration, parse_size};
+use crate::tls::TlsMode;
 
 /// Security configuration for the API infrastructure layer.
 ///
@@ -14,6 +15,7 @@ use crate::parse::{parse_duration, parse_size};
 /// - SC-5: Request Timeouts
 /// - SC-6: CORS Policy
 /// - SC-7: Structured Logging (TraceLayer)
+/// - SC-8: TLS Enforcement (HTTPS required)
 ///
 /// # Example
 ///
@@ -60,6 +62,10 @@ pub struct SecurityConfig {
 
     /// Enable request/response tracing (SC-7)
     pub tracing_enabled: bool,
+
+    /// TLS enforcement mode (SC-8)
+    /// Controls HTTPS requirement for incoming requests
+    pub tls_mode: TlsMode,
 }
 
 impl Default for SecurityConfig {
@@ -73,6 +79,27 @@ impl Default for SecurityConfig {
             cors_origins: Vec::new(), // Restrictive by default
             security_headers_enabled: true,
             tracing_enabled: true,
+            tls_mode: TlsMode::Required, // SC-8: HTTPS required by default
+        }
+    }
+}
+
+impl SecurityConfig {
+    /// Create a development configuration with relaxed security.
+    ///
+    /// WARNING: Never use in production. Disables TLS enforcement
+    /// and allows permissive CORS.
+    pub fn development() -> Self {
+        Self {
+            max_request_size: 10 * 1024 * 1024, // 10MB
+            request_timeout: Duration::from_secs(60),
+            rate_limit_per_second: 100,
+            rate_limit_burst: 200,
+            rate_limit_enabled: false,
+            cors_origins: vec!["*".to_string()],
+            security_headers_enabled: false,
+            tracing_enabled: true,
+            tls_mode: TlsMode::Disabled, // Development only!
         }
     }
 }
@@ -90,6 +117,7 @@ impl SecurityConfig {
     /// - `CORS_ALLOWED_ORIGINS`: comma-separated, or "*" (default: empty/restrictive)
     /// - `SECURITY_HEADERS_ENABLED`: "true"/"false" (default: "true")
     /// - `TRACING_ENABLED`: "true"/"false" (default: "true")
+    /// - `TLS_MODE`: "disabled", "opportunistic", "required", "strict" (default: "required")
     pub fn from_env() -> Self {
         let max_request_size = std::env::var("MAX_REQUEST_SIZE")
             .map(|s| parse_size(&s))
@@ -134,6 +162,11 @@ impl SecurityConfig {
             .map(|s| s.to_lowercase() != "false")
             .unwrap_or(true);
 
+        let tls_mode = std::env::var("TLS_MODE")
+            .ok()
+            .and_then(|s| TlsMode::from_str_loose(&s))
+            .unwrap_or(TlsMode::Required);
+
         Self {
             max_request_size,
             request_timeout,
@@ -143,6 +176,7 @@ impl SecurityConfig {
             cors_origins,
             security_headers_enabled,
             tracing_enabled,
+            tls_mode,
         }
     }
 
@@ -215,6 +249,18 @@ impl SecurityConfigBuilder {
     /// Disable rate limiting (for testing only!).
     pub fn disable_rate_limiting(mut self) -> Self {
         self.config.rate_limit_enabled = false;
+        self
+    }
+
+    /// Set TLS enforcement mode (SC-8).
+    pub fn tls_mode(mut self, mode: TlsMode) -> Self {
+        self.config.tls_mode = mode;
+        self
+    }
+
+    /// Disable TLS enforcement (development only!).
+    pub fn disable_tls_enforcement(mut self) -> Self {
+        self.config.tls_mode = TlsMode::Disabled;
         self
     }
 

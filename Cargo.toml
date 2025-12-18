@@ -69,3 +69,8 @@ hmac = { version = "0.12", optional = true }
 sha2 = { version = "0.10", optional = true }
 base64 = { version = "0.22", optional = true }
 thiserror = { version = "2.0", optional = true }
+
+# Examples that require specific features
+[[example]]
+name = "generate_compliance_report"
+required-features = ["compliance-artifacts"]

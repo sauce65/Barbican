@@ -9,6 +9,7 @@
 //!
 //! ### Infrastructure Layer
 //! - **[`layers`]**: Security headers, rate limiting, CORS, timeouts (SC-5, SC-8, CM-6, AC-4)
+//! - **[`tls`]**: HTTP TLS enforcement middleware (SC-8, SC-8(1))
 //! - **[`audit`]**: Security-aware HTTP audit middleware (AU-2, AU-3, AU-12)
 //! - **[`observability`]**: Structured logging, metrics, distributed tracing (AU-2, AU-3, AU-12)
 //! - **[`observability::stack`]**: FedRAMP-compliant observability infrastructure generator (20 controls)
@@ -240,6 +241,7 @@ mod crypto;
 mod database;
 mod layers;
 mod parse;
+pub mod tls;
 
 // Security audit middleware (AU-2, AU-3, AU-12)
 pub mod audit;
@@ -321,4 +323,7 @@ pub use database::{
 pub use compliance::{ComplianceConfig, ComplianceProfile, ComplianceValidator};
 
 // Audit middleware re-exports (AU-2, AU-3, AU-12)
-pub use audit::{audit_middleware, AuditRecord, AuditOutcome};
+pub use audit::{audit_middleware, extract_client_ip, AuditRecord, AuditOutcome};
+
+// TLS enforcement re-exports (SC-8, SC-8(1))
+pub use tls::{TlsMode, TlsInfo, detect_tls, tls_enforcement_middleware};

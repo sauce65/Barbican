@@ -3,6 +3,7 @@
 //! Provides the `SecureRouter` trait that wraps any router with security layers.
 
 use axum::http::{header, HeaderValue, Method, StatusCode};
+use axum::middleware;
 use axum::Router;
 use tower_http::{
     cors::{Any, CorsLayer},
@@ -14,6 +15,7 @@ use tower_http::{
 use tower_governor::{governor::GovernorConfigBuilder, GovernorLayer};
 
 use crate::config::SecurityConfig;
+use crate::tls::{tls_enforcement_middleware, TlsMode};
 
 /// Extension trait for applying security layers to an Axum Router.
 ///
@@ -38,11 +40,12 @@ pub trait SecureRouter {
     ///
     /// Layers are applied in the correct order for proper security:
     /// 1. TraceLayer (outermost - logs all requests)
-    /// 2. CorsLayer (handles preflight)
-    /// 3. Security Headers
-    /// 4. Rate Limiting
-    /// 5. Request Body Limit
-    /// 6. Timeout (innermost)
+    /// 2. TLS Enforcement (SC-8 - rejects HTTP if required)
+    /// 3. CorsLayer (handles preflight)
+    /// 4. Security Headers
+    /// 5. Rate Limiting
+    /// 6. Request Body Limit
+    /// 7. Timeout (innermost)
     fn with_security(self, config: SecurityConfig) -> Self;
 }
 
@@ -117,6 +120,15 @@ where
         // SOC 2 CC6.6
         let cors_layer = build_cors_layer(&config);
         router = router.layer(cors_layer);
+
+        // SC-8: Transmission Confidentiality - TLS enforcement
+        // Rejects non-HTTPS requests based on proxy headers
+        if config.tls_mode != TlsMode::Disabled {
+            let tls_mode = config.tls_mode;
+            router = router.layer(middleware::from_fn(move |req, next| {
+                tls_enforcement_middleware(req, next, tls_mode)
+            }));
+        }
 
         // AU-2, AU-3, AU-12: Audit Logging - Basic HTTP request tracing
         // For security event logging, use observability::SecurityEvent
