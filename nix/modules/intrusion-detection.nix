@@ -157,7 +157,7 @@ in {
       };
     };
 
-    # Process accounting
-    services.acct.enable = cfg.enableProcessAccounting;
+    # Process accounting (deprecated in modern NixOS - option removed)
+    # Use systemd resource accounting instead (enabled by default)
   };
 }

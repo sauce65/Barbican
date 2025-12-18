@@ -99,8 +99,8 @@ in {
       '';
 
       settings = {
-        # Listen only on specified address
-        listen_addresses = "'${cfg.listenAddress}'";
+        # Listen only on specified address (force override default)
+        listen_addresses = mkForce "'${cfg.listenAddress}'";
 
         # Password encryption
         password_encryption = "scram-sha-256";

@@ -58,10 +58,10 @@ in {
       { domain = "*"; type = "hard"; item = "core"; value = "0"; }
     ];
 
-    # Disable core dumps via sysctl
+    # Disable core dumps via sysctl (use mkDefault to avoid conflict with kernel-hardening)
     boot.kernel.sysctl = mkIf cfg.limitCoredump {
-      "kernel.core_pattern" = "|/bin/false";
-      "fs.suid_dumpable" = 0;
+      "kernel.core_pattern" = mkDefault "|/bin/false";
+      "fs.suid_dumpable" = mkDefault 0;
     };
 
     # Default systemd service overrides

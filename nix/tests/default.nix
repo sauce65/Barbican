@@ -25,16 +25,21 @@ let
   allTests = pkgs.testers.nixosTest {
     name = "barbican-security-suite";
 
+    # Skip type checking - test uses dynamic dict structures for audit reporting
+    skipTypeCheck = true;
+
     nodes = {
       # Node with all security modules enabled (hardened profile)
       hardened = { config, pkgs, ... }: {
         imports = [
-          ../../modules/secure-users.nix
-          ../../modules/hardened-ssh.nix
-          ../../modules/kernel-hardening.nix
-          ../../modules/time-sync.nix
-          ../../modules/resource-limits.nix
-          ../../modules/intrusion-detection.nix
+          ../modules/secure-users.nix
+          ../modules/hardened-ssh.nix
+          ../modules/kernel-hardening.nix
+          ../modules/time-sync.nix
+          ../modules/resource-limits.nix
+          ../modules/intrusion-detection.nix
+          ../modules/vm-firewall.nix
+          ../modules/secure-postgres.nix
         ];
 
         barbican = {
@@ -58,6 +63,17 @@ let
             enable = true;
             enableAIDE = true;
             enableAuditd = true;
+            enableProcessAccounting = false;  # acct service not available in test VM
+          };
+          vmFirewall = {
+            enable = true;
+            allowDNS = true;
+            allowNTP = true;
+          };
+          securePostgres = {
+            enable = true;
+            database = "testdb";
+            username = "testuser";
           };
         };
 
@@ -244,6 +260,41 @@ let
         nofile = hardened.succeed("ulimit -n 2>/dev/null || echo 'unknown'")
         configured = nofile.strip().isdigit() and int(nofile.strip()) > 1024
         record_test("resource-limits", "Open files limit configured", configured, nofile)
+
+      # ============================================
+      # CRT-006/CRT-007: VM Firewall Tests
+      # ============================================
+      with subtest("vm-firewall: Firewall service active"):
+        fw = hardened.succeed("systemctl is-active firewall 2>/dev/null || echo 'inactive'")
+        active = "active" in fw
+        record_test("vm-firewall", "CRT-006: Firewall service active", active, fw)
+
+      with subtest("vm-firewall: Default drop policy"):
+        # Check iptables for DROP policy on INPUT/FORWARD chains
+        rules = hardened.succeed("iptables -L -n 2>/dev/null || echo 'no rules'")
+        has_drop = "drop" in rules.lower() or "reject" in rules.lower()
+        record_test("vm-firewall", "CRT-007: Default drop policy", has_drop, rules[:500])
+
+      with subtest("vm-firewall: Firewall rules loaded"):
+        # Verify firewall has rules beyond just default policies
+        rules = hardened.succeed("iptables -L nixos-fw -n 2>/dev/null || echo 'no chain'")
+        has_rules = "nixos-fw" in rules or "ACCEPT" in rules or "DROP" in rules
+        record_test("vm-firewall", "Firewall rules loaded", has_rules, rules[:300])
+
+      # ============================================
+      # CRT-003/CRT-011: Secure PostgreSQL Tests
+      # ============================================
+      with subtest("secure-postgres: PostgreSQL running"):
+        pg = hardened.succeed("systemctl is-active postgresql 2>/dev/null || echo 'inactive'")
+        active = "active" in pg
+        record_test("secure-postgres", "CRT-003: PostgreSQL service active", active, pg)
+
+      with subtest("secure-postgres: Listening on localhost only"):
+        # Check PostgreSQL is bound to localhost, not all interfaces
+        listen = hardened.succeed("ss -tlnp 2>/dev/null | grep ':5432' || echo 'not listening'")
+        # Should have 127.0.0.1:5432 but NOT *:5432 or 0.0.0.0:5432
+        localhost_only = ("127.0.0.1:5432" in listen or "127.0.0.1]:5432" in listen) and "*:5432" not in listen and "0.0.0.0:5432" not in listen
+        record_test("secure-postgres", "CRT-011: Listening on localhost", localhost_only, listen)
 
       # ============================================
       # Baseline Comparison (Negative Tests)

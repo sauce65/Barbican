@@ -56,10 +56,10 @@ in {
 
         # Make first sync faster
         makestep 1.0 3
-
-        # Enable RTC sync
-        rtcsync
       '';
+
+      # Use NixOS native RTC trimming (replaces deprecated rtcsync)
+      enableRTCTrimming = true;
     };
 
     # Set timezone explicitly
