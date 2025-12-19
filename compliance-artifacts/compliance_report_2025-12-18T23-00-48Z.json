@@ -1,0 +1,1624 @@
+{
+  "schema_version": "1.0.0",
+  "generated_at": "2025-12-18T23:00:48.179391805Z",
+  "barbican_version": "0.1.0",
+  "rust_version": "unknown",
+  "compliance_profile": "FedRAMP Moderate",
+  "artifacts": [
+    {
+      "control_id": "AC-3",
+      "control_name": "Access Enforcement",
+      "test_name": "role_and_scope_enforcement",
+      "description": "Verify role-based and scope-based access controls work correctly (AC-3)",
+      "executed_at": "2025-12-18T23:00:48.179593741Z",
+      "duration_ms": 0,
+      "code_location": {
+        "file": "src/auth.rs",
+        "line_start": 161,
+        "line_end": 184,
+        "function": null
+      },
+      "inputs": {
+        "required_scope": "write:data",
+        "user_role": "user",
+        "admin_role": "admin"
+      },
+      "expected": {
+        "role_check_works": true,
+        "multi_role_check_works": true,
+        "scope_check_works": true
+      },
+      "observed": {
+        "multi_role_check_works": true,
+        "scope_check_works": true,
+        "role_check_works": true
+      },
+      "passed": true,
+      "failure_reason": null,
+      "evidence": [
+        {
+          "evidence_type": "configuration",
+          "timestamp": "2025-12-18T23:00:48.179531788Z",
+          "content": {
+            "name": "admin_claims",
+            "value": {
+              "roles": [
+                "admin",
+                "user"
+              ],
+              "scopes": [
+                "read:data",
+                "write:data"
+              ],
+              "subject": "user-123"
+            }
+          },
+          "description": null
+        },
+        {
+          "evidence_type": "configuration",
+          "timestamp": "2025-12-18T23:00:48.179549961Z",
+          "content": {
+            "name": "user_claims",
+            "value": {
+              "roles": [
+                "user"
+              ],
+              "scopes": [
+                "read:data"
+              ],
+              "subject": "user-456"
+            }
+          },
+          "description": null
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-18T23:00:48.179571751Z",
+          "content": {
+            "details": {
+              "admin_has_admin": true,
+              "user_has_admin": false
+            },
+            "passed": true
+          },
+          "description": "Admin should have admin role, user should not"
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-18T23:00:48.179574476Z",
+          "content": {
+            "details": {
+              "admin_has_write": true,
+              "user_has_write": false
+            },
+            "passed": true
+          },
+          "description": "Admin should have write scope, user should not"
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-18T23:00:48.179580346Z",
+          "content": {
+            "details": {
+              "has_all_admin_user": true,
+              "has_any_admin_superuser": true
+            },
+            "passed": true
+          },
+          "description": "Multi-role checks should work correctly"
+        }
+      ],
+      "related_controls": [
+        "AC-6",
+        "IA-2"
+      ]
+    },
+    {
+      "control_id": "AC-4",
+      "control_name": "Information Flow Enforcement",
+      "test_name": "cors_not_permissive_by_default",
+      "description": "Verify CORS is not permissive by default (AC-4)",
+      "executed_at": "2025-12-18T23:00:48.179618646Z",
+      "duration_ms": 0,
+      "code_location": {
+        "file": "src/config.rs",
+        "line_start": 155,
+        "line_end": 165,
+        "function": null
+      },
+      "inputs": {},
+      "expected": {
+        "permissive_detected": true,
+        "default_not_permissive": true
+      },
+      "observed": {
+        "default_not_permissive": true,
+        "permissive_detected": true
+      },
+      "passed": true,
+      "failure_reason": null,
+      "evidence": [
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-18T23:00:48.179607666Z",
+          "content": {
+            "details": {
+              "cors_origins": [],
+              "is_permissive": false
+            },
+            "passed": true
+          },
+          "description": "Default CORS should not be permissive"
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-18T23:00:48.179611373Z",
+          "content": {
+            "details": {
+              "is_permissive": true
+            },
+            "passed": true
+          },
+          "description": "Permissive CORS should be detected"
+        }
+      ],
+      "related_controls": []
+    },
+    {
+      "control_id": "AC-7",
+      "control_name": "Unsuccessful Logon Attempts",
+      "test_name": "lockout_after_max_attempts",
+      "description": "Verify account locks after configured number of failed login attempts (AC-7)",
+      "executed_at": "2025-12-18T23:00:48.179657266Z",
+      "duration_ms": 0,
+      "code_location": {
+        "file": "src/login.rs",
+        "line_start": 418,
+        "line_end": 554,
+        "function": null
+      },
+      "inputs": {
+        "username": "test@example.com",
+        "max_attempts": 3
+      },
+      "expected": {
+        "allowed_before_lockout": true,
+        "locked_after_3_attempts": true
+      },
+      "observed": {
+        "allowed_before_lockout": true,
+        "locked_after_3_attempts": true
+      },
+      "passed": true,
+      "failure_reason": null,
+      "evidence": [
+        {
+          "evidence_type": "configuration",
+          "timestamp": "2025-12-18T23:00:48.179627702Z",
+          "content": {
+            "name": "lockout_policy",
+            "value": {
+              "lockout_duration_secs": 1800,
+              "max_attempts": 3,
+              "progressive_lockout": true
+            }
+          },
+          "description": null
+        },
+        {
+          "evidence_type": "log",
+          "timestamp": "2025-12-18T23:00:48.179643010Z",
+          "content": "Attempt 1: failed_count=1, is_locked=false",
+          "description": null
+        },
+        {
+          "evidence_type": "log",
+          "timestamp": "2025-12-18T23:00:48.179644944Z",
+          "content": "Attempt 2: failed_count=2, is_locked=false",
+          "description": null
+        },
+        {
+          "evidence_type": "log",
+          "timestamp": "2025-12-18T23:00:48.179647278Z",
+          "content": "Attempt 3: failed_count=3, is_locked=true",
+          "description": null
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-18T23:00:48.179648250Z",
+          "content": {
+            "details": {
+              "attempt1_allowed": true,
+              "attempt2_allowed": true
+            },
+            "passed": true
+          },
+          "description": "First two attempts should not lock out"
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-18T23:00:48.179649802Z",
+          "content": {
+            "details": {
+              "locked_after_3": true
+            },
+            "passed": true
+          },
+          "description": "Third attempt should trigger lockout"
+        }
+      ],
+      "related_controls": [
+        "AC-2",
+        "IA-5"
+      ]
+    },
+    {
+      "control_id": "AC-11",
+      "control_name": "Session Lock",
+      "test_name": "session_timeout_configuration",
+      "description": "Verify session policy includes idle and absolute timeout (AC-11)",
+      "executed_at": "2025-12-18T23:00:48.179683433Z",
+      "duration_ms": 0,
+      "code_location": {
+        "file": "src/session.rs",
+        "line_start": 43,
+        "line_end": 167,
+        "function": null
+      },
+      "inputs": {
+        "expected_idle_timeout": true,
+        "expected_max_lifetime": true
+      },
+      "expected": {
+        "fresh_session_valid": true,
+        "max_lifetime_configured": true,
+        "idle_timeout_configured": true
+      },
+      "observed": {
+        "max_lifetime_configured": true,
+        "fresh_session_valid": true,
+        "idle_timeout_configured": true
+      },
+      "passed": true,
+      "failure_reason": null,
+      "evidence": [
+        {
+          "evidence_type": "configuration",
+          "timestamp": "2025-12-18T23:00:48.179668386Z",
+          "content": {
+            "name": "session_policy",
+            "value": {
+              "allow_extension": false,
+              "idle_timeout_secs": 900,
+              "max_lifetime_secs": 14400,
+              "require_reauth_for_sensitive": true
+            }
+          },
+          "description": null
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-18T23:00:48.179672113Z",
+          "content": {
+            "details": {
+              "idle_timeout_secs": 900
+            },
+            "passed": true
+          },
+          "description": "Idle timeout should be configured"
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-18T23:00:48.179673255Z",
+          "content": {
+            "details": {
+              "max_lifetime_secs": 14400
+            },
+            "passed": true
+          },
+          "description": "Max lifetime should be configured"
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-18T23:00:48.179677693Z",
+          "content": {
+            "details": {
+              "termination_reason": "None"
+            },
+            "passed": true
+          },
+          "description": "Fresh session should not be terminated"
+        }
+      ],
+      "related_controls": [
+        "AC-12",
+        "SC-10"
+      ]
+    },
+    {
+      "control_id": "AC-12",
+      "control_name": "Session Termination",
+      "test_name": "absolute_timeout_enforcement",
+      "description": "Verify sessions terminate after max lifetime is exceeded (AC-12)",
+      "executed_at": "2025-12-18T23:00:48.179705824Z",
+      "duration_ms": 0,
+      "code_location": {
+        "file": "src/session.rs",
+        "line_start": 143,
+        "line_end": 167,
+        "function": null
+      },
+      "inputs": {
+        "max_lifetime_hours": 4
+      },
+      "expected": {
+        "max_lifetime_enforced": true,
+        "fresh_session_valid": true
+      },
+      "observed": {
+        "max_lifetime_enforced": true,
+        "fresh_session_valid": true
+      },
+      "passed": true,
+      "failure_reason": null,
+      "evidence": [
+        {
+          "evidence_type": "configuration",
+          "timestamp": "2025-12-18T23:00:48.179691147Z",
+          "content": {
+            "name": "session_policy",
+            "value": {
+              "allow_extension": false,
+              "idle_timeout_secs": 900,
+              "max_lifetime_secs": 14400
+            }
+          },
+          "description": null
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-18T23:00:48.179694684Z",
+          "content": {
+            "details": {
+              "termination_reason": "None"
+            },
+            "passed": true
+          },
+          "description": "Fresh session should not be terminated"
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-18T23:00:48.179695796Z",
+          "content": {
+            "details": {
+              "max_lifetime_secs": 14400
+            },
+            "passed": true
+          },
+          "description": "Max lifetime should be configured"
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-18T23:00:48.179700554Z",
+          "content": {
+            "details": {
+              "idle_timeout_msg": "Your session timed out due to inactivity. Please sign in again.",
+              "max_lifetime_msg": "Your session has expired. Please sign in again.",
+              "token_expired_msg": "Your session has expired. Please sign in again."
+            },
+            "passed": true
+          },
+          "description": "Termination reasons should have messages"
+        }
+      ],
+      "related_controls": [
+        "AC-11",
+        "SC-10"
+      ]
+    },
+    {
+      "control_id": "AU-2",
+      "control_name": "Audit Events",
+      "test_name": "security_event_coverage",
+      "description": "Verify all required security event types are defined (AU-2)",
+      "executed_at": "2025-12-18T23:00:48.179734125Z",
+      "duration_ms": 0,
+      "code_location": {
+        "file": "src/observability/events.rs",
+        "line_start": 38,
+        "line_end": 120,
+        "function": null
+      },
+      "inputs": {},
+      "expected": {
+        "has_system_events": true,
+        "has_access_events": true,
+        "has_auth_events": true
+      },
+      "observed": {
+        "has_access_events": true,
+        "has_auth_events": true,
+        "has_system_events": true
+      },
+      "passed": true,
+      "failure_reason": null,
+      "evidence": [
+        {
+          "evidence_type": "log",
+          "timestamp": "2025-12-18T23:00:48.179714389Z",
+          "content": "Auth events defined: 5",
+          "description": null
+        },
+        {
+          "evidence_type": "log",
+          "timestamp": "2025-12-18T23:00:48.179714720Z",
+          "content": "Access events defined: 2",
+          "description": null
+        },
+        {
+          "evidence_type": "log",
+          "timestamp": "2025-12-18T23:00:48.179715221Z",
+          "content": "System events defined: 3",
+          "description": null
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-18T23:00:48.179718537Z",
+          "content": {
+            "details": {
+              "events": [
+                "authentication_success",
+                "authentication_failure",
+                "logout",
+                "session_created",
+                "session_destroyed"
+              ]
+            },
+            "passed": true
+          },
+          "description": "Authentication events should be defined"
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-18T23:00:48.179721532Z",
+          "content": {
+            "details": {
+              "events": [
+                "access_granted",
+                "access_denied"
+              ]
+            },
+            "passed": true
+          },
+          "description": "Access control events should be defined"
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-18T23:00:48.179726431Z",
+          "content": {
+            "details": {
+              "events": [
+                "system_startup",
+                "system_shutdown",
+                "configuration_changed"
+              ]
+            },
+            "passed": true
+          },
+          "description": "System events should be defined"
+        }
+      ],
+      "related_controls": [
+        "AU-3",
+        "AU-12"
+      ]
+    },
+    {
+      "control_id": "AU-3",
+      "control_name": "Content of Audit Records",
+      "test_name": "audit_record_fields",
+      "description": "Verify security events have required audit fields (AU-3)",
+      "executed_at": "2025-12-18T23:00:48.179754652Z",
+      "duration_ms": 0,
+      "code_location": {
+        "file": "src/observability/events.rs",
+        "line_start": 120,
+        "line_end": 200,
+        "function": null
+      },
+      "inputs": {},
+      "expected": {
+        "has_category": true,
+        "has_severity": true,
+        "has_name": true
+      },
+      "observed": {
+        "has_category": true,
+        "has_name": true,
+        "has_severity": true
+      },
+      "passed": true,
+      "failure_reason": null,
+      "evidence": [
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-18T23:00:48.179739535Z",
+          "content": {
+            "details": {
+              "name": "authentication_failure"
+            },
+            "passed": true
+          },
+          "description": "Event should have a name"
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-18T23:00:48.179741038Z",
+          "content": {
+            "details": {
+              "category": "authentication"
+            },
+            "passed": true
+          },
+          "description": "Event should have a category"
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-18T23:00:48.179742591Z",
+          "content": {
+            "details": {
+              "severity": "High"
+            },
+            "passed": true
+          },
+          "description": "Event should have a severity"
+        },
+        {
+          "evidence_type": "configuration",
+          "timestamp": "2025-12-18T23:00:48.179746718Z",
+          "content": {
+            "name": "sample_event",
+            "value": {
+              "category": "authentication",
+              "event": "AuthenticationFailure",
+              "name": "authentication_failure",
+              "severity": "High"
+            }
+          },
+          "description": null
+        }
+      ],
+      "related_controls": [
+        "AU-2"
+      ]
+    },
+    {
+      "control_id": "AU-12",
+      "control_name": "Audit Record Generation",
+      "test_name": "audit_record_creation",
+      "description": "Verify audit records can be generated with required fields (AU-12)",
+      "executed_at": "2025-12-18T23:00:48.179793513Z",
+      "duration_ms": 0,
+      "code_location": {
+        "file": "src/audit.rs",
+        "line_start": 266,
+        "line_end": 313,
+        "function": null
+      },
+      "inputs": {},
+      "expected": {
+        "record_has_required_fields": true,
+        "outcomes_defined": true
+      },
+      "observed": {
+        "outcomes_defined": true,
+        "record_has_required_fields": true
+      },
+      "passed": true,
+      "failure_reason": null,
+      "evidence": [
+        {
+          "evidence_type": "configuration",
+          "timestamp": "2025-12-18T23:00:48.179766834Z",
+          "content": {
+            "name": "audit_record",
+            "value": {
+              "action": "POST",
+              "actor": "user-123",
+              "details": "Login successful",
+              "event_type": "authentication",
+              "id": "audit-001",
+              "outcome": "success",
+              "resource": "/api/login",
+              "source_ip": "192.168.1.100",
+              "timestamp": "2025-12-18T12:00:00Z"
+            }
+          },
+          "description": null
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-18T23:00:48.179777364Z",
+          "content": {
+            "details": {
+              "has_action": true,
+              "has_actor": true,
+              "has_id": true,
+              "has_resource": true,
+              "has_timestamp": true
+            },
+            "passed": true
+          },
+          "description": "Audit record should have all required fields"
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-18T23:00:48.179786771Z",
+          "content": {
+            "details": {
+              "outcomes": [
+                "success",
+                "failure",
+                "denied",
+                "rate_limited"
+              ]
+            },
+            "passed": true
+          },
+          "description": "All audit outcomes should be defined"
+        }
+      ],
+      "related_controls": [
+        "AU-2",
+        "AU-3"
+      ]
+    },
+    {
+      "control_id": "CM-6",
+      "control_name": "Configuration Management",
+      "test_name": "security_headers_enabled",
+      "description": "Verify security headers are enabled by default (CM-6)",
+      "executed_at": "2025-12-18T23:00:48.179813389Z",
+      "duration_ms": 0,
+      "code_location": {
+        "file": "src/config.rs",
+        "line_start": 35,
+        "line_end": 93,
+        "function": null
+      },
+      "inputs": {},
+      "expected": {
+        "security_headers_enabled": true,
+        "tracing_enabled": true
+      },
+      "observed": {
+        "security_headers_enabled": true,
+        "tracing_enabled": true
+      },
+      "passed": true,
+      "failure_reason": null,
+      "evidence": [
+        {
+          "evidence_type": "configuration",
+          "timestamp": "2025-12-18T23:00:48.179799253Z",
+          "content": {
+            "name": "security_config",
+            "value": {
+              "security_headers_enabled": true,
+              "tracing_enabled": true
+            }
+          },
+          "description": null
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-18T23:00:48.179801537Z",
+          "content": {
+            "details": {
+              "enabled": true
+            },
+            "passed": true
+          },
+          "description": "Security headers should be enabled by default"
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-18T23:00:48.179809482Z",
+          "content": {
+            "details": {
+              "enabled": true
+            },
+            "passed": true
+          },
+          "description": "Tracing should be enabled by default"
+        }
+      ],
+      "related_controls": [
+        "SC-8"
+      ]
+    },
+    {
+      "control_id": "IA-2",
+      "control_name": "Identification and Authentication",
+      "test_name": "mfa_policy_enforcement",
+      "description": "Verify MFA policy correctly enforces multi-factor authentication (IA-2)",
+      "executed_at": "2025-12-18T23:00:48.179839717Z",
+      "duration_ms": 0,
+      "code_location": {
+        "file": "src/auth.rs",
+        "line_start": 467,
+        "line_end": 630,
+        "function": null
+      },
+      "inputs": {
+        "mfa_required": true
+      },
+      "expected": {
+        "mfa_satisfied_with_amr": true,
+        "mfa_enforced_without_amr": true
+      },
+      "observed": {
+        "mfa_enforced_without_amr": true,
+        "mfa_satisfied_with_amr": true
+      },
+      "passed": true,
+      "failure_reason": null,
+      "evidence": [
+        {
+          "evidence_type": "configuration",
+          "timestamp": "2025-12-18T23:00:48.179825020Z",
+          "content": {
+            "name": "mfa_policy",
+            "value": {
+              "requirement": "Multi-factor authentication required"
+            }
+          },
+          "description": null
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-18T23:00:48.179828015Z",
+          "content": {
+            "details": {
+              "has_amr": false,
+              "policy_satisfied": false
+            },
+            "passed": true
+          },
+          "description": "MFA should be enforced for claims without AMR"
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-18T23:00:48.179832944Z",
+          "content": {
+            "details": {
+              "has_amr": true,
+              "policy_satisfied": true
+            },
+            "passed": true
+          },
+          "description": "MFA should be satisfied with proper AMR claims"
+        }
+      ],
+      "related_controls": [
+        "IA-5"
+      ]
+    },
+    {
+      "control_id": "IA-5(1)",
+      "control_name": "Password-Based Authentication",
+      "test_name": "password_policy_enforcement",
+      "description": "Verify password policy meets NIST 800-63B requirements (IA-5(1))",
+      "executed_at": "2025-12-18T23:00:48.179875121Z",
+      "duration_ms": 0,
+      "code_location": {
+        "file": "src/password.rs",
+        "line_start": 61,
+        "line_end": 265,
+        "function": null
+      },
+      "inputs": {
+        "strong_password": "K9$mP2vL#nQr5xWz",
+        "min_length": 12,
+        "weak_password": "password123",
+        "short_password": "short"
+      },
+      "expected": {
+        "weak_password_rejected": true,
+        "short_password_rejected": true,
+        "strong_password_accepted": true
+      },
+      "observed": {
+        "weak_password_rejected": true,
+        "short_password_rejected": true,
+        "strong_password_accepted": true
+      },
+      "passed": true,
+      "failure_reason": null,
+      "evidence": [
+        {
+          "evidence_type": "configuration",
+          "timestamp": "2025-12-18T23:00:48.179850586Z",
+          "content": {
+            "name": "password_policy",
+            "value": {
+              "check_common_passwords": true,
+              "disallow_username_in_password": true,
+              "max_length": 128,
+              "min_length": 12
+            }
+          },
+          "description": null
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-18T23:00:48.179856307Z",
+          "content": {
+            "details": {
+              "result": "Err(TooShort { min: 12, actual: 11 })"
+            },
+            "passed": true
+          },
+          "description": "Weak/common password should be rejected"
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-18T23:00:48.179860124Z",
+          "content": {
+            "details": {
+              "result": "Err(TooShort { min: 12, actual: 5 })"
+            },
+            "passed": true
+          },
+          "description": "Short password should be rejected"
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-18T23:00:48.179867998Z",
+          "content": {
+            "details": {
+              "result": "Ok(())"
+            },
+            "passed": true
+          },
+          "description": "Strong password should be accepted"
+        }
+      ],
+      "related_controls": []
+    },
+    {
+      "control_id": "IA-5(7)",
+      "control_name": "No Embedded Unencrypted Static Authenticators",
+      "test_name": "secret_detection_scanner",
+      "description": "Verify secret detection identifies embedded authenticators (IA-5(7))",
+      "executed_at": "2025-12-18T23:00:48.204154858Z",
+      "duration_ms": 24,
+      "code_location": {
+        "file": "src/secrets.rs",
+        "line_start": 1,
+        "line_end": 700,
+        "function": null
+      },
+      "inputs": {
+        "test_aws_key": "AKIAIOSFODNN7EXAMPLE",
+        "test_github_token": "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "expected": {
+        "detects_aws_credentials": true,
+        "detects_github_tokens": true,
+        "no_false_positives_on_clean_code": true,
+        "detects_private_keys": true
+      },
+      "observed": {
+        "no_false_positives_on_clean_code": true,
+        "detects_private_keys": true,
+        "detects_aws_credentials": true,
+        "detects_github_tokens": true
+      },
+      "passed": true,
+      "failure_reason": null,
+      "evidence": [
+        {
+          "evidence_type": "configuration",
+          "timestamp": "2025-12-18T23:00:48.202065110Z",
+          "content": {
+            "name": "scanner_config",
+            "value": {
+              "pattern_count": 23,
+              "patterns": [
+                "aws-access-key-id",
+                "aws-secret-key",
+                "generic-api-key",
+                "github-pat",
+                "github-oauth",
+                "github-app",
+                "gitlab-pat",
+                "slack-bot-token",
+                "slack-webhook",
+                "discord-webhook",
+                "private-key",
+                "jwt-token",
+                "bearer-token",
+                "database-url",
+                "password-assignment",
+                "gcp-api-key",
+                "gcp-service-account",
+                "azure-storage-key",
+                "stripe-api-key",
+                "sendgrid-api-key",
+                "twilio-api-key",
+                "npm-token",
+                "heroku-api-key"
+              ]
+            }
+          },
+          "description": null
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-18T23:00:48.203317861Z",
+          "content": {
+            "details": {
+              "detected": true,
+              "findings_count": 1
+            },
+            "passed": true
+          },
+          "description": "Should detect AWS access keys"
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-18T23:00:48.203586488Z",
+          "content": {
+            "details": {
+              "detected": true,
+              "findings_count": 1
+            },
+            "passed": true
+          },
+          "description": "Should detect GitHub tokens"
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-18T23:00:48.203905867Z",
+          "content": {
+            "details": {
+              "detected": true,
+              "findings_count": 1
+            },
+            "passed": true
+          },
+          "description": "Should detect private keys"
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-18T23:00:48.203943174Z",
+          "content": {
+            "details": {
+              "findings_count": 0,
+              "no_false_positives": true
+            },
+            "passed": true
+          },
+          "description": "Clean code should produce no findings"
+        },
+        {
+          "evidence_type": "log",
+          "timestamp": "2025-12-18T23:00:48.203951009Z",
+          "content": "Secret categories covered: [\"AWS Credentials\", \"API Key\", \"Git Token\", \"Private Key\", \"OAuth/JWT Token\", \"Database Credential\"]",
+          "description": null
+        }
+      ],
+      "related_controls": [
+        "IA-5",
+        "IA-5(1)"
+      ]
+    },
+    {
+      "control_id": "SC-5",
+      "control_name": "Denial of Service Protection",
+      "test_name": "rate_limiting_configuration",
+      "description": "Verify rate limiting is enabled and configured correctly (SC-5)",
+      "executed_at": "2025-12-18T23:00:48.204191685Z",
+      "duration_ms": 0,
+      "code_location": {
+        "file": "src/layers.rs",
+        "line_start": 67,
+        "line_end": 73,
+        "function": "apply_security_layers"
+      },
+      "inputs": {
+        "expected_rate_limit_enabled": true
+      },
+      "expected": {
+        "has_max_request_size": true,
+        "rate_limiting_enabled": true,
+        "has_request_timeout": true
+      },
+      "observed": {
+        "has_max_request_size": true,
+        "has_request_timeout": true,
+        "rate_limiting_enabled": true
+      },
+      "passed": true,
+      "failure_reason": null,
+      "evidence": [
+        {
+          "evidence_type": "configuration",
+          "timestamp": "2025-12-18T23:00:48.204177399Z",
+          "content": {
+            "name": "security_config",
+            "value": {
+              "max_request_size_bytes": 1048576,
+              "rate_limit_burst": 10,
+              "rate_limit_enabled": true,
+              "rate_limit_per_second": 5,
+              "request_timeout_secs": 30
+            }
+          },
+          "description": null
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-18T23:00:48.204182528Z",
+          "content": {
+            "details": {
+              "enabled": true
+            },
+            "passed": true
+          },
+          "description": "Rate limiting should be enabled by default"
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-18T23:00:48.204183811Z",
+          "content": {
+            "details": {
+              "timeout_secs": 30
+            },
+            "passed": true
+          },
+          "description": "Request timeout should be configured"
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-18T23:00:48.204184923Z",
+          "content": {
+            "details": {
+              "max_size_bytes": 1048576
+            },
+            "passed": true
+          },
+          "description": "Max request size should be configured"
+        }
+      ],
+      "related_controls": []
+    },
+    {
+      "control_id": "SC-8",
+      "control_name": "Transmission Confidentiality and Integrity",
+      "test_name": "security_headers_configuration",
+      "description": "Verify security headers protect data in transit (SC-8)",
+      "executed_at": "2025-12-18T23:00:48.204210399Z",
+      "duration_ms": 0,
+      "code_location": {
+        "file": "src/layers.rs",
+        "line_start": 75,
+        "line_end": 95,
+        "function": null
+      },
+      "inputs": {},
+      "expected": {
+        "security_headers_enabled": true,
+        "can_be_disabled": true
+      },
+      "observed": {
+        "security_headers_enabled": true,
+        "can_be_disabled": true
+      },
+      "passed": true,
+      "failure_reason": null,
+      "evidence": [
+        {
+          "evidence_type": "configuration",
+          "timestamp": "2025-12-18T23:00:48.204202034Z",
+          "content": {
+            "name": "default_config",
+            "value": {
+              "security_headers_enabled": true
+            }
+          },
+          "description": null
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-18T23:00:48.204203957Z",
+          "content": {
+            "details": {
+              "enabled": true
+            },
+            "passed": true
+          },
+          "description": "Security headers should be enabled by default"
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-18T23:00:48.204205530Z",
+          "content": {
+            "details": {
+              "disabled": true
+            },
+            "passed": true
+          },
+          "description": "Security headers can be disabled when needed"
+        }
+      ],
+      "related_controls": [
+        "CM-6"
+      ]
+    },
+    {
+      "control_id": "SC-10",
+      "control_name": "Network Disconnect",
+      "test_name": "session_disconnect_policy",
+      "description": "Verify network sessions can be disconnected per policy (SC-10)",
+      "executed_at": "2025-12-18T23:00:48.204245372Z",
+      "duration_ms": 0,
+      "code_location": {
+        "file": "src/session.rs",
+        "line_start": 143,
+        "line_end": 167,
+        "function": null
+      },
+      "inputs": {},
+      "expected": {
+        "idle_disconnect_configured": true,
+        "termination_reasons_exist": true
+      },
+      "observed": {
+        "termination_reasons_exist": true,
+        "idle_disconnect_configured": true
+      },
+      "passed": true,
+      "failure_reason": null,
+      "evidence": [
+        {
+          "evidence_type": "configuration",
+          "timestamp": "2025-12-18T23:00:48.204220477Z",
+          "content": {
+            "name": "disconnect_policy",
+            "value": {
+              "idle_timeout_secs": 900,
+              "max_lifetime_secs": 14400
+            }
+          },
+          "description": null
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-18T23:00:48.204223002Z",
+          "content": {
+            "details": {
+              "idle_timeout_secs": 900
+            },
+            "passed": true
+          },
+          "description": "Idle timeout should be configured for disconnection"
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-18T23:00:48.204235645Z",
+          "content": {
+            "details": {
+              "reasons": [
+                {
+                  "message": "Your session timed out due to inactivity. Please sign in again.",
+                  "variant": "IdleTimeout"
+                },
+                {
+                  "message": "Your session has expired. Please sign in again.",
+                  "variant": "MaxLifetimeExceeded"
+                },
+                {
+                  "message": "Your session can no longer be extended. Please sign in again.",
+                  "variant": "MaxExtensionsExceeded"
+                },
+                {
+                  "message": "Your session has expired. Please sign in again.",
+                  "variant": "TokenExpired"
+                },
+                {
+                  "message": "You have been signed out.",
+                  "variant": "UserLogout"
+                }
+              ]
+            },
+            "passed": true
+          },
+          "description": "Termination reasons should have descriptive messages"
+        }
+      ],
+      "related_controls": [
+        "AC-11",
+        "AC-12"
+      ]
+    },
+    {
+      "control_id": "SC-12",
+      "control_name": "Cryptographic Key Establishment and Management",
+      "test_name": "key_rotation_policy",
+      "description": "Verify key rotation policies and lifecycle management (SC-12)",
+      "executed_at": "2025-12-18T23:00:48.204292638Z",
+      "duration_ms": 0,
+      "code_location": {
+        "file": "src/keys.rs",
+        "line_start": 321,
+        "line_end": 447,
+        "function": null
+      },
+      "inputs": {
+        "rotation_interval_days": 90
+      },
+      "expected": {
+        "key_lifecycle_tracked": true,
+        "key_states_defined": true,
+        "rotation_policy_works": true
+      },
+      "observed": {
+        "key_states_defined": true,
+        "rotation_policy_works": true,
+        "key_lifecycle_tracked": true
+      },
+      "passed": true,
+      "failure_reason": null,
+      "evidence": [
+        {
+          "evidence_type": "configuration",
+          "timestamp": "2025-12-18T23:00:48.204256342Z",
+          "content": {
+            "name": "rotation_policy",
+            "value": {
+              "interval_days": 90,
+              "warn_before_days": 7
+            }
+          },
+          "description": null
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-18T23:00:48.204265499Z",
+          "content": {
+            "details": {
+              "needs_rotation": false
+            },
+            "passed": true
+          },
+          "description": "Freshly registered key should not need rotation"
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-18T23:00:48.204267602Z",
+          "content": {
+            "details": {
+              "can_decrypt": true,
+              "can_encrypt": true
+            },
+            "passed": true
+          },
+          "description": "Active key should support encrypt and decrypt"
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-18T23:00:48.204280366Z",
+          "content": {
+            "details": {
+              "states": [
+                {
+                  "can_decrypt": true,
+                  "can_encrypt": true,
+                  "state": "Active"
+                },
+                {
+                  "can_decrypt": true,
+                  "can_encrypt": false,
+                  "state": "DecryptOnly"
+                },
+                {
+                  "can_decrypt": false,
+                  "can_encrypt": false,
+                  "state": "Disabled"
+                },
+                {
+                  "can_decrypt": false,
+                  "can_encrypt": false,
+                  "state": "PendingDestruction"
+                },
+                {
+                  "can_decrypt": false,
+                  "can_encrypt": false,
+                  "state": "Destroyed"
+                }
+              ]
+            },
+            "passed": true
+          },
+          "description": "Key states should have correct capabilities"
+        }
+      ],
+      "related_controls": [
+        "SC-13"
+      ]
+    },
+    {
+      "control_id": "SC-13",
+      "control_name": "Cryptographic Protection",
+      "test_name": "constant_time_comparison",
+      "description": "Verify constant-time comparison prevents timing attacks (SC-13)",
+      "executed_at": "2025-12-18T23:00:48.204312854Z",
+      "duration_ms": 0,
+      "code_location": {
+        "file": "src/crypto.rs",
+        "line_start": 37,
+        "line_end": 50,
+        "function": null
+      },
+      "inputs": {},
+      "expected": {
+        "equal_values_match": true,
+        "different_lengths_differ": true,
+        "different_values_differ": true
+      },
+      "observed": {
+        "different_lengths_differ": true,
+        "different_values_differ": true,
+        "equal_values_match": true
+      },
+      "passed": true,
+      "failure_reason": null,
+      "evidence": [
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-18T23:00:48.204304329Z",
+          "content": {
+            "details": {
+              "result": true
+            },
+            "passed": true
+          },
+          "description": "Equal values should match"
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-18T23:00:48.204306222Z",
+          "content": {
+            "details": {
+              "result": false
+            },
+            "passed": true
+          },
+          "description": "Different values should not match"
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-18T23:00:48.204307385Z",
+          "content": {
+            "details": {
+              "result": false
+            },
+            "passed": true
+          },
+          "description": "Different length values should not match"
+        }
+      ],
+      "related_controls": []
+    },
+    {
+      "control_id": "SI-10",
+      "control_name": "Information Input Validation",
+      "test_name": "email_validation_and_xss_sanitization",
+      "description": "Verify input validation rejects malformed data and sanitizes XSS (SI-10)",
+      "executed_at": "2025-12-18T23:00:48.204350443Z",
+      "duration_ms": 0,
+      "code_location": {
+        "file": "src/validation.rs",
+        "line_start": 237,
+        "line_end": 380,
+        "function": null
+      },
+      "inputs": {
+        "xss_payload": "<script>alert('xss')</script>",
+        "invalid_email": "not-an-email",
+        "valid_email": "user@example.com"
+      },
+      "expected": {
+        "invalid_email_rejected": true,
+        "xss_sanitized": true,
+        "valid_email_accepted": true
+      },
+      "observed": {
+        "valid_email_accepted": true,
+        "invalid_email_rejected": true,
+        "xss_sanitized": true
+      },
+      "passed": true,
+      "failure_reason": null,
+      "evidence": [
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-18T23:00:48.204331839Z",
+          "content": {
+            "details": {
+              "result": "Ok(())"
+            },
+            "passed": true
+          },
+          "description": "Valid email should be accepted"
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-18T23:00:48.204335936Z",
+          "content": {
+            "details": {
+              "result": "Err(ValidationError { field: Some(\"email\"), code: InvalidEmail, message: \"Invalid email format\" })"
+            },
+            "passed": true
+          },
+          "description": "Invalid email should be rejected"
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-18T23:00:48.204342298Z",
+          "content": {
+            "details": {
+              "input": "<script>alert('xss')</script>",
+              "output": "alert('xss')",
+              "script_removed": true
+            },
+            "passed": true
+          },
+          "description": "XSS payload should be sanitized"
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-18T23:00:48.204344993Z",
+          "content": {
+            "details": {
+              "result": "Ok(())"
+            },
+            "passed": true
+          },
+          "description": "Length validation should work"
+        }
+      ],
+      "related_controls": []
+    },
+    {
+      "control_id": "SI-11",
+      "control_name": "Error Handling",
+      "test_name": "secure_error_responses",
+      "description": "Verify errors do not leak sensitive info in production (SI-11)",
+      "executed_at": "2025-12-18T23:00:48.204375027Z",
+      "duration_ms": 0,
+      "code_location": {
+        "file": "src/error.rs",
+        "line_start": 50,
+        "line_end": 150,
+        "function": null
+      },
+      "inputs": {},
+      "expected": {
+        "prod_hides_details": true,
+        "dev_shows_details": true
+      },
+      "observed": {
+        "dev_shows_details": true,
+        "prod_hides_details": true
+      },
+      "passed": true,
+      "failure_reason": null,
+      "evidence": [
+        {
+          "evidence_type": "configuration",
+          "timestamp": "2025-12-18T23:00:48.204361082Z",
+          "content": {
+            "name": "production_config",
+            "value": {
+              "expose_details": false,
+              "include_stack_traces": false,
+              "log_errors": true
+            }
+          },
+          "description": null
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-18T23:00:48.204364278Z",
+          "content": {
+            "details": {
+              "expose_details": false
+            },
+            "passed": true
+          },
+          "description": "Production config should hide error details"
+        },
+        {
+          "evidence_type": "configuration",
+          "timestamp": "2025-12-18T23:00:48.204366001Z",
+          "content": {
+            "name": "development_config",
+            "value": {
+              "expose_details": true,
+              "include_stack_traces": true
+            }
+          },
+          "description": null
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-18T23:00:48.204368225Z",
+          "content": {
+            "details": {
+              "expose_details": true
+            },
+            "passed": true
+          },
+          "description": "Development config should show error details"
+        },
+        {
+          "evidence_type": "assertion",
+          "timestamp": "2025-12-18T23:00:48.204370359Z",
+          "content": {
+            "details": {
+              "expose_details": false,
+              "kind": "Internal"
+            },
+            "passed": true
+          },
+          "description": "Internal errors should not expose details"
+        }
+      ],
+      "related_controls": []
+    }
+  ],
+  "summary": {
+    "total_controls": 19,
+    "passed": 19,
+    "failed": 0,
+    "skipped": 0,
+    "total_duration_ms": 24,
+    "pass_rate": 100.0,
+    "by_family": {
+      "AC": {
+        "total": 5,
+        "passed": 5,
+        "failed": 0
+      },
+      "SI": {
+        "total": 2,
+        "passed": 2,
+        "failed": 0
+      },
+      "IA": {
+        "total": 3,
+        "passed": 3,
+        "failed": 0
+      },
+      "AU": {
+        "total": 3,
+        "passed": 3,
+        "failed": 0
+      },
+      "CM": {
+        "total": 1,
+        "passed": 1,
+        "failed": 0
+      },
+      "SC": {
+        "total": 5,
+        "passed": 5,
+        "failed": 0
+      }
+    }
+  }
+}
