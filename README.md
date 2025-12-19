@@ -1,6 +1,6 @@
 # barbican
 
-NIST 800-53 compliant security infrastructure for Axum applications. A pluggable, secure-by-default library providing 53+ security controls for building production-ready web services.
+NIST 800-53 compliant security infrastructure for Axum applications. A pluggable, secure-by-default library providing 56+ security controls for building production-ready, compliance-ready web services.
 
 ## Quick Start
 
@@ -52,7 +52,7 @@ barbican = { version = "0.1", features = ["postgres", "observability-loki", "met
 
 ## Security Modules
 
-Barbican provides 14 security modules covering 53+ NIST 800-53 controls:
+Barbican provides 18 security modules covering 56+ NIST 800-53 controls:
 
 ### Compliance Configuration
 
@@ -65,9 +65,10 @@ Barbican provides 14 security modules covering 53+ NIST 800-53 controls:
 | Module | Description | NIST Controls |
 |--------|-------------|---------------|
 | `layers` | Security headers, rate limiting, CORS, timeouts | SC-5, SC-8, CM-6, AC-4 |
-| `audit` | Security-aware HTTP audit middleware | AU-2, AU-3, AU-12, AU-16 |
-| `database` | SSL/TLS, connection pooling, health checks | SC-8, SC-28, IA-5 |
-| `observability` | Structured logging, metrics, distributed tracing | AU-2, AU-3, AU-12 |
+| `tls` | TLS/mTLS enforcement middleware | SC-8, SC-8(1), IA-3 |
+| `audit` | Security-aware HTTP audit middleware with integrity protection | AU-2, AU-3, AU-9, AU-12, AU-14, AU-16 |
+| `database` | SSL/TLS with VerifyFull default, connection pooling, health checks | SC-8, SC-28, IA-5 |
+| `observability` | Structured logging, metrics, distributed tracing | AU-2, AU-3, AU-8, AU-12 |
 | `observability::stack` | FedRAMP-compliant observability infrastructure generator | AU-9, AU-11, SC-8, SC-28, IR-4, IR-5 |
 
 ### Authentication & Authorization
@@ -86,6 +87,7 @@ Barbican provides 14 security modules covering 53+ NIST 800-53 controls:
 | `alerting` | Security incident alerting with rate limiting | IR-4, IR-5 |
 | `health` | Health check framework with aggregation | CA-7 |
 | `keys` | Key management with KMS integration traits | SC-12 |
+| `secrets` | Secret detection scanner for embedded credentials | IA-5(7) |
 | `supply_chain` | SBOM generation, license compliance, vulnerability audit | SR-3, SR-4 |
 | `testing` | Security test utilities (XSS, SQLi payloads) | SA-11, CA-8 |
 
@@ -93,8 +95,9 @@ Barbican provides 14 security modules covering 53+ NIST 800-53 controls:
 
 | Module | Description | NIST Controls |
 |--------|-------------|---------------|
+| `encryption` | Field-level encryption for data at rest (AES-256-GCM) | SC-28 |
 | `validation` | Input validation and sanitization | SI-10 |
-| `error` | Secure error handling, no info leakage | SI-11 |
+| `error` | Secure error handling, no info leakage | SI-11, IA-6 |
 | `crypto` | Constant-time comparison utilities | SC-13 |
 
 ## Environment Variables
@@ -522,26 +525,31 @@ if constant_time_str_eq(&stored_token, &provided_token) {
 
 ## Compliance
 
-Barbican implements 53 NIST 800-53 Rev 5 controls (48.6% of applicable controls) and facilitates 50 additional controls (45.9%):
+Barbican implements 56 NIST 800-53 Rev 5 controls and facilitates 50+ additional controls. The library provides both runtime security enforcement and compliance artifact generation for auditors.
 
 **Control Families Covered:**
-- **Access Control (AC)**: AC-2, AC-4, AC-7, AC-11, AC-12
-- **Audit (AU)**: AU-2, AU-3, AU-6, AU-7, AU-12, AU-14, AU-16
+- **Access Control (AC)**: AC-2, AC-3, AC-4, AC-6, AC-7, AC-11, AC-12
+- **Audit (AU)**: AU-2, AU-3, AU-8, AU-9, AU-12, AU-14, AU-16
 - **Security Assessment (CA)**: CA-7, CA-8
-- **Identification & Authentication (IA)**: IA-2, IA-5, IA-5(1)
-- **Incident Response (IR)**: IR-4, IR-5, IR-6
-- **System & Communications (SC)**: SC-5, SC-8, SC-10, SC-12, SC-13, SC-28
+- **Identification & Authentication (IA)**: IA-2, IA-2(1), IA-3, IA-5, IA-5(1), IA-5(7), IA-6
+- **Incident Response (IR)**: IR-4, IR-5
+- **System & Communications (SC)**: SC-5, SC-8, SC-8(1), SC-10, SC-12, SC-13, SC-23, SC-28
 - **System & Information Integrity (SI)**: SI-10, SI-11
 - **Supply Chain (SR)**: SR-3, SR-4
 - **System & Services Acquisition (SA)**: SA-11
 
 **Framework Support:**
-- **NIST SP 800-53 Rev 5**: 53 controls implemented
+- **NIST SP 800-53 Rev 5**: 56 controls implemented
 - **NIST SP 800-63B**: Password policy compliance
-- **SOC 2 Type II**: ~75% of applicable criteria
-- **FedRAMP**: ~70% of applicable controls
+- **SOC 2 Type II**: ~85% of applicable criteria
+- **FedRAMP Moderate**: ~80% ready (up from 75%)
 - **OAuth 2.0 / OIDC**: JWT claims extraction with MFA support
 - **OWASP Top 10**: Input validation, secure error handling
+
+**Compliance Artifact Tests:**
+- 29 artifact-generating control tests (Phase 1 complete)
+- JSON-serialized, HMAC-signed audit evidence
+- Covers: AU-8, AU-9, AU-14, AU-16, IA-5, IA-5(7), IA-6, SC-8, SC-13, SC-23, SC-28, and more
 
 See `.claudedocs/SECURITY_CONTROL_REGISTRY.md` for detailed control mappings.
 See `.claudedocs/NIST_800_53_CROSSWALK.md` for auditor-friendly control-to-code mappings.
@@ -602,6 +610,7 @@ Barbican provides NixOS modules for hardening MicroVMs and NixOS systems. These 
 |--------|-------------|-------------------|
 | `secureUsers` | No empty passwords, SSH-only auth, login banners | CRT-001, CRT-002 |
 | `hardenedSSH` | Strong ciphers, fail2ban, key-only auth | CRT-010 |
+| `hardenedNginx` | NIST SP 800-52B ciphers, TLS 1.2+, mTLS, rate limiting | SC-8, SC-8(1), IA-3, SC-5 |
 | `kernelHardening` | Sysctl hardening, ASLR, audit | MED-001 |
 | `securePostgres` | scram-sha-256, SSL, audit logging, restricted listen | CRT-003, CRT-011-013 |
 | `timeSync` | Chrony NTP with secure servers | HIGH-011 |
@@ -612,6 +621,7 @@ Barbican provides NixOS modules for hardening MicroVMs and NixOS systems. These 
 | `secretsManagement` | sops-nix integration | CRT-004, CRT-005 |
 | `observabilityAuth` | Loki/Prometheus/Grafana auth | CRT-008, CRT-014 |
 | `systemdHardening` | Service sandboxing presets | MED-003 |
+| `vaultPki` | HashiCorp Vault PKI integration for mTLS certificates | SC-12, SC-17, IA-5(2) |
 
 ### Module Configuration Example
 

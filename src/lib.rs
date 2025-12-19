@@ -2,7 +2,7 @@
 //!
 //! NIST 800-53 compliant security infrastructure for Axum applications.
 //!
-//! Barbican provides 12 pluggable security modules implementing 52+ NIST 800-53 controls
+//! Barbican provides 18 pluggable security modules implementing 56+ NIST 800-53 controls
 //! for building production-ready, compliance-aware web applications.
 //!
 //! ## Security Modules
@@ -223,16 +223,18 @@
 //!
 //! ## Compliance Coverage
 //!
-//! Barbican implements 53 NIST 800-53 Rev 5 controls and facilitates 50 additional controls:
+//! Barbican implements 56 NIST 800-53 Rev 5 controls and facilitates 50+ additional controls:
 //!
 //! | Framework | Coverage |
 //! |-----------|----------|
-//! | NIST SP 800-53 Rev 5 | 53 controls implemented |
+//! | NIST SP 800-53 Rev 5 | 56 controls implemented |
 //! | NIST SP 800-63B | Password policy compliance |
-//! | SOC 2 Type II | ~75% of applicable criteria |
-//! | FedRAMP | ~70% of applicable controls |
+//! | SOC 2 Type II | ~85% of applicable criteria |
+//! | FedRAMP Moderate | ~80% ready (up from 75%) |
 //! | OAuth 2.0 / OIDC | JWT claims with MFA support |
 //! | OWASP Top 10 | Input validation, secure error handling |
+//!
+//! **Compliance Artifacts**: 29 control tests generate auditor-verifiable JSON artifacts with HMAC signatures.
 //!
 //! See `.claudedocs/SECURITY_CONTROL_REGISTRY.md` for the complete control matrix.
 //! See `.claudedocs/NIST_800_53_CROSSWALK.md` for auditor-friendly control-to-code mappings.

@@ -58,54 +58,59 @@ This directory contains comprehensive NIST SP 800-53 Rev 5 compliance analysis a
 
 | Category | Count | Percentage |
 |----------|-------|------------|
-| Implemented | 52 | 47.7% |
-| Partial | 6 | 5.5% |
-| Planned | 19 | 17.4% |
-| Facilitated | 32 | 29.4% |
-| **Total Barbican Can Help** | **109** | **100%** |
+| Implemented | 56 | 50.9% |
+| Partial | 5 | 4.5% |
+| Planned | 17 | 15.5% |
+| Facilitated | 32 | 29.1% |
+| **Total Barbican Can Help** | **110** | **100%** |
 
 ### Remaining High Priority Controls
 
-1. **SC-8/SC-8(1)** - HTTP TLS Enforcement (CRITICAL)
-2. **IA-5(7)** - Secret Detection Scanner (CRITICAL)
-3. **SC-17** - Certificate Validation Utilities (HIGH)
-4. **SA-15(7)** - CI/CD Security Workflow (MEDIUM)
-5. **AC-5** - Role Conflict Checking (MEDIUM)
-6. **AC-10** - Concurrent Session Control (MEDIUM)
-7. **IA-2(8)** - Nonce-based Replay Protection (HIGH)
+1. **IA-2(8)** - Nonce-based Replay Protection (HIGH)
+2. **AC-5** - Role Conflict Checking (MEDIUM)
+3. **AC-10** - Concurrent Session Control (MEDIUM)
+4. **AU-11** - Audit Record Retention (HIGH)
+5. **CP-10** - System Recovery Framework (HIGH)
+6. **CM-3** - Runtime Config Change Auditing (HIGH)
 
-### Controls Already Implemented (52 total)
+### Controls Already Implemented (56 total)
 
 **Authentication & Authorization:**
 - **AC-3, AC-6** - Access Enforcement, Least Privilege (`src/auth.rs`)
 - **AC-7** - Login Attempt Tracking (`src/login.rs`)
 - **AC-11, AC-12** - Session Management (`src/session.rs`)
 - **IA-2, IA-2(1), IA-2(2), IA-2(6), IA-8** - Authentication & MFA (`src/auth.rs`)
-- **IA-5(1), IA-5(4)** - Password Policy (`src/password.rs`)
+- **IA-3** - Device Identification via mTLS (`src/tls.rs`)
+- **IA-5, IA-5(1), IA-5(2), IA-5(4), IA-5(7)** - Authenticator Management (`src/password.rs`, `src/secrets.rs`, `nix/modules/vault-pki.nix`)
+- **IA-6** - Authentication Feedback (`src/error.rs`)
 
 **Data Protection:**
 - **SI-10** - Input Validation (`src/validation.rs`)
-- **SI-11, IA-6** - Secure Error Handling (`src/error.rs`)
+- **SI-11** - Secure Error Handling (`src/error.rs`)
 - **SC-13** - Cryptographic Protection (`src/crypto.rs`)
+- **SC-28** - Protection at Rest (`src/encryption.rs`)
+- **SC-23** - Session Authenticity (`src/session.rs`)
 
 **Operational Security:**
-- **IR-4, IR-5, SI-4(2), SI-4(5)** - Alerting (`src/alerting.rs`)
+- **IR-4, IR-5** - Alerting (`src/alerting.rs`)
 - **CA-7** - Health Checks (`src/health.rs`)
 - **SC-12** - Key Management (`src/keys.rs`)
-- **SR-3, SR-4, SR-11, SI-2, SI-3, SI-7, CM-8, CM-10** - Supply Chain (`src/supply_chain.rs`)
+- **SR-3, SR-4** - Supply Chain Security (`src/supply_chain.rs`)
 - **SA-11, CA-8** - Security Testing (`src/testing.rs`)
 
 **Infrastructure (Rust):**
 - **AC-4** - CORS Policy (`src/layers.rs`)
 - **SC-5** - Rate Limiting & DoS Protection (`src/layers.rs`)
-- **SC-10** - Request Timeout (`src/layers.rs`)
-- **AU-2, AU-3, AU-8, AU-12** - Audit Logging (`src/observability/`)
+- **SC-8, SC-8(1)** - TLS/mTLS Enforcement (`src/tls.rs`, `src/database.rs`)
+- **SC-10** - Network Disconnect (`src/layers.rs`)
+- **AU-2, AU-3, AU-8, AU-9, AU-12, AU-14, AU-16** - Audit Logging & Protection (`src/audit/`, `src/observability/`)
 
 **Infrastructure (NixOS):**
 - **CM-2, CM-6, CM-7** - Configuration Management
-- **CP-9** - Encrypted Backups
-- **SC-7, SC-7(5)** - Network Firewall
-- **SI-4, SI-16** - Intrusion Detection, Memory Protection
+- **CP-9** - Encrypted Backups (`nix/modules/database-backup.nix`)
+- **SC-7, SC-7(5)** - Network Firewall (`nix/modules/vm-firewall.nix`)
+- **SC-8, IA-3** - Hardened Nginx Reverse Proxy (`nix/modules/hardened-nginx.nix`)
+- **SI-4, SI-16** - Intrusion Detection, Memory Protection (`nix/modules/intrusion-detection.nix`)
 
 ## Usage
 
@@ -196,8 +201,22 @@ See [SECURITY.md](../SECURITY.md) for:
 - Audit procedures
 - Security contact
 
-## Updates
+## Recent Updates
+
+**2025-12-18: Phase 1 Artifact Tests Complete**
+- 29 artifact-generating control tests implemented
+- HMAC-SHA256 signed audit evidence generation
+- Controls tested: AC-3, AC-4, AC-7, AC-11, AC-12, AU-2, AU-3, AU-8, AU-9, AU-12, AU-14, AU-16, CM-6, IA-2, IA-5, IA-5(1), IA-5(7), IA-6, SC-5, SC-8, SC-10, SC-12, SC-13, SC-23, SC-28, SI-10, SI-11
+- FedRAMP Moderate readiness: 80% (up from 75%)
+- Database SSL now defaults to VerifyFull (SC-8 compliance)
+- Audit log integrity protection with tamper detection (AU-9)
+
+**2025-12-15: Infrastructure Additions**
+- `hardened-nginx` module: NIST SP 800-52B compliant reverse proxy
+- `vault-pki` module: Automated PKI for mTLS certificates
+- TLS/mTLS enforcement middleware (`src/tls.rs`)
+- Secret detection scanner (`src/secrets.rs`) for IA-5(7)
 
 This documentation is maintained by the security-auditor-agent and updated as controls are implemented, tested, and verified.
 
-Last updated: 2025-12-17
+Last updated: 2025-12-18

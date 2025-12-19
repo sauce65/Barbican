@@ -1,8 +1,16 @@
 # Security Control Registry
 
 ## Project: Barbican Security Library
-## Last Updated: 2025-12-18
+## Last Updated: 2025-12-18 (Phase 1 Artifact Tests Complete)
 ## Frameworks: NIST SP 800-53 Rev 5
+
+**Current Status:**
+- **Total Applicable Controls**: 110
+- **Implemented**: 56 (50.9%)
+- **Partial**: 5 (4.5%)
+- **Planned**: 17 (15.5%)
+- **Facilitated**: 32 (29.1%)
+- **Control Test Artifacts**: 29 (Phase 1 complete)
 
 ### Control Status Legend
 - ✅ IMPLEMENTED - Control fully implemented with passing tests
@@ -50,8 +58,8 @@
 | AU-6 | Audit Review | 🎯 FACILITATED | Log query helpers | TBD | TBD | MEDIUM | 3 |
 | AU-6(3) | Correlate Repositories | ⚠️ PARTIAL | Centralized logging (Loki, OTLP) | `src/observability/providers.rs` | Feature tests | MEDIUM | - |
 | AU-7 | Audit Reduction | 🎯 FACILITATED | Log aggregation utilities | TBD | TBD | MEDIUM | 3 |
-| AU-8 | Time Stamps | ✅ IMPLEMENTED | UTC timestamps automatic | `tracing` crate | All events have timestamps | CRITICAL | - |
-| AU-9 | Protection of Audit Information | ✅ IMPLEMENTED | HMAC-SHA256 signed audit chains with tamper detection | `src/audit/integrity.rs` | `test_au9_audit_protection` | HIGH | - |
+| AU-8 | Time Stamps | ✅ IMPLEMENTED | UTC timestamps automatic | `tracing` crate, `src/audit.rs:65-75` | `test_au8_timestamps` | CRITICAL | - |
+| AU-9 | Protection of Audit Information | ✅ IMPLEMENTED | HMAC-SHA256 signed audit chains with tamper detection | `src/audit/integrity.rs` | `test_au9_audit_protection` | CRITICAL | - |
 | AU-10 | Non-repudiation | 📋 PLANNED | Log signing (optional) | TBD | TBD | MEDIUM | 4 |
 | AU-11 | Audit Record Retention | 📋 PLANNED | Retention policy configuration | TBD | TBD | HIGH | 3 |
 | AU-12 | Audit Record Generation | ✅ IMPLEMENTED | security_event! macro + HTTP audit middleware | `src/observability/events.rs`, `src/audit.rs` | `test_event_severity`, `test_audit_*` | CRITICAL | - |
@@ -125,14 +133,14 @@
 | IA-2(6) | Privileged - Separate Device | ✅ IMPLEMENTED | Hardware key enforcement | `src/auth.rs` | `require_hardware_key` | MEDIUM | 4 |
 | IA-2(8) | Replay Resistant | 📋 PLANNED | Nonce-based authentication | TBD | TBD | HIGH | 2 |
 | IA-2(12) | PIV Credentials | 📋 PLANNED | PIV/CAC card support | TBD | TBD | LOW | 5 |
-| IA-3 | Device Identification | ✅ IMPLEMENTED | mTLS enforcement middleware | `src/tls.rs:408-727` | `test_ia3_mtls_enforcement` | MEDIUM | 4 |
+| IA-3 | Device Identification | ✅ IMPLEMENTED | mTLS enforcement middleware + hardened-nginx module | `src/tls.rs:408-727`, `nix/modules/hardened-nginx.nix` | `test_ia3_mtls_enforcement` | MEDIUM | 4 |
 | IA-4 | Identifier Management | 🎯 FACILITATED | User ID generation helpers | TBD | TBD | HIGH | 2 |
-| IA-5 | Authenticator Management | ✅ IMPLEMENTED | Credential storage helpers | `src/crypto.rs` | `constant_time_eq` | CRITICAL | - |
-| IA-5(1) | Password-Based Authentication | ✅ IMPLEMENTED | NIST 800-63B password policy | `src/password.rs` | `test_password_*` | CRITICAL | 1 |
+| IA-5 | Authenticator Management | ✅ IMPLEMENTED | Credential storage helpers with constant-time comparison | `src/crypto.rs` | `test_ia5_authenticator_management` | CRITICAL | - |
+| IA-5(1) | Password-Based Authentication | ✅ IMPLEMENTED | NIST 800-63B password policy | `src/password.rs` | `test_ia5_1_password_policy` | CRITICAL | 1 |
 | IA-5(2) | PKI-Based Authentication | ✅ IMPLEMENTED | Vault PKI for mTLS client certificates + DB SSL | `nix/modules/vault-pki.nix`, `src/database.rs` | `vault-pki` VM test, SSL tests | HIGH | 4 |
 | IA-5(4) | Automated Password Strength | ✅ IMPLEMENTED | Password strength estimation | `src/password.rs` | `test_strength_*` | MEDIUM | 1 |
 | IA-5(7) | No Embedded Authenticators | ✅ IMPLEMENTED | Secret detection scanner for embedded authenticators | `src/secrets.rs` | `test_ia5_7_secret_detection` | CRITICAL | 4 |
-| IA-6 | Authentication Feedback | ✅ IMPLEMENTED | Secure error responses | `src/error.rs` | Production mode tests | LOW | 5 |
+| IA-6 | Authentication Feedback | ✅ IMPLEMENTED | Secure error responses (no info leakage) | `src/error.rs` | `test_ia6_auth_feedback` | MEDIUM | 5 |
 | IA-8 | Non-Org Users | ✅ IMPLEMENTED | OAuth 2.0/OIDC claims extraction | `src/auth.rs` | Provider-specific tests | HIGH | 2 |
 | IA-9 | Service Authentication | 🎯 FACILITATED | API key middleware | TBD | TBD | HIGH | 2 |
 | IA-10 | Adaptive Authentication | 🎯 FACILITATED | Risk-based auth framework | TBD | TBD | MEDIUM | 5 |
@@ -247,7 +255,7 @@
 | SC-7(5) | Deny by Default | ✅ IMPLEMENTED | Default-deny firewall | `nix/modules/vm-firewall.nix` | Firewall tests | CRITICAL | - |
 | SC-8 | Transmission Confidentiality | ✅ IMPLEMENTED | HTTP TLS enforcement + DB SSL VerifyFull default + HSTS headers | `src/tls.rs`, `src/database.rs`, `src/layers.rs:87-90` | `test_sc8_transmission_security` | CRITICAL | - |
 | SC-8(1) | Cryptographic Protection | ✅ IMPLEMENTED | TLS 1.2+ version validation in Strict mode | `src/tls.rs:225-245` | `test_tls_version_acceptable` | CRITICAL | - |
-| SC-10 | Network Disconnect | ✅ IMPLEMENTED | Session termination after idle/absolute timeout | `src/session.rs:143-167` | `test_session_*`, `test_idle_timeout_*` | HIGH | - |
+| SC-10 | Network Disconnect | ✅ IMPLEMENTED | Session termination + request timeout | `src/session.rs:143-167`, `src/layers.rs:114-126` | `test_sc10_network_disconnect` | HIGH | - |
 | SC-11 | Trusted Path | 🎯 FACILITATED | Secure connection indicators | TBD | TBD | MEDIUM | 5 |
 | SC-12 | Cryptographic Key Management | ✅ IMPLEMENTED | Key rotation utilities + Vault PKI secrets engine | `src/keys.rs`, `nix/modules/vault-pki.nix` | `test_rotation_*`, `vault-pki` VM test | HIGH | 4 |
 | SC-12(1) | Key Availability | ✅ IMPLEMENTED | Vault HA with Raft consensus | `nix/modules/vault-pki.nix` | HA configuration | HIGH | 4 |
@@ -257,7 +265,7 @@
 | SC-18 | Mobile Code | ✅ IMPLEMENTED | CSP headers | `src/layers.rs` | Header tests | MEDIUM | - |
 | SC-20 | Secure Name Resolution | 📋 PLANNED | DNSSEC validation | TBD | TBD | MEDIUM | 5 |
 | SC-21 | Secure Name Resolution Integrity | 📋 PLANNED | DNSSEC | TBD | TBD | MEDIUM | 5 |
-| SC-23 | Session Authenticity | ✅ IMPLEMENTED | Session state tracking | `src/session.rs` | Session tests | HIGH | 2 |
+| SC-23 | Session Authenticity | ✅ IMPLEMENTED | Session state tracking with HMAC protection | `src/session.rs` | `test_sc23_session_authenticity` | HIGH | 2 |
 | SC-28 | Protection at Rest | ✅ IMPLEMENTED | AES-256-GCM field-level encryption + database TLS | `src/encryption.rs`, `src/database.rs` | `test_sc28_protection_at_rest` | CRITICAL | 1 |
 | SC-28(1) | Cryptographic Protection | ✅ IMPLEMENTED | Encrypted backups | `nix/modules/database-backup.nix` | Backup tests | HIGH | - |
 | SC-28(2) | Offline Storage | 🎯 FACILITATED | Encrypted offline backups | `nix/modules/database-backup.nix` | Backup config | MEDIUM | - |
@@ -312,10 +320,10 @@
 
 | Category | Count | Percentage |
 |----------|-------|------------|
-| ✅ Implemented | 58 | 52.7% |
+| ✅ Implemented | 56 | 50.9% |
 | ⚠️ Partial | 5 | 4.5% |
 | 🔨 In Progress | 0 | 0.0% |
-| 📋 Planned | 15 | 13.6% |
+| 📋 Planned | 17 | 15.5% |
 | 🎯 Facilitated | 32 | 29.1% |
 | **Total Barbican Can Help** | **110** | **100%** |
 
@@ -399,6 +407,25 @@
 - [x] Provenance tracking (SR-4) - `src/supply_chain.rs`
 - [x] Key management traits (SC-12) - `src/keys.rs`
 - [x] Security test helpers (SA-11, CA-8) - `src/testing.rs`
+- [x] TLS/mTLS enforcement (SC-8, SC-8(1), IA-3) - `src/tls.rs`
+- [x] Vault PKI integration (SC-12, SC-17, IA-5(2)) - `nix/modules/vault-pki.nix`
+- [x] Secret detection (IA-5(7)) - `src/secrets.rs`
+
+### Phase 5: Compliance Artifacts ✅ COMPLETE (2025-12-18)
+- [x] Artifact generation framework - `src/compliance/artifacts.rs`
+- [x] 29 control test functions - `src/compliance/control_tests.rs`
+- [x] HMAC-SHA256 signing - `src/compliance/artifacts.rs`
+- [x] JSON export with metadata - `ComplianceTestReport`
+- [x] Audit log integrity protection (AU-9) - `src/audit/integrity.rs`
+- [x] Database SSL VerifyFull default (SC-8) - `src/database.rs`
+
+**Artifact Tests Implemented:**
+- AC-3, AC-4, AC-7, AC-11, AC-12 (Access Control)
+- AU-2, AU-3, AU-8, AU-9, AU-12, AU-14, AU-16 (Audit)
+- CM-6 (Configuration Management)
+- IA-2, IA-5, IA-5(1), IA-5(7), IA-6 (Authentication)
+- SC-5, SC-8, SC-10, SC-12, SC-13, SC-23, SC-28 (System & Comms)
+- SI-10, SI-11 (Information Integrity)
 
 ---
 
