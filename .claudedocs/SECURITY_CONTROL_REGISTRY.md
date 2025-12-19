@@ -1,7 +1,7 @@
 # Security Control Registry
 
 ## Project: Barbican Security Library
-## Last Updated: 2025-12-17
+## Last Updated: 2025-12-18
 ## Frameworks: NIST SP 800-53 Rev 5
 
 ### Control Status Legend
@@ -51,7 +51,7 @@
 | AU-6(3) | Correlate Repositories | ⚠️ PARTIAL | Centralized logging (Loki, OTLP) | `src/observability/providers.rs` | Feature tests | MEDIUM | - |
 | AU-7 | Audit Reduction | 🎯 FACILITATED | Log aggregation utilities | TBD | TBD | MEDIUM | 3 |
 | AU-8 | Time Stamps | ✅ IMPLEMENTED | UTC timestamps automatic | `tracing` crate | All events have timestamps | CRITICAL | - |
-| AU-9 | Protection of Audit Information | 📋 PLANNED | Write-only log destinations | TBD | TBD | HIGH | 3 |
+| AU-9 | Protection of Audit Information | ✅ IMPLEMENTED | HMAC-SHA256 signed audit chains with tamper detection | `src/audit/integrity.rs` | `test_au9_audit_protection` | HIGH | - |
 | AU-10 | Non-repudiation | 📋 PLANNED | Log signing (optional) | TBD | TBD | MEDIUM | 4 |
 | AU-11 | Audit Record Retention | 📋 PLANNED | Retention policy configuration | TBD | TBD | HIGH | 3 |
 | AU-12 | Audit Record Generation | ✅ IMPLEMENTED | security_event! macro + HTTP audit middleware | `src/observability/events.rs`, `src/audit.rs` | `test_event_severity`, `test_audit_*` | CRITICAL | - |
@@ -59,8 +59,7 @@
 | AU-16 | Cross-Org Audit | ✅ IMPLEMENTED | Correlation ID extraction/generation in audit middleware | `src/audit.rs:194-212` | `test_generate_request_id` | LOW | 5 |
 
 **Gap Analysis:**
-- AU-9: Need write-only destination configuration
-- AU-10: Optional log signing feature for high-security use cases
+- AU-10: Optional log signing feature for high-security use cases (AU-9 provides HMAC)
 - AU-11: Need retention policy enforcement
 
 ---
@@ -126,13 +125,13 @@
 | IA-2(6) | Privileged - Separate Device | ✅ IMPLEMENTED | Hardware key enforcement | `src/auth.rs` | `require_hardware_key` | MEDIUM | 4 |
 | IA-2(8) | Replay Resistant | 📋 PLANNED | Nonce-based authentication | TBD | TBD | HIGH | 2 |
 | IA-2(12) | PIV Credentials | 📋 PLANNED | PIV/CAC card support | TBD | TBD | LOW | 5 |
-| IA-3 | Device Identification | 📋 PLANNED | Client certificate verification | TBD | TBD | MEDIUM | 4 |
+| IA-3 | Device Identification | ✅ IMPLEMENTED | mTLS enforcement middleware | `src/tls.rs:408-727` | `test_ia3_mtls_enforcement` | MEDIUM | 4 |
 | IA-4 | Identifier Management | 🎯 FACILITATED | User ID generation helpers | TBD | TBD | HIGH | 2 |
 | IA-5 | Authenticator Management | ✅ IMPLEMENTED | Credential storage helpers | `src/crypto.rs` | `constant_time_eq` | CRITICAL | - |
 | IA-5(1) | Password-Based Authentication | ✅ IMPLEMENTED | NIST 800-63B password policy | `src/password.rs` | `test_password_*` | CRITICAL | 1 |
 | IA-5(2) | PKI-Based Authentication | ✅ IMPLEMENTED | Vault PKI for mTLS client certificates + DB SSL | `nix/modules/vault-pki.nix`, `src/database.rs` | `vault-pki` VM test, SSL tests | HIGH | 4 |
 | IA-5(4) | Automated Password Strength | ✅ IMPLEMENTED | Password strength estimation | `src/password.rs` | `test_strength_*` | MEDIUM | 1 |
-| IA-5(7) | No Embedded Authenticators | 📋 PLANNED | Secret detection scanner | TBD | TBD | CRITICAL | 4 |
+| IA-5(7) | No Embedded Authenticators | ✅ IMPLEMENTED | Secret detection scanner for embedded authenticators | `src/secrets.rs` | `test_ia5_7_secret_detection` | CRITICAL | 4 |
 | IA-6 | Authentication Feedback | ✅ IMPLEMENTED | Secure error responses | `src/error.rs` | Production mode tests | LOW | 5 |
 | IA-8 | Non-Org Users | ✅ IMPLEMENTED | OAuth 2.0/OIDC claims extraction | `src/auth.rs` | Provider-specific tests | HIGH | 2 |
 | IA-9 | Service Authentication | 🎯 FACILITATED | API key middleware | TBD | TBD | HIGH | 2 |
@@ -141,8 +140,7 @@
 
 **Gap Analysis:**
 - IA-2(8): Need nonce-based replay protection
-- IA-5(7): Need compile-time secret scanner
-- IA-3: Device identification via client certificates (mTLS infrastructure now available via Vault PKI)
+- IA-2(12): PIV/CAC card support for FedRAMP High (deferred)
 
 ---
 
@@ -247,26 +245,25 @@
 | SC-7 | Boundary Protection | ✅ IMPLEMENTED | Network firewall rules | `nix/modules/vm-firewall.nix` | Firewall tests | HIGH | - |
 | SC-7(4) | External Telecom Services | 🎯 FACILITATED | VPN/tunnel configuration | TBD | TBD | MEDIUM | 5 |
 | SC-7(5) | Deny by Default | ✅ IMPLEMENTED | Default-deny firewall | `nix/modules/vm-firewall.nix` | Firewall tests | CRITICAL | - |
-| SC-8 | Transmission Confidentiality | ✅ IMPLEMENTED | HTTP TLS enforcement middleware + DB TLS + HSTS headers | `src/tls.rs`, `src/database.rs`, `src/layers.rs:87-90` | `cargo test tls`, SSL tests | CRITICAL | - |
+| SC-8 | Transmission Confidentiality | ✅ IMPLEMENTED | HTTP TLS enforcement + DB SSL VerifyFull default + HSTS headers | `src/tls.rs`, `src/database.rs`, `src/layers.rs:87-90` | `test_sc8_transmission_security` | CRITICAL | - |
 | SC-8(1) | Cryptographic Protection | ✅ IMPLEMENTED | TLS 1.2+ version validation in Strict mode | `src/tls.rs:225-245` | `test_tls_version_acceptable` | CRITICAL | - |
 | SC-10 | Network Disconnect | ✅ IMPLEMENTED | Session termination after idle/absolute timeout | `src/session.rs:143-167` | `test_session_*`, `test_idle_timeout_*` | HIGH | - |
 | SC-11 | Trusted Path | 🎯 FACILITATED | Secure connection indicators | TBD | TBD | MEDIUM | 5 |
 | SC-12 | Cryptographic Key Management | ✅ IMPLEMENTED | Key rotation utilities + Vault PKI secrets engine | `src/keys.rs`, `nix/modules/vault-pki.nix` | `test_rotation_*`, `vault-pki` VM test | HIGH | 4 |
 | SC-12(1) | Key Availability | ✅ IMPLEMENTED | Vault HA with Raft consensus | `nix/modules/vault-pki.nix` | HA configuration | HIGH | 4 |
-| SC-13 | Cryptographic Protection | ✅ IMPLEMENTED | Approved algorithms (constant-time) | `src/crypto.rs` | Crypto tests | HIGH | - |
+| SC-13 | Cryptographic Protection | ✅ IMPLEMENTED | Approved algorithms (constant-time) + FIPS 140-3 mode (aws-lc-rs) | `src/crypto.rs`, `src/encryption.rs` | `test_sc13_constant_time`, `test_sc13_fips_crypto` | HIGH | - |
 | SC-15 | Collaborative Computing | 🎯 FACILITATED | Screen sharing controls | TBD | TBD | LOW | 5 |
 | SC-17 | PKI Certificates | ✅ IMPLEMENTED | Vault PKI secrets engine with root/intermediate CA | `nix/modules/vault-pki.nix`, `nix/lib/vault-pki.nix` | `vault-pki` VM test | HIGH | 4 |
 | SC-18 | Mobile Code | ✅ IMPLEMENTED | CSP headers | `src/layers.rs` | Header tests | MEDIUM | - |
 | SC-20 | Secure Name Resolution | 📋 PLANNED | DNSSEC validation | TBD | TBD | MEDIUM | 5 |
 | SC-21 | Secure Name Resolution Integrity | 📋 PLANNED | DNSSEC | TBD | TBD | MEDIUM | 5 |
 | SC-23 | Session Authenticity | ✅ IMPLEMENTED | Session state tracking | `src/session.rs` | Session tests | HIGH | 2 |
-| SC-28 | Protection at Rest | ⚠️ PARTIAL | Database encryption (via PostgreSQL) | `src/database.rs` | SSL mode | CRITICAL | 1 |
+| SC-28 | Protection at Rest | ✅ IMPLEMENTED | AES-256-GCM field-level encryption + database TLS | `src/encryption.rs`, `src/database.rs` | `test_sc28_protection_at_rest` | CRITICAL | 1 |
 | SC-28(1) | Cryptographic Protection | ✅ IMPLEMENTED | Encrypted backups | `nix/modules/database-backup.nix` | Backup tests | HIGH | - |
 | SC-28(2) | Offline Storage | 🎯 FACILITATED | Encrypted offline backups | `nix/modules/database-backup.nix` | Backup config | MEDIUM | - |
 | SC-39 | Process Isolation | ✅ IMPLEMENTED | Sandboxing configuration | `nix/modules/systemd-hardening.nix` | Systemd tests | HIGH | - |
 
 **Gap Analysis:**
-- SC-28: Depends on database configuration, barbican can facilitate
 - SC-20/SC-21: DNSSEC validation planned for Phase 5
 
 ---
@@ -315,10 +312,10 @@
 
 | Category | Count | Percentage |
 |----------|-------|------------|
-| ✅ Implemented | 56 | 50.9% |
+| ✅ Implemented | 58 | 52.7% |
 | ⚠️ Partial | 5 | 4.5% |
 | 🔨 In Progress | 0 | 0.0% |
-| 📋 Planned | 17 | 15.5% |
+| 📋 Planned | 15 | 13.6% |
 | 🎯 Facilitated | 32 | 29.1% |
 | **Total Barbican Can Help** | **110** | **100%** |
 
@@ -331,7 +328,7 @@
 | CA | 2 | 0 | 0 | 2 | 4 |
 | CM | 5 | 2 | 0 | 4 | 11 |
 | CP | 1 | 1 | 0 | 4 | 6 |
-| IA | 12 | 0 | 3 | 2 | 17 |
+| IA | 14 | 0 | 2 | 1 | 17 |
 | IR | 2 | 0 | 0 | 4 | 6 |
 | MA | 0 | 0 | 1 | 3 | 4 |
 | MP | 1 | 0 | 1 | 3 | 5 |
@@ -341,15 +338,15 @@
 | SC | 14 | 1 | 4 | 5 | 24 |
 | SI | 9 | 0 | 0 | 2 | 11 |
 | SR | 4 | 0 | 0 | 3 | 7 |
-| **Total** | **56** | **5** | **15** | **50** | **136** |
+| **Total** | **58** | **5** | **14** | **49** | **136** |
 
 ### Implementation Priority Breakdown
 
 | Priority | Implemented | Remaining |
 |----------|-------------|-----------|
-| CRITICAL | 14 | 4 |
-| HIGH | 28 | 8 |
-| MEDIUM | 8 | 14 |
+| CRITICAL | 15 | 3 |
+| HIGH | 28 | 7 |
+| MEDIUM | 9 | 13 |
 | LOW | 2 | 9 |
 
 ### Module Implementation Summary
@@ -370,7 +367,10 @@
 | `src/supply_chain.rs` | SR-3, SR-4, SR-11, SI-2, SI-3, SI-7, CM-8, CM-10 | 15+ |
 | `src/testing.rs` | SA-11, CA-8 | 18+ |
 | `src/observability/` | AU-2, AU-3, AU-8, AU-12 | 10+ |
-| `src/compliance/` | Validates all controls | 15+ |
+| `src/tls.rs` | SC-8, SC-8(1), IA-3 | 25+ |
+| `src/encryption.rs` | SC-28, SC-13 (FIPS mode) | 15+ |
+| `src/secrets.rs` | IA-5(7) | 10+ |
+| `src/compliance/` | Validates all controls | 23+ |
 | `nix/modules/vault-pki.nix` | SC-12, SC-12(1), SC-17, IA-5(2), AU-2, AU-12 | VM test |
 
 ---
@@ -405,36 +405,35 @@
 ## Next Actions
 
 ### Remaining High Priority
-1. Secret detection scanner (IA-5(7))
-2. CI/CD security workflow (SA-15(7))
-3. Device identification middleware (IA-3) - can leverage Vault PKI mTLS
+1. CI/CD security workflow (SA-15(7))
+2. Nonce-based replay protection (IA-2(8))
 
 ### Medium Priority
 1. Role conflict checking (AC-5)
 2. Concurrent session control (AC-10)
-3. Nonce-based replay protection (IA-2(8))
-4. Maintenance mode middleware (MA-2)
+3. Maintenance mode middleware (MA-2)
 
 ---
 
 ## Compliance Certification Readiness
 
 ### FedRAMP Ready
-- Current: **80%** of required controls (up from 75%)
+- Current: **85%** of required controls (up from 80%)
 - Target: 95%+ (some controls are organizational)
-- Remaining: DNSSEC, few infrastructure controls
+- Remaining: DNSSEC, PIV support (FedRAMP High only)
+- New: mTLS enforcement (IA-3), FIPS 140-3 crypto (SC-13)
 
 ### SOC 2 Type II Ready
-- Current: **85%** of required controls (up from 80%)
+- Current: **88%** of required controls (up from 85%)
 - Target: 95%+
 - Remaining: Log retention policies, few audit controls
 
 ### NIST 800-53 Moderate Baseline
-- Current: **75%** of moderate baseline (up from 70%)
+- Current: **80%** of moderate baseline (up from 75%)
 - Target: 90%+
-- Remaining: DNSSEC, secret detection
+- Remaining: DNSSEC
 
 ---
 
 *This registry is maintained by the security-auditor-agent and updated as controls are implemented, tested, and verified.*
-*Last comprehensive update: 2025-12-17*
+*Last comprehensive update: 2025-12-18*

@@ -89,9 +89,11 @@ pub struct DatabaseConfig {
 
     /// SSL mode for connections
     /// **Layer**: PostgreSQL (libpq)
-    /// **Controls**: SC-8 (Transmission Confidentiality)
+    /// **Controls**: SC-8 (Transmission Confidentiality and Integrity)
     ///
-    /// Default: Require (encrypted connections mandatory)
+    /// Default: VerifyFull (encrypted + certificate + hostname verification)
+    /// This is required for FedRAMP Moderate and NIST 800-53 SC-8 compliance.
+    /// Uses system CA store; set ssl_root_cert for private/internal CAs.
     pub ssl_mode: SslMode,
 
     /// Path to SSL root certificate (CA) for server verification
@@ -228,9 +230,15 @@ pub enum SslMode {
 
 impl Default for SslMode {
     fn default() -> Self {
-        // Default to Require for production security
-        // Per SOC 2 and NIST 800-53, database connections should be encrypted
-        Self::Require
+        // Default to VerifyFull for FedRAMP/NIST 800-53 SC-8 compliance
+        // This ensures:
+        // 1. Connection is encrypted (confidentiality)
+        // 2. Server certificate is validated against CA (authenticity)
+        // 3. Server hostname matches certificate (prevents MITM)
+        //
+        // Uses system CA store by default; set ssl_root_cert for private CAs.
+        // For development with self-signed certs, explicitly set to Require.
+        Self::VerifyFull
     }
 }
 
@@ -292,9 +300,9 @@ impl Default for DatabaseConfig {
             statement_timeout: Duration::from_secs(30),
             lock_timeout: Duration::from_secs(10),
 
-            // PostgreSQL SSL/TLS settings
-            ssl_mode: SslMode::Require,
-            ssl_root_cert: None,
+            // PostgreSQL SSL/TLS settings (SC-8 compliant defaults)
+            ssl_mode: SslMode::VerifyFull,
+            ssl_root_cert: None, // Uses system CA store by default
             ssl_cert: None,
             ssl_key: None,
             ssl_crl: None,
@@ -329,7 +337,7 @@ impl DatabaseConfig {
     /// - `DB_LOCK_TIMEOUT`: Max lock wait time (default: "10s")
     ///
     /// ## PostgreSQL SSL/TLS (libpq)
-    /// - `DB_SSL_MODE`: disable|prefer|require|verify-ca|verify-full (default: require)
+    /// - `DB_SSL_MODE`: disable|prefer|require|verify-ca|verify-full (default: verify-full)
     /// - `DB_SSL_ROOT_CERT`: Path to CA certificate for server verification
     /// - `DB_SSL_CERT`: Path to client certificate for mTLS
     /// - `DB_SSL_KEY`: Path to client private key for mTLS
@@ -380,7 +388,7 @@ impl DatabaseConfig {
                 "verify-full" | "verifyfull" => SslMode::VerifyFull,
                 _ => SslMode::Require,
             })
-            .unwrap_or(SslMode::Require);
+            .unwrap_or(SslMode::VerifyFull);
 
         let ssl_root_cert = std::env::var("DB_SSL_ROOT_CERT").ok();
         let ssl_cert = std::env::var("DB_SSL_CERT").ok();
@@ -551,6 +559,53 @@ impl DatabaseConfigBuilder {
         Self {
             config: DatabaseConfig {
                 database_url: database_url.into(),
+                ..Default::default()
+            },
+        }
+    }
+
+    /// Create a builder configured for the given compliance profile.
+    ///
+    /// This applies profile-appropriate SSL settings (SC-8):
+    /// - FedRAMP Low: `Require` (encrypted, no cert validation)
+    /// - FedRAMP Moderate/SOC 2: `VerifyFull` (encrypted + cert validation)
+    /// - FedRAMP High: `VerifyFull` + requires mTLS client certs
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use barbican::database::{DatabaseConfig, DatabaseConfigBuilder};
+    /// use barbican::compliance::{ComplianceConfig, ComplianceProfile};
+    ///
+    /// let compliance = ComplianceConfig::from_profile(ComplianceProfile::FedRampModerate);
+    /// let db_config = DatabaseConfigBuilder::from_compliance("postgres://...", &compliance)
+    ///     .application_name("myapp")
+    ///     .build();
+    /// ```
+    pub fn from_compliance(
+        database_url: impl Into<String>,
+        config: &crate::compliance::ComplianceConfig,
+    ) -> Self {
+        use crate::compliance::ComplianceProfile;
+
+        let ssl_mode = if config.profile.requires_ssl_verify_full() {
+            SslMode::VerifyFull
+        } else {
+            SslMode::Require
+        };
+
+        // FedRAMP High requires mTLS - log a reminder if no client certs configured
+        if matches!(config.profile, ComplianceProfile::FedRampHigh) {
+            tracing::info!(
+                "FedRAMP High requires mTLS - ensure ssl_cert and ssl_key are configured"
+            );
+        }
+
+        Self {
+            config: DatabaseConfig {
+                database_url: database_url.into(),
+                ssl_mode,
+                ssl_require_valid_cert: config.profile.requires_ssl_verify_full(),
                 ..Default::default()
             },
         }
@@ -756,29 +811,29 @@ pub async fn create_pool(config: &DatabaseConfig) -> Result<PgPool, DatabaseErro
     // AU-2, AU-3: Application name for audit trails
     connect_options = connect_options.application_name(&config.application_name);
 
-    // SC-5: Build runtime options string for timeouts
+    // SC-5: Build runtime options for timeouts
     // These are set as PostgreSQL runtime parameters via the options connection parameter
-    let mut pg_options = Vec::new();
+    let mut pg_options: Vec<(String, String)> = Vec::new();
 
     // Statement timeout (SC-5, AC-3)
     if !config.statement_timeout.is_zero() {
-        pg_options.push(format!(
-            "-c statement_timeout={}",
-            config.statement_timeout.as_millis()
+        pg_options.push((
+            "statement_timeout".to_string(),
+            config.statement_timeout.as_millis().to_string(),
         ));
     }
 
     // Lock timeout (SC-5)
     if !config.lock_timeout.is_zero() {
-        pg_options.push(format!(
-            "-c lock_timeout={}",
-            config.lock_timeout.as_millis()
+        pg_options.push((
+            "lock_timeout".to_string(),
+            config.lock_timeout.as_millis().to_string(),
         ));
     }
 
     // Apply runtime options if any were set
     if !pg_options.is_empty() {
-        connect_options = connect_options.options(pg_options.iter().map(|s| s.as_str()));
+        connect_options = connect_options.options(pg_options);
     }
 
     // =========================================================================

@@ -8,9 +8,9 @@ auditor-verifiable artifacts proving NIST 800-53 control implementations behave 
 **Goal**: Enable `cargo test` to produce timestamped, signed JSON artifacts that auditors
 can use to verify control compliance without reading source code.
 
-**Document Version**: 1.0
+**Document Version**: 1.1
 **Created**: 2025-12-17
-**Target Completion**: Phase 1-3 (Core functionality)
+**Implemented**: 2025-12-18 (Phases 1-5 complete, 13 controls)
 
 ---
 
@@ -143,14 +143,14 @@ pub enum Severity {
 
 | Item | File | Status |
 |------|------|--------|
-| Serialize ComplianceReport | `src/compliance/validation.rs` | TODO |
-| Serialize ControlStatus | `src/compliance/validation.rs` | TODO |
-| Serialize SecurityEvent | `src/observability/events.rs` | TODO |
-| Add chrono dependency | `Cargo.toml` | TODO |
-| JSON export methods | `src/compliance/validation.rs` | TODO |
-| Unit tests for serialization | `src/compliance/validation.rs` | TODO |
+| Serialize ComplianceReport | `src/compliance/validation.rs` | DONE |
+| Serialize ControlStatus | `src/compliance/validation.rs` | DONE |
+| Serialize SecurityEvent | `src/observability/events.rs` | DONE |
+| Add chrono dependency | `Cargo.toml` | DONE |
+| JSON export methods | `src/compliance/validation.rs` | DONE |
+| Unit tests for serialization | `src/compliance/validation.rs` | DONE |
 
-**Estimated Effort**: 1-2 hours
+**Status**: COMPLETE
 
 ---
 
@@ -722,15 +722,15 @@ impl Default for EvidenceCollector {
 
 | Item | File | Status |
 |------|------|--------|
-| ControlTestArtifact struct | `src/compliance/artifacts.rs` | TODO |
-| ComplianceTestReport struct | `src/compliance/artifacts.rs` | TODO |
-| ArtifactBuilder | `src/compliance/artifacts.rs` | TODO |
-| EvidenceCollector | `src/compliance/artifacts.rs` | TODO |
-| CodeLocation struct | `src/compliance/artifacts.rs` | TODO |
-| JSON serialization | `src/compliance/artifacts.rs` | TODO |
-| Unit tests | `src/compliance/artifacts.rs` | TODO |
+| ControlTestArtifact struct | `src/compliance/artifacts.rs` | DONE |
+| ComplianceTestReport struct | `src/compliance/artifacts.rs` | DONE |
+| ArtifactBuilder | `src/compliance/artifacts.rs` | DONE |
+| EvidenceCollector | `src/compliance/artifacts.rs` | DONE |
+| CodeLocation struct | `src/compliance/artifacts.rs` | DONE |
+| JSON serialization | `src/compliance/artifacts.rs` | DONE |
+| Unit tests | `src/compliance/artifacts.rs` | DONE |
 
-**Estimated Effort**: 2-3 hours
+**Status**: COMPLETE
 
 ---
 
@@ -830,13 +830,13 @@ thiserror = "1.0"  # If not already present
 
 | Item | File | Status |
 |------|------|--------|
-| sign() method | `src/compliance/artifacts.rs` | TODO |
-| verify() method | `src/compliance/artifacts.rs` | TODO |
-| SigningError enum | `src/compliance/artifacts.rs` | TODO |
-| Add hmac, sha2, base64 deps | `Cargo.toml` | TODO |
-| Signing tests | `src/compliance/artifacts.rs` | TODO |
+| sign() method | `src/compliance/artifacts.rs` | DONE |
+| verify() method | `src/compliance/artifacts.rs` | DONE |
+| SigningError enum | `src/compliance/artifacts.rs` | DONE |
+| Add hmac, sha2, base64 deps | `Cargo.toml` | DONE |
+| Signing tests | `src/compliance/artifacts.rs` | DONE |
 
-**Estimated Effort**: 1-2 hours
+**Status**: COMPLETE
 
 ---
 
@@ -1293,16 +1293,18 @@ mod tests {
 
 | Item | File | Status |
 |------|------|--------|
-| control_test! macro | `src/compliance/test_macros.rs` | TODO |
-| AC-7 test | `src/compliance/control_tests.rs` | TODO |
-| SC-5 test | `src/compliance/control_tests.rs` | TODO |
-| SI-10 test | `src/compliance/control_tests.rs` | TODO |
-| IA-5(1) test | `src/compliance/control_tests.rs` | TODO |
-| AC-11 test | `src/compliance/control_tests.rs` | TODO |
-| Report generation function | `src/compliance/control_tests.rs` | TODO |
-| Integration tests | `src/compliance/control_tests.rs` | TODO |
+| control_test! macro | `src/compliance/test_macros.rs` | SKIPPED (using builder pattern instead) |
+| AC-7 test | `src/compliance/control_tests.rs` | DONE |
+| SC-5 test | `src/compliance/control_tests.rs` | DONE |
+| SI-10 test | `src/compliance/control_tests.rs` | DONE |
+| IA-5(1) test | `src/compliance/control_tests.rs` | DONE |
+| AC-11 test | `src/compliance/control_tests.rs` | DONE |
+| Report generation function | `src/compliance/control_tests.rs` | DONE |
+| Integration tests | `src/compliance/control_tests.rs` | DONE |
 
-**Estimated Effort**: 3-4 hours
+**Additional controls implemented**: AC-4, AU-2, AU-3, CM-6, IA-2, SC-8, SC-13, SI-11
+
+**Status**: COMPLETE (13 controls total)
 
 ---
 
@@ -1402,12 +1404,12 @@ pub use artifacts::{
 
 | Item | File | Status |
 |------|------|--------|
-| compliance-artifacts feature | `Cargo.toml` | TODO |
-| Report generation example | `examples/generate_compliance_report.rs` | TODO |
-| Module registration | `src/compliance/mod.rs` | TODO |
-| Re-exports | `src/compliance/mod.rs` | TODO |
+| compliance-artifacts feature | `Cargo.toml` | DONE |
+| Report generation example | `examples/generate_compliance_report.rs` | DONE |
+| Module registration | `src/compliance/mod.rs` | DONE |
+| Re-exports | `src/compliance/mod.rs` | DONE |
 
-**Estimated Effort**: 1 hour
+**Status**: COMPLETE
 
 ---
 
@@ -1435,23 +1437,23 @@ Implement artifact-generating tests for remaining high-priority controls:
 
 ### 6.2 Deliverables
 
-| Item | Priority | Effort |
+| Item | Priority | Status |
 |------|----------|--------|
-| AC-3 test | HIGH | 30 min |
-| AC-4 test | HIGH | 30 min |
-| AC-12 test | MEDIUM | 30 min |
-| AU-2 test | HIGH | 45 min |
-| AU-3 test | HIGH | 45 min |
-| AU-12 test | MEDIUM | 30 min |
-| CM-6 test | MEDIUM | 30 min |
-| IA-2 test | HIGH | 45 min |
-| SC-8 test | MEDIUM | 30 min |
-| SC-10 test | MEDIUM | 30 min |
-| SC-12 test | MEDIUM | 30 min |
-| SC-13 test | MEDIUM | 30 min |
-| SI-11 test | MEDIUM | 30 min |
+| AC-3 test | HIGH | DONE |
+| AC-4 test | HIGH | DONE (Phase 4) |
+| AC-12 test | MEDIUM | DONE |
+| AU-2 test | HIGH | DONE (Phase 4) |
+| AU-3 test | HIGH | DONE (Phase 4) |
+| AU-12 test | MEDIUM | DONE |
+| CM-6 test | MEDIUM | DONE (Phase 4) |
+| IA-2 test | HIGH | DONE (Phase 4) |
+| SC-8 test | MEDIUM | DONE (Phase 4) |
+| SC-10 test | MEDIUM | DONE |
+| SC-12 test | MEDIUM | DONE |
+| SC-13 test | MEDIUM | DONE (Phase 4) |
+| SI-11 test | MEDIUM | DONE (Phase 4) |
 
-**Estimated Effort**: 6-8 hours
+**Status**: COMPLETE (18 total control tests implemented)
 
 ---
 
@@ -1580,17 +1582,16 @@ Implement artifact-generating tests for remaining high-priority controls:
 
 ## Timeline Summary
 
-| Phase | Description | Effort | Dependencies |
-|-------|-------------|--------|--------------|
-| 1 | JSON Serialization | 1-2 hrs | None |
-| 2 | Artifact Structure | 2-3 hrs | Phase 1 |
-| 3 | Report Signing | 1-2 hrs | Phase 2 |
-| 4 | Control Tests | 3-4 hrs | Phase 2 |
-| 5 | CLI Integration | 1 hr | Phase 3, 4 |
-| 6 | Extended Coverage | 6-8 hrs | Phase 4 |
+| Phase | Description | Effort | Dependencies | Status |
+|-------|-------------|--------|--------------|--------|
+| 1 | JSON Serialization | 1-2 hrs | None | COMPLETE |
+| 2 | Artifact Structure | 2-3 hrs | Phase 1 | COMPLETE |
+| 3 | Report Signing | 1-2 hrs | Phase 2 | COMPLETE |
+| 4 | Control Tests | 3-4 hrs | Phase 2 | COMPLETE (13 controls) |
+| 5 | CLI Integration | 1 hr | Phase 3, 4 | COMPLETE |
+| 6 | Extended Coverage | 6-8 hrs | Phase 4 | COMPLETE (5 new controls) |
 
-**Total Core (Phases 1-5)**: 8-12 hours
-**Total with Extended Coverage**: 14-20 hours
+**ALL PHASES COMPLETE** - 18 total control tests implemented
 
 ---
 
@@ -1617,6 +1618,6 @@ Implement artifact-generating tests for remaining high-priority controls:
 
 ---
 
-*Plan Version: 1.0*
+*Plan Version: 1.2*
 *Author: Claude*
-*Review Status: Draft*
+*Review Status: ALL PHASES IMPLEMENTED (2025-12-18)*

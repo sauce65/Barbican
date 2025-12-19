@@ -43,6 +43,7 @@
         secureUsers = import ./nix/modules/secure-users.nix;
         securePostgres = import ./nix/modules/secure-postgres.nix;
         hardenedSSH = import ./nix/modules/hardened-ssh.nix;
+        hardenedNginx = import ./nix/modules/hardened-nginx.nix;
         secretsManagement = import ./nix/modules/secrets-management.nix;
         observabilityAuth = import ./nix/modules/observability-auth.nix;
         vmFirewall = import ./nix/modules/vm-firewall.nix;
@@ -65,6 +66,7 @@
             ./nix/modules/secure-users.nix
             ./nix/modules/secure-postgres.nix
             ./nix/modules/hardened-ssh.nix
+            ./nix/modules/hardened-nginx.nix
             ./nix/modules/secrets-management.nix
             ./nix/modules/observability-auth.nix
             ./nix/modules/vm-firewall.nix
@@ -174,6 +176,7 @@ with open('${./Cargo.lock}', 'rb') as f:
           # Individual module tests
           secure-users = import ./nix/tests/secure-users.nix { inherit pkgs lib; };
           hardened-ssh = import ./nix/tests/hardened-ssh.nix { inherit pkgs lib; };
+          hardened-nginx = import ./nix/tests/hardened-nginx.nix { inherit pkgs lib; };
           kernel-hardening = import ./nix/tests/kernel-hardening.nix { inherit pkgs lib; };
           secure-postgres = import ./nix/tests/secure-postgres.nix { inherit pkgs lib; };
           time-sync = import ./nix/tests/time-sync.nix { inherit pkgs lib; };

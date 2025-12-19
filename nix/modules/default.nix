@@ -4,6 +4,7 @@
   secureUsers = import ./secure-users.nix;
   securePostgres = import ./secure-postgres.nix;
   hardenedSSH = import ./hardened-ssh.nix;
+  hardenedNginx = import ./hardened-nginx.nix;  # SC-8, IA-3: Reverse Proxy
   secretsManagement = import ./secrets-management.nix;
   observabilityAuth = import ./observability-auth.nix;
   vmFirewall = import ./vm-firewall.nix;

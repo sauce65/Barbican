@@ -25,10 +25,12 @@
 //! - **[`alerting`]**: Security incident alerting with rate limiting (IR-4, IR-5)
 //! - **[`health`]**: Health check framework with aggregation (CA-7)
 //! - **[`keys`]**: Key management with KMS integration traits (SC-12)
+//! - **[`secrets`]**: Secret detection scanner for embedded authenticators (IA-5(7))
 //! - **[`supply_chain`]**: SBOM generation, license compliance, vulnerability audit (SR-3, SR-4)
 //! - **[`testing`]**: Security test utilities (XSS, SQLi payloads) (SA-11, CA-8)
 //!
 //! ### Data Protection
+//! - **[`encryption`]**: Field-level encryption for data at rest (SC-28)
 //! - **[`validation`]**: Input validation and sanitization (SI-10)
 //! - **[`error`]**: Secure error handling, no info leakage (SI-11)
 //! - **Cryptographic utilities**: Constant-time comparison (SC-13)
@@ -264,6 +266,8 @@ pub mod alerting;
 pub mod health;
 pub mod keys;
 pub mod observability;
+pub mod encryption;
+pub mod secrets;
 pub mod supply_chain;
 pub mod testing;
 
@@ -325,5 +329,14 @@ pub use compliance::{ComplianceConfig, ComplianceProfile, ComplianceValidator};
 // Audit middleware re-exports (AU-2, AU-3, AU-12)
 pub use audit::{audit_middleware, extract_client_ip, AuditRecord, AuditOutcome};
 
+// Audit integrity re-exports (AU-9)
+pub use audit::integrity::{
+    AuditChain, AuditIntegrityConfig, AuditIntegrityError, AuditLogDestination,
+    ChainVerificationResult, SignatureAlgorithm, SignedAuditRecord,
+};
+
 // TLS enforcement re-exports (SC-8, SC-8(1))
 pub use tls::{TlsMode, TlsInfo, detect_tls, tls_enforcement_middleware};
+
+// mTLS enforcement re-exports (IA-3, SC-8 for FedRAMP High)
+pub use tls::{MtlsMode, ClientCertInfo, detect_client_cert, mtls_enforcement_middleware};

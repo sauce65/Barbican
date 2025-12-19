@@ -13,6 +13,7 @@ let
   testModules = {
     secure-users = import ./secure-users.nix { inherit pkgs lib; };
     hardened-ssh = import ./hardened-ssh.nix { inherit pkgs lib; };
+    hardened-nginx = import ./hardened-nginx.nix { inherit pkgs lib; };
     kernel-hardening = import ./kernel-hardening.nix { inherit pkgs lib; };
     secure-postgres = import ./secure-postgres.nix { inherit pkgs lib; };
     time-sync = import ./time-sync.nix { inherit pkgs lib; };

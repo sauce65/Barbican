@@ -119,6 +119,15 @@ impl ComplianceProfile {
         matches!(self, Self::FedRampHigh)
     }
 
+    /// Whether SSL certificate verification is required (SC-8)
+    ///
+    /// FedRAMP Moderate and above require full certificate verification
+    /// (VerifyFull mode) to prevent MITM attacks on database connections.
+    /// FedRAMP Low allows Require mode (encryption without cert validation).
+    pub fn requires_ssl_verify_full(&self) -> bool {
+        !matches!(self, Self::FedRampLow)
+    }
+
     /// Whether encryption at rest is required (SC-28)
     ///
     /// FedRAMP Moderate and High require encryption of data at rest.
@@ -306,6 +315,16 @@ mod tests {
         assert!(!ComplianceProfile::FedRampLow.requires_mtls());
         assert!(!ComplianceProfile::FedRampModerate.requires_mtls());
         assert!(ComplianceProfile::FedRampHigh.requires_mtls());
+    }
+
+    #[test]
+    fn test_ssl_verify_full_requirements() {
+        // FedRAMP Low allows Require mode (encryption without cert validation)
+        assert!(!ComplianceProfile::FedRampLow.requires_ssl_verify_full());
+        // FedRAMP Moderate and above require VerifyFull (SC-8)
+        assert!(ComplianceProfile::FedRampModerate.requires_ssl_verify_full());
+        assert!(ComplianceProfile::FedRampHigh.requires_ssl_verify_full());
+        assert!(ComplianceProfile::Soc2.requires_ssl_verify_full());
     }
 
     #[test]
