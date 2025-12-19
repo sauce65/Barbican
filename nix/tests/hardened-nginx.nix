@@ -62,9 +62,7 @@ pkgs.testers.nixosTest {
         burstSize = 20;
       };
 
-      proxy = {
-        upstream = "http://127.0.0.1:3000";
-      };
+      # upstream defaults to 127.0.0.1:3000 which matches our test backend
     };
 
     # Simple backend for testing
