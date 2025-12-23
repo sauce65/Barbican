@@ -619,6 +619,96 @@ with open('${./Cargo.lock}', 'rb') as f:
               echo "Full chain:      $OUTPUT_DIR/ca-chain.pem"
             '');
           };
+
+          # =============================================================
+          # Observability Stack Generator (AU-2, AU-6, CA-7)
+          # =============================================================
+
+          # Generate FedRAMP-compliant observability infrastructure
+          observability-stack = {
+            type = "app";
+            program = let
+              stackGen = pkgs.rustPlatform.buildRustPackage {
+                pname = "generate_observability_stack";
+                version = "0.1.0";
+                src = ./.;
+                cargoLock.lockFile = ./Cargo.lock;
+                nativeBuildInputs = [ pkgs.pkg-config ];
+                buildInputs = [ pkgs.openssl ];
+                buildAndTestSubdir = ".";
+                cargoBuildFlags = [ "--bin" "generate_observability_stack" ];
+                doCheck = false;
+              };
+            in toString (pkgs.writeShellScript "observability-stack" ''
+              exec ${stackGen}/bin/generate_observability_stack "$@"
+            '');
+          };
+
+          # Convenience wrapper with guided prompts
+          observability-init = {
+            type = "app";
+            program = toString (pkgs.writeShellScript "observability-init" ''
+              set -euo pipefail
+
+              echo "=============================================="
+              echo "  Barbican Observability Stack Initializer"
+              echo "  FedRAMP-Compliant Infrastructure Generator"
+              echo "=============================================="
+              echo ""
+
+              # Get app name
+              if [ -n "''${1:-}" ]; then
+                APP_NAME="$1"
+              else
+                read -rp "Application name: " APP_NAME
+              fi
+
+              # Get app port
+              if [ -n "''${2:-}" ]; then
+                APP_PORT="$2"
+              else
+                read -rp "Metrics port [3000]: " APP_PORT
+                APP_PORT="''${APP_PORT:-3000}"
+              fi
+
+              # Get output directory
+              if [ -n "''${3:-}" ]; then
+                OUTPUT_DIR="$3"
+              else
+                read -rp "Output directory [./observability]: " OUTPUT_DIR
+                OUTPUT_DIR="''${OUTPUT_DIR:-./observability}"
+              fi
+
+              # Get compliance profile
+              echo ""
+              echo "Compliance profiles:"
+              echo "  1) fedramp-low      - Basic security controls"
+              echo "  2) fedramp-moderate - Standard FedRAMP (default)"
+              echo "  3) fedramp-high     - Maximum security"
+              echo "  4) soc2             - SOC 2 Type II"
+              echo ""
+              read -rp "Select profile [2]: " PROFILE_NUM
+              PROFILE_NUM="''${PROFILE_NUM:-2}"
+
+              case "$PROFILE_NUM" in
+                1) PROFILE="fedramp-low" ;;
+                3) PROFILE="fedramp-high" ;;
+                4) PROFILE="soc2" ;;
+                *) PROFILE="fedramp-moderate" ;;
+              esac
+
+              echo ""
+              echo "Generating observability stack..."
+              echo ""
+
+              # Run the generator
+              nix run ${self}#observability-stack -- \
+                --app-name "$APP_NAME" \
+                --app-port "$APP_PORT" \
+                --output "$OUTPUT_DIR" \
+                --profile "$PROFILE"
+            '');
+          };
         }
       );
 
