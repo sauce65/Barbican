@@ -9,6 +9,7 @@
 //!
 //! ### Infrastructure Layer
 //! - **[`layers`]**: Security headers, rate limiting, CORS, timeouts (SC-5, SC-8, CM-6, AC-4)
+//! - **[`rate_limit`]**: Tiered rate limiting with lockout support (SC-5, AC-7)
 //! - **[`tls`]**: HTTP TLS enforcement middleware (SC-8, SC-8(1))
 //! - **[`audit`]**: Security-aware HTTP audit middleware (AU-2, AU-3, AU-12)
 //! - **[`observability`]**: Structured logging, metrics, distributed tracing (AU-2, AU-3, AU-12)
@@ -17,6 +18,7 @@
 //!
 //! ### Authentication & Authorization
 //! - **[`auth`]**: OAuth/OIDC JWT claims, MFA policy enforcement (IA-2, IA-5, AC-2)
+//! - **[`jwt_secret`]**: JWT secret validation with entropy checks and weak pattern detection (IA-5, SC-12)
 //! - **[`password`]**: NIST 800-63B compliant password validation (IA-5(1))
 //! - **[`login`]**: Login attempt tracking, account lockout (AC-7)
 //! - **[`session`]**: Session management, idle/absolute timeout (AC-11, AC-12, SC-10)
@@ -27,7 +29,8 @@
 //! - **[`keys`]**: Key management with KMS integration traits (SC-12)
 //! - **[`secrets`]**: Secret detection scanner for embedded authenticators (IA-5(7))
 //! - **[`supply_chain`]**: SBOM generation, license compliance, vulnerability audit (SR-3, SR-4)
-//! - **[`testing`]**: Security test utilities (XSS, SQLi payloads) (SA-11, CA-8)
+//! - **[`testing`]**: Security test utilities, header verification and generation (SA-11, CA-8, SC-8, CM-6)
+//! - **[`integration`]**: Application integration helpers (profile detection, config builders)
 //!
 //! ### Data Protection
 //! - **[`encryption`]**: Field-level encryption for data at rest (SC-28)
@@ -147,20 +150,65 @@
 //! let sbom = generate_cyclonedx_sbom(&deps, SbomMetadata::new("myapp", "1.0.0"));
 //! ```
 //!
+//! ## JWT Secret Validation (IA-5, SC-12)
+//!
+//! ```ignore
+//! use barbican::jwt_secret::{JwtSecretValidator, JwtSecretPolicy};
+//! use barbican::compliance::config;
+//!
+//! // Derive policy from compliance profile (recommended)
+//! let policy = JwtSecretPolicy::for_compliance(config().profile);
+//!
+//! // Or use environment-aware defaults
+//! let policy = JwtSecretPolicy::for_environment("production");
+//!
+//! // Validate a secret
+//! let validator = JwtSecretValidator::new(policy);
+//! validator.validate("my-jwt-secret")?;
+//!
+//! // Generate a cryptographically secure secret
+//! let secret = JwtSecretValidator::generate_secure_secret(64);
+//! ```
+//!
+//! ## Security Headers (SC-8, CM-6)
+//!
+//! ```ignore
+//! use barbican::testing::SecurityHeaders;
+//! use barbican::compliance::ComplianceProfile;
+//!
+//! // Generate headers for API endpoints
+//! let headers = SecurityHeaders::api();
+//! for (name, value) in headers.to_header_pairs() {
+//!     response.headers_mut().insert(name, value.parse().unwrap());
+//! }
+//!
+//! // Production headers with HSTS preload
+//! let headers = SecurityHeaders::production();
+//!
+//! // Compliance-aware headers (FedRAMP High uses strict())
+//! let headers = SecurityHeaders::for_compliance(ComplianceProfile::FedRampHigh);
+//!
+//! // Verify response headers meet security requirements
+//! let expected = SecurityHeaders::strict();
+//! let issues = expected.verify(&response_headers);
+//! assert!(issues.is_empty());
+//! ```
+//!
 //! ## Security Testing (SA-11, CA-8)
 //!
 //! ```ignore
 //! use barbican::testing::{xss_payloads, sql_injection_payloads, SecurityHeaders};
 //!
-//! // Fuzz test your endpoints
+//! // Fuzz test your endpoints for XSS vulnerabilities
 //! for payload in xss_payloads() {
 //!     let response = client.post("/api/comment").body(payload).send().await?;
-//!     assert!(!response.text().contains(payload));
+//!     assert!(!response.text().contains(payload)); // Should be escaped
 //! }
 //!
-//! // Validate security headers
-//! let headers = SecurityHeaders::from_response(&response);
-//! assert!(headers.validate().is_empty());
+//! // Validate security headers on responses
+//! let expected = SecurityHeaders::default();
+//! let issues = expected.verify(&response_headers);
+//! assert!(issues.is_empty());
 //! ```
 //!
 //! ## Input Validation (SI-10)
@@ -247,6 +295,9 @@ mod layers;
 mod parse;
 pub mod tls;
 
+// Rate limiting with tiered support (SC-5, AC-7)
+pub mod rate_limit;
+
 // Security audit middleware (AU-2, AU-3, AU-12)
 pub mod audit;
 
@@ -255,6 +306,7 @@ pub mod compliance;
 
 // Authentication & Authorization modules
 pub mod auth;
+pub mod jwt_secret;
 pub mod login;
 pub mod password;
 pub mod session;
@@ -291,6 +343,9 @@ pub use validation::{ValidationError, ValidationErrorCode, Validate};
 
 // Password policy re-exports
 pub use password::{PasswordError, PasswordPolicy, PasswordStrength};
+
+// JWT secret validation re-exports (IA-5, SC-12)
+pub use jwt_secret::{JwtSecretError, JwtSecretPolicy, JwtSecretValidator};
 
 // Auth re-exports
 pub use auth::{Claims, log_access_decision, log_access_denied, MfaPolicy, log_mfa_success, log_mfa_required};
@@ -345,3 +400,10 @@ pub use tls::{TlsMode, TlsInfo, detect_tls, tls_enforcement_middleware};
 
 // mTLS enforcement re-exports (IA-3, SC-8 for FedRAMP High)
 pub use tls::{MtlsMode, ClientCertInfo, detect_client_cert, mtls_enforcement_middleware};
+
+// Tiered rate limiting re-exports (SC-5, AC-7)
+pub use rate_limit::{
+    RateLimitTier, RateLimitTierConfig, RateLimitStatus, RateLimitError,
+    TieredRateLimiter, TieredRateLimiterBuilder, TierResolver, DefaultTierResolver,
+    tiered_rate_limit_middleware, tiered_rate_limit_middleware_with_proxy,
+};

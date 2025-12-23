@@ -373,6 +373,172 @@ impl SecurityHeaders {
 
         issues
     }
+
+    // ========================================================================
+    // Header Generation Methods (for adding to responses)
+    // ========================================================================
+
+    /// Create headers suitable for API endpoints.
+    ///
+    /// Provides a balanced set of security headers that work well for REST APIs:
+    /// - HSTS with 1-year max-age
+    /// - Permissive CSP for API responses
+    /// - Standard protective headers
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use barbican::testing::SecurityHeaders;
+    ///
+    /// let headers = SecurityHeaders::api();
+    /// for (name, value) in headers.to_header_pairs() {
+    ///     println!("{}: {}", name, value);
+    /// }
+    /// ```
+    pub fn api() -> Self {
+        Self {
+            hsts: Some("max-age=31536000; includeSubDomains".to_string()),
+            csp: Some("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'".to_string()),
+            x_frame_options: Some("DENY".to_string()),
+            x_content_type_options: Some("nosniff".to_string()),
+            x_xss_protection: Some("1; mode=block".to_string()),
+            referrer_policy: Some("strict-origin-when-cross-origin".to_string()),
+            permissions_policy: Some("geolocation=(), microphone=(), camera=()".to_string()),
+        }
+    }
+
+    /// Create headers for production environments.
+    ///
+    /// Uses stricter settings than `api()`:
+    /// - HSTS with 2-year max-age and preload directive
+    /// - All standard protective headers
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use barbican::testing::SecurityHeaders;
+    ///
+    /// let headers = SecurityHeaders::production();
+    /// assert!(headers.hsts.as_ref().unwrap().contains("preload"));
+    /// ```
+    pub fn production() -> Self {
+        Self {
+            hsts: Some("max-age=63072000; includeSubDomains; preload".to_string()),
+            csp: Some("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'".to_string()),
+            x_frame_options: Some("DENY".to_string()),
+            x_content_type_options: Some("nosniff".to_string()),
+            x_xss_protection: Some("1; mode=block".to_string()),
+            referrer_policy: Some("strict-origin-when-cross-origin".to_string()),
+            permissions_policy: Some("geolocation=(), microphone=(), camera=()".to_string()),
+        }
+    }
+
+    /// Create headers based on compliance profile.
+    ///
+    /// - FedRAMP High: Strictest headers with preload
+    /// - FedRAMP Moderate/SOC 2: Production-level headers
+    /// - FedRAMP Low: Standard API headers
+    /// - Custom: Minimal headers
+    pub fn for_compliance(profile: crate::compliance::ComplianceProfile) -> Self {
+        use crate::compliance::ComplianceProfile;
+        match profile {
+            ComplianceProfile::FedRampHigh => Self::strict(),
+            ComplianceProfile::FedRampModerate | ComplianceProfile::Soc2 => Self::production(),
+            ComplianceProfile::FedRampLow => Self::api(),
+            ComplianceProfile::Custom => Self::minimal(),
+        }
+    }
+
+    /// Convert to a vector of header name-value pairs.
+    ///
+    /// Returns only headers that have values set. Useful for adding
+    /// headers to HTTP responses.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use barbican::testing::SecurityHeaders;
+    ///
+    /// let headers = SecurityHeaders::api();
+    /// let pairs = headers.to_header_pairs();
+    ///
+    /// // Use with Axum or other frameworks
+    /// for (name, value) in pairs {
+    ///     println!("Adding header: {}: {}", name, value);
+    /// }
+    /// ```
+    pub fn to_header_pairs(&self) -> Vec<(String, String)> {
+        let mut pairs = Vec::new();
+
+        if let Some(v) = &self.x_content_type_options {
+            pairs.push(("X-Content-Type-Options".to_string(), v.clone()));
+        }
+        if let Some(v) = &self.x_frame_options {
+            pairs.push(("X-Frame-Options".to_string(), v.clone()));
+        }
+        if let Some(v) = &self.x_xss_protection {
+            pairs.push(("X-XSS-Protection".to_string(), v.clone()));
+        }
+        if let Some(v) = &self.referrer_policy {
+            pairs.push(("Referrer-Policy".to_string(), v.clone()));
+        }
+        if let Some(v) = &self.csp {
+            pairs.push(("Content-Security-Policy".to_string(), v.clone()));
+        }
+        if let Some(v) = &self.hsts {
+            pairs.push(("Strict-Transport-Security".to_string(), v.clone()));
+        }
+        if let Some(v) = &self.permissions_policy {
+            pairs.push(("Permissions-Policy".to_string(), v.clone()));
+        }
+
+        pairs
+    }
+
+    /// Convert to static string slices for use with middleware.
+    ///
+    /// Returns a vector of header pairs as static strings. Useful when
+    /// you need to configure middleware with compile-time known headers.
+    ///
+    /// Note: This allocates and leaks memory intentionally to create
+    /// static strings. Only call once during application initialization.
+    pub fn to_static_pairs(&self) -> Vec<(&'static str, &'static str)> {
+        self.to_header_pairs()
+            .into_iter()
+            .map(|(k, v)| {
+                let k: &'static str = Box::leak(k.into_boxed_str());
+                let v: &'static str = Box::leak(v.into_boxed_str());
+                (k, v)
+            })
+            .collect()
+    }
+
+    /// Get header names that are set.
+    pub fn header_names(&self) -> Vec<&'static str> {
+        let mut names = Vec::new();
+        if self.x_content_type_options.is_some() {
+            names.push("X-Content-Type-Options");
+        }
+        if self.x_frame_options.is_some() {
+            names.push("X-Frame-Options");
+        }
+        if self.x_xss_protection.is_some() {
+            names.push("X-XSS-Protection");
+        }
+        if self.referrer_policy.is_some() {
+            names.push("Referrer-Policy");
+        }
+        if self.csp.is_some() {
+            names.push("Content-Security-Policy");
+        }
+        if self.hsts.is_some() {
+            names.push("Strict-Transport-Security");
+        }
+        if self.permissions_policy.is_some() {
+            names.push("Permissions-Policy");
+        }
+        names
+    }
 }
 
 /// Issue found when verifying security headers
@@ -877,5 +1043,98 @@ mod tests {
             Some("true"),
         );
         assert!(issues.is_empty());
+    }
+
+    // ========================================================================
+    // Tests for SecurityHeaders generation methods
+    // ========================================================================
+
+    #[test]
+    fn test_security_headers_api() {
+        let headers = SecurityHeaders::api();
+        assert!(headers.hsts.is_some());
+        assert!(headers.csp.is_some());
+        assert!(headers.x_frame_options.as_ref().unwrap() == "DENY");
+        assert!(headers.x_content_type_options.as_ref().unwrap() == "nosniff");
+        assert!(headers.permissions_policy.is_some());
+        // API headers should NOT have preload
+        assert!(!headers.hsts.as_ref().unwrap().contains("preload"));
+    }
+
+    #[test]
+    fn test_security_headers_production() {
+        let headers = SecurityHeaders::production();
+        assert!(headers.hsts.is_some());
+        // Production headers SHOULD have preload
+        assert!(headers.hsts.as_ref().unwrap().contains("preload"));
+        assert!(headers.hsts.as_ref().unwrap().contains("63072000"));
+    }
+
+    #[test]
+    fn test_security_headers_for_compliance() {
+        use crate::compliance::ComplianceProfile;
+
+        // FedRAMP High should be strictest
+        let high = SecurityHeaders::for_compliance(ComplianceProfile::FedRampHigh);
+        assert!(high.hsts.as_ref().unwrap().contains("preload"));
+
+        // FedRAMP Moderate should have production headers
+        let moderate = SecurityHeaders::for_compliance(ComplianceProfile::FedRampModerate);
+        assert!(moderate.hsts.as_ref().unwrap().contains("preload"));
+
+        // FedRAMP Low should have API headers (no preload)
+        let low = SecurityHeaders::for_compliance(ComplianceProfile::FedRampLow);
+        assert!(!low.hsts.as_ref().unwrap().contains("preload"));
+
+        // Custom should be minimal
+        let custom = SecurityHeaders::for_compliance(ComplianceProfile::Custom);
+        assert!(custom.hsts.is_none());
+    }
+
+    #[test]
+    fn test_security_headers_to_header_pairs() {
+        let headers = SecurityHeaders::api();
+        let pairs = headers.to_header_pairs();
+
+        // Should have 7 headers for API configuration
+        assert_eq!(pairs.len(), 7);
+
+        // Check specific headers exist
+        let header_names: Vec<&str> = pairs.iter().map(|(k, _)| k.as_str()).collect();
+        assert!(header_names.contains(&"X-Content-Type-Options"));
+        assert!(header_names.contains(&"X-Frame-Options"));
+        assert!(header_names.contains(&"Strict-Transport-Security"));
+        assert!(header_names.contains(&"Content-Security-Policy"));
+        assert!(header_names.contains(&"Permissions-Policy"));
+    }
+
+    #[test]
+    fn test_security_headers_to_header_pairs_minimal() {
+        let headers = SecurityHeaders::minimal();
+        let pairs = headers.to_header_pairs();
+
+        // Minimal should only have 2 headers
+        assert_eq!(pairs.len(), 2);
+    }
+
+    #[test]
+    fn test_security_headers_header_names() {
+        let headers = SecurityHeaders::api();
+        let names = headers.header_names();
+
+        assert_eq!(names.len(), 7);
+        assert!(names.contains(&"X-Content-Type-Options"));
+        assert!(names.contains(&"X-Frame-Options"));
+        assert!(names.contains(&"Strict-Transport-Security"));
+    }
+
+    #[test]
+    fn test_security_headers_header_names_minimal() {
+        let headers = SecurityHeaders::minimal();
+        let names = headers.header_names();
+
+        assert_eq!(names.len(), 2);
+        assert!(names.contains(&"X-Content-Type-Options"));
+        assert!(names.contains(&"X-Frame-Options"));
     }
 }

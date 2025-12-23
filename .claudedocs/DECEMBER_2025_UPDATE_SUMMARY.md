@@ -1,7 +1,108 @@
 # Barbican December 2025 Update Summary
 
-**Generated**: 2025-12-18
+**Generated**: 2025-12-18 (updated 2025-12-23)
 **Documentation Update**: Comprehensive review and update of all project documentation
+
+---
+
+## December 23, 2025 Update: JWT Secret Validation & SecurityHeaders Generation
+
+### New Modules
+
+#### 1. JWT Secret Validation (`src/jwt_secret.rs`)
+**Status**: ✅ IMPLEMENTED
+**Controls**: IA-5, SC-12
+
+JWT secret validation with entropy calculation, weak pattern detection, and compliance-aware policies:
+
+```rust
+use barbican::jwt_secret::{JwtSecretValidator, JwtSecretPolicy};
+use barbican::compliance::config;
+
+// Derive policy from compliance profile
+let policy = JwtSecretPolicy::for_compliance(config().profile);
+
+// Or use environment-aware defaults
+let policy = JwtSecretPolicy::for_environment("production");
+
+// Validate a secret
+let validator = JwtSecretValidator::new(policy);
+validator.validate("my-jwt-secret")?;
+
+// Generate a cryptographically secure secret
+let secret = JwtSecretValidator::generate_secure_secret(64);
+```
+
+**Features**:
+- Entropy calculation (Shannon entropy)
+- Character diversity requirements
+- Weak pattern detection (keyboard patterns, sequential chars)
+- Compliance profile integration
+- Secure secret generation
+
+#### 2. SecurityHeaders Generation (enhanced `src/testing.rs`)
+**Status**: ✅ ENHANCED
+**Controls**: SC-8, CM-6, CA-8
+
+SecurityHeaders struct now includes generation methods for adding security headers to responses:
+
+```rust
+use barbican::testing::SecurityHeaders;
+use barbican::compliance::ComplianceProfile;
+
+// Generate headers for API endpoints
+let headers = SecurityHeaders::api();
+for (name, value) in headers.to_header_pairs() {
+    response.headers_mut().insert(name, value.parse().unwrap());
+}
+
+// Production headers with HSTS preload
+let headers = SecurityHeaders::production();
+
+// Compliance-aware headers (FedRAMP High uses strict())
+let headers = SecurityHeaders::for_compliance(ComplianceProfile::FedRampHigh);
+
+// Verify headers on responses
+let expected = SecurityHeaders::strict();
+let issues = expected.verify(&response_headers);
+```
+
+**New Methods**:
+- `api()` - Standard API headers (HSTS 1 year, CSP, X-Frame-Options, etc.)
+- `production()` - Production headers with HSTS preload (2 year max-age)
+- `for_compliance(profile)` - Compliance-aware headers
+- `to_header_pairs()` - Convert to `Vec<(String, String)>` for response building
+- `to_static_pairs()` - Convert to static strings for middleware
+- `header_names()` - List header names that are set
+
+#### 3. Integration Helpers (`src/integration.rs`)
+**Status**: ✅ AVAILABLE
+
+Application integration helpers for building compliant applications:
+
+```rust
+use barbican::integration::{
+    profile_from_env,
+    database_config_for_profile,
+    validate_database_config,
+    SbomBuilder,
+    run_security_audit,
+};
+```
+
+**Functions**:
+- `profile_from_env()` - Detect compliance profile from environment
+- `database_config_for_profile()` - Build database config for compliance
+- `validate_database_config()` - Validate config meets compliance requirements
+- `SbomBuilder` - Fluent SBOM generation
+- `run_security_audit()` - Comprehensive security audit
+
+### Documentation Updates (2025-12-23)
+
+1. **README.md** - Added jwt_secret module, updated testing module description, added integration helpers
+2. **src/lib.rs** - Updated module documentation with jwt_secret and integration modules
+3. **SECURITY_CONTROL_REGISTRY.md** - Added jwt_secret to IA-5 and SC-12 entries
+4. **NIST_800_53_CROSSWALK.md** - Added JWT secret validation and SecurityHeaders sections
 
 ---
 
@@ -139,14 +240,16 @@ AES-256-GCM encryption for data at rest:
 
 ## Module Updates
 
-### New Modules (4)
+### New Modules (6)
 
 1. **`tls`** - TLS/mTLS enforcement middleware
 2. **`encryption`** - Field-level encryption for data at rest
 3. **`secrets`** - Secret detection scanner
 4. **`audit::integrity`** - Audit log integrity protection
+5. **`jwt_secret`** - JWT secret validation (IA-5, SC-12)
+6. **`integration`** - Application integration helpers
 
-### Updated Modules (7)
+### Updated Modules (8)
 
 1. **`database`** - SSL VerifyFull default
 2. **`audit`** - Added integrity protection submodule
@@ -155,6 +258,7 @@ AES-256-GCM encryption for data at rest:
 5. **`session`** - Session authenticity tests
 6. **`error`** - Authentication feedback tests
 7. **`layers`** - Network disconnect tests
+8. **`testing`** - SecurityHeaders generation methods (api(), production(), for_compliance())
 
 ### NixOS Modules (2 new)
 
@@ -220,6 +324,9 @@ AES-256-GCM encryption for data at rest:
 | `src/tls.rs` | SC-8, IA-3 | 727 | 25+ |
 | `src/encryption.rs` | SC-28 | 385 | 15+ |
 | `src/secrets.rs` | IA-5(7) | 442 | 10+ |
+| `src/jwt_secret.rs` | IA-5, SC-12 | ~250 | 10+ |
+| `src/testing.rs` | SA-11, CA-8, SC-8, CM-6 | ~600 | 23+ |
+| `src/integration.rs` | - | ~200 | 5+ |
 | `nix/modules/hardened-nginx.nix` | SC-8, IA-3 | 389 | 1 VM test |
 | `nix/modules/vault-pki.nix` | SC-12, SC-17 | 627 | 1 VM test |
 
@@ -324,4 +431,4 @@ rg "pub fn test_" src/compliance/control_tests.rs | wc -l
 
 **Report prepared by**: security-auditor-agent
 **Documentation verification**: All code locations verified against actual source
-**Last updated**: 2025-12-18
+**Last updated**: 2025-12-23 (JWT secret validation, SecurityHeaders generation)

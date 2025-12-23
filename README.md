@@ -76,6 +76,7 @@ Barbican provides 18 security modules covering 56+ NIST 800-53 controls:
 | Module | Description | NIST Controls |
 |--------|-------------|---------------|
 | `auth` | OAuth/OIDC JWT claims, MFA policy enforcement | IA-2, IA-5, AC-2 |
+| `jwt_secret` | JWT secret validation (entropy, weak patterns, policy) | IA-5, SC-12 |
 | `password` | NIST 800-63B compliant password validation | IA-5(1) |
 | `login` | Login attempt tracking, account lockout | AC-7 |
 | `session` | Session management, idle timeout, termination | AC-11, AC-12, SC-10 |
@@ -89,7 +90,8 @@ Barbican provides 18 security modules covering 56+ NIST 800-53 controls:
 | `keys` | Key management with KMS integration traits | SC-12 |
 | `secrets` | Secret detection scanner for embedded credentials | IA-5(7) |
 | `supply_chain` | SBOM generation, license compliance, vulnerability audit | SR-3, SR-4 |
-| `testing` | Security test utilities (XSS, SQLi payloads) | SA-11, CA-8 |
+| `testing` | Security test utilities, header verification, header generation | SA-11, CA-8, SC-8, CM-6 |
+| `integration` | Application integration helpers (profile detection, config builders) | - |
 
 ### Data Protection
 
@@ -449,6 +451,50 @@ for dep in &deps {
 }
 ```
 
+### JWT Secret Validation (IA-5, SC-12)
+
+```rust
+use barbican::jwt_secret::{JwtSecretValidator, JwtSecretPolicy};
+use barbican::compliance::config;
+
+// Derive policy from compliance profile (recommended)
+let policy = JwtSecretPolicy::for_compliance(config().profile);
+
+// Or use environment-aware defaults
+let policy = JwtSecretPolicy::for_environment("production");
+
+// Validate a secret
+let validator = JwtSecretValidator::new(policy);
+validator.validate("my-jwt-secret")?;
+
+// Generate a secure secret
+let secret = JwtSecretValidator::generate_secure_secret(64);
+```
+
+### Security Headers (SC-8, CM-6)
+
+```rust
+use barbican::testing::SecurityHeaders;
+use barbican::compliance::ComplianceProfile;
+
+// Generate headers for API endpoints
+let headers = SecurityHeaders::api();
+for (name, value) in headers.to_header_pairs() {
+    response.headers_mut().insert(name, value.parse().unwrap());
+}
+
+// Production headers with HSTS preload
+let headers = SecurityHeaders::production();
+
+// Compliance-aware headers
+let headers = SecurityHeaders::for_compliance(ComplianceProfile::FedRampHigh);
+
+// Verify headers on responses
+let expected = SecurityHeaders::strict();
+let issues = expected.verify(&response_headers);
+assert!(issues.is_empty());
+```
+
 ### Security Testing (SA-11, CA-8)
 
 ```rust
@@ -460,9 +506,9 @@ for payload in xss_payloads() {
     assert!(!response.text().contains(payload)); // Should be escaped
 }
 
-// Validate security headers
-let headers = SecurityHeaders::from_response(&response);
-let issues = headers.validate();
+// Validate security headers on responses
+let expected = SecurityHeaders::default();
+let issues = expected.verify(&response_headers);
 assert!(issues.is_empty());
 ```
 
@@ -503,6 +549,40 @@ async fn handler() -> Result<String> {
 }
 // Production: {"error": "internal_error", "message": "An internal error occurred"}
 // Development: full error details included
+```
+
+### Integration Helpers
+
+```rust
+use barbican::integration::{
+    profile_from_env,
+    database_config_for_profile,
+    validate_database_config,
+    SbomBuilder,
+    run_security_audit,
+};
+use barbican::compliance::ComplianceProfile;
+
+// Detect compliance profile from environment (DPE_COMPLIANCE_PROFILE or COMPLIANCE_PROFILE)
+let profile = profile_from_env(); // Returns ComplianceProfile
+
+// Build database config based on compliance requirements
+let db_config = database_config_for_profile(
+    "postgres://localhost/mydb",
+    ComplianceProfile::FedRampModerate,
+);
+
+// Validate database config meets compliance requirements
+validate_database_config(&db_config, ComplianceProfile::FedRampHigh)?;
+
+// Build SBOM with fluent API
+let sbom = SbomBuilder::new("my-app", "1.0.0")
+    .cargo_lock("Cargo.lock")?
+    .license_policy(LicensePolicy::default())
+    .build()?;
+
+// Run comprehensive security audit
+let report = run_security_audit("Cargo.lock", LicensePolicy::default())?;
 ```
 
 ### Cryptographic Utilities
@@ -554,166 +634,438 @@ Barbican implements 56 NIST 800-53 Rev 5 controls and facilitates 50+ additional
 See `.claudedocs/SECURITY_CONTROL_REGISTRY.md` for detailed control mappings.
 See `.claudedocs/NIST_800_53_CROSSWALK.md` for auditor-friendly control-to-code mappings.
 
-## NixOS Modules
+---
 
-Barbican provides NixOS modules for hardening MicroVMs and NixOS systems. These modules implement NIST 800-53 controls at the infrastructure level.
+## Nix Flake Integration
 
-### Quick Start (NixOS Flake)
+Barbican is a Nix flake that provides both Rust middleware (as a crate) and NixOS infrastructure modules. Client applications can integrate Barbican at multiple levels:
+
+### Flake Outputs
+
+```
+barbican
+├── packages
+│   ├── default (barbican)           # Rust library package
+│   └── observability-stack-generator # FedRAMP observability generator
+├── nixosModules
+│   ├── minimal / standard / hardened # Security profiles
+│   ├── secureUsers, hardenedSSH, ...  # Individual modules (14 total)
+│   └── all                           # All modules combined
+├── lib
+│   ├── networkZones                  # Network segmentation helpers
+│   ├── pki                          # Certificate generation scripts
+│   └── systemdHardening             # Service sandboxing presets
+├── apps
+│   ├── audit                        # Security audit runner
+│   ├── vault-dev                    # Start Vault PKI dev server
+│   ├── vault-cert-*                 # Certificate issuance (server, client, postgres)
+│   ├── observability-stack          # Generate observability infrastructure
+│   └── test-*                       # Individual VM test runners
+├── checks
+│   ├── flake-lock-check             # Verify flake input integrity
+│   ├── cargo-audit                  # Rust dependency vulnerabilities
+│   └── secure-users, hardened-ssh...# NixOS VM security tests (10 total)
+└── templates
+    └── microvm-stack                # Secure MicroVM template
+```
+
+### Integration Levels
+
+| Level | What You Get | Use Case |
+|-------|--------------|----------|
+| **Rust Crate** | Axum middleware, compliance modules | Application security |
+| **NixOS Modules** | System hardening, service config | Infrastructure security |
+| **Library Helpers** | Nix functions for PKI, networking | Configuration helpers |
+| **Observability Stack** | Loki, Prometheus, Grafana configs | FedRAMP-compliant monitoring |
+| **Vault PKI** | Certificate authority, mTLS certs | Zero-trust networking |
+
+### Basic Flake Integration
 
 ```nix
 {
   inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
+    nixpkgs.url = "github:nixos/nixpkgs/nixos-24.11";
     barbican.url = "github:your-org/barbican";
   };
 
   outputs = { self, nixpkgs, barbican, ... }: {
-    nixosConfigurations.myvm = nixpkgs.lib.nixosSystem {
+    # For NixOS systems
+    nixosConfigurations.myserver = nixpkgs.lib.nixosSystem {
       system = "x86_64-linux";
       modules = [
-        # Use a security profile (minimal, standard, or hardened)
-        barbican.nixosModules.hardened
+        barbican.nixosModules.hardened  # Apply hardened security profile
+        ./configuration.nix
+      ];
+    };
 
-        # Or import individual modules
-        # barbican.nixosModules.secureUsers
-        # barbican.nixosModules.hardenedSSH
-        # barbican.nixosModules.kernelHardening
-
-        {
-          # Configure module options
-          barbican.secureUsers = {
-            enable = true;
-            authorizedKeys = [ "ssh-ed25519 AAAA... user@host" ];
-          };
-          barbican.hardenedSSH = {
-            enable = true;
-            enableFail2ban = true;
-          };
-        }
+    # For development shells (access to barbican tools)
+    devShells.x86_64-linux.default = nixpkgs.legacyPackages.x86_64-linux.mkShell {
+      packages = [
+        barbican.packages.x86_64-linux.observability-stack-generator
       ];
     };
   };
 }
 ```
 
+---
+
+## NixOS Infrastructure Modules
+
+Barbican provides 14 NixOS modules implementing NIST 800-53 controls at the infrastructure level. These can be used with NixOS, MicroVMs, or any system using the Nix module system.
+
 ### Security Profiles
+
+Pre-configured module combinations for common deployment scenarios:
 
 | Profile | Use Case | Modules Enabled |
 |---------|----------|-----------------|
-| `minimal` | Development/testing | secureUsers, kernelHardening (basic) |
-| `standard` | Staging, internal prod | Above + hardenedSSH, timeSync, resourceLimits |
-| `hardened` | Production, compliance | All modules with strict defaults |
-
-### Available Modules
-
-| Module | Description | Controls Addressed |
-|--------|-------------|-------------------|
-| `secureUsers` | No empty passwords, SSH-only auth, login banners | CRT-001, CRT-002 |
-| `hardenedSSH` | Strong ciphers, fail2ban, key-only auth | CRT-010 |
-| `hardenedNginx` | NIST SP 800-52B ciphers, TLS 1.2+, mTLS, rate limiting | SC-8, SC-8(1), IA-3, SC-5 |
-| `kernelHardening` | Sysctl hardening, ASLR, audit | MED-001 |
-| `securePostgres` | scram-sha-256, SSL, audit logging, restricted listen | CRT-003, CRT-011-013 |
-| `timeSync` | Chrony NTP with secure servers | HIGH-011 |
-| `resourceLimits` | Cgroups, ulimits, core dump prevention | HIGH-001 |
-| `intrusionDetection` | AIDE file integrity, auditd | CRT-015, CRT-016 |
-| `vmFirewall` | Network segmentation, egress filtering | CRT-007, HIGH-005 |
-| `databaseBackup` | Encrypted automated backups | CRT-009 |
-| `secretsManagement` | sops-nix integration | CRT-004, CRT-005 |
-| `observabilityAuth` | Loki/Prometheus/Grafana auth | CRT-008, CRT-014 |
-| `systemdHardening` | Service sandboxing presets | MED-003 |
-| `vaultPki` | HashiCorp Vault PKI integration for mTLS certificates | SC-12, SC-17, IA-5(2) |
-
-### Module Configuration Example
+| `minimal` | Development, testing | secureUsers, kernelHardening (basic) |
+| `standard` | Staging, internal prod | + hardenedSSH, timeSync, resourceLimits |
+| `hardened` | Production, FedRAMP | All modules with strict defaults |
 
 ```nix
-{ config, ... }: {
-  barbican.vmFirewall = {
-    enable = true;
-    defaultPolicy = "drop";
-    allowedInbound = [
-      { port = 22; from = "10.0.0.0/8"; proto = "tcp"; }
-      { port = 443; from = "any"; proto = "tcp"; }
-    ];
-    allowedOutbound = [
-      { port = 443; to = "any"; proto = "tcp"; }
-    ];
-    enableEgressFiltering = true;
-    allowDNS = true;
-    logDropped = true;
-  };
+# Use a profile
+{ imports = [ barbican.nixosModules.hardened ]; }
 
-  barbican.intrusionDetection = {
-    enable = true;
-    enableAIDE = true;
-    enableAuditd = true;
-    auditRules = [
-      "-a always,exit -F arch=b64 -S execve -k exec"
-      "-w /etc/passwd -p wa -k identity"
-    ];
-  };
+# Or import individual modules
+{ imports = [
+    barbican.nixosModules.secureUsers
+    barbican.nixosModules.hardenedSSH
+    barbican.nixosModules.kernelHardening
+  ];
 }
 ```
 
-### Library Helpers
+### Available Modules
+
+#### Core Security
+
+| Module | Description | NIST Controls |
+|--------|-------------|---------------|
+| `secureUsers` | No empty passwords, SSH-only auth, login banners | AC-2, IA-5 |
+| `hardenedSSH` | Strong ciphers, fail2ban, key-only auth, MaxAuthTries | AC-17, SC-8 |
+| `kernelHardening` | Sysctl hardening, ASLR, kptr_restrict, audit | SC-3, SI-16 |
+| `resourceLimits` | Cgroups, ulimits, core dump prevention | SC-5, SI-17 |
+| `systemdHardening` | Service sandboxing (PrivateTmp, NoNewPrivileges, etc.) | SC-39, CM-7 |
+
+#### Network Security
+
+| Module | Description | NIST Controls |
+|--------|-------------|---------------|
+| `hardenedNginx` | NIST SP 800-52B ciphers, TLS 1.2+, mTLS, rate limiting | SC-8, SC-8(1), IA-3, SC-5 |
+| `vmFirewall` | Network segmentation, egress filtering, drop logging | SC-7, AC-4 |
+
+#### Data Protection
+
+| Module | Description | NIST Controls |
+|--------|-------------|---------------|
+| `securePostgres` | scram-sha-256, SSL/TLS, audit logging, restricted listen | SC-8, SC-28, AU-12 |
+| `databaseBackup` | Encrypted automated backups with GPG | CP-9, SC-28 |
+| `secretsManagement` | sops-nix integration for secrets | SC-12, SC-28 |
+| `vaultPki` | HashiCorp Vault PKI for mTLS certificates | SC-12, SC-17, IA-5(2) |
+
+#### Monitoring & Detection
+
+| Module | Description | NIST Controls |
+|--------|-------------|---------------|
+| `intrusionDetection` | AIDE file integrity, auditd rules | SI-4, AU-2 |
+| `observabilityAuth` | Loki/Prometheus/Grafana authentication | AC-2, AU-9 |
+| `timeSync` | Chrony NTP with secure servers (Cloudflare, NIST) | AU-8 |
+
+### Hardened Nginx Reverse Proxy
+
+The `hardenedNginx` module provides a production-ready reverse proxy with:
+
+- **TLS 1.2+ only** with NIST SP 800-52B cipher suites
+- **mTLS support** (disabled, optional, or required modes)
+- **Rate limiting** per-IP with separate limits for auth endpoints
+- **Security headers** (HSTS, CSP, X-Frame-Options, X-Content-Type-Options)
+- **Structured JSON logging** with security fields
+- **Systemd hardening** (sandboxed, least privilege)
+
+```nix
+barbican.nginx = {
+  enable = true;
+  serverName = "api.example.com";
+  fedRampHigh = true;  # Stricter cipher suites
+
+  tls = {
+    certPath = "/var/lib/acme/api.example.com/cert.pem";
+    keyPath = "/var/lib/acme/api.example.com/key.pem";
+    ocspStapling = true;
+  };
+
+  mtls = {
+    mode = "required";  # "disabled", "optional", or "required"
+    caCertPath = "/etc/ssl/ca-chain.pem";
+  };
+
+  rateLimit = {
+    enable = true;
+    requestsPerSecond = 10;
+    authRequestsPerSecond = 3;  # Stricter for /login, /auth
+    burst = 20;
+  };
+
+  upstream = {
+    address = "127.0.0.1";
+    port = 3000;
+  };
+};
+```
+
+### Vault PKI Integration
+
+The `vaultPki` module integrates HashiCorp Vault for automated certificate management:
+
+```nix
+barbican.vaultPki = {
+  enable = true;
+  vaultAddr = "https://vault.internal:8200";
+
+  # Automatic certificate renewal
+  autoRenew = {
+    enable = true;
+    serverCert = {
+      role = "server";
+      commonName = "api.example.com";
+      outputDir = "/var/lib/certs/server";
+    };
+  };
+};
+```
+
+**CLI Tools** (available in `nix develop` or via `nix run`):
+
+```bash
+# Start Vault dev server with PKI configured
+nix run .#vault-dev
+
+# Issue certificates
+export VAULT_ADDR=http://127.0.0.1:8200
+export VAULT_TOKEN=barbican-dev
+
+nix run .#vault-cert-server -- myserver.local
+nix run .#vault-cert-client -- worker-1
+nix run .#vault-cert-postgres
+nix run .#vault-ca-chain
+```
+
+### Module Configuration Examples
+
+**Firewall with Egress Filtering:**
+
+```nix
+barbican.vmFirewall = {
+  enable = true;
+  defaultPolicy = "drop";
+  allowedInbound = [
+    { port = 22; from = "10.0.0.0/8"; proto = "tcp"; }
+    { port = 443; from = "any"; proto = "tcp"; }
+  ];
+  allowedOutbound = [
+    { port = 443; to = "any"; proto = "tcp"; }  # HTTPS only
+  ];
+  enableEgressFiltering = true;
+  allowDNS = true;
+  logDropped = true;
+};
+```
+
+**Intrusion Detection:**
+
+```nix
+barbican.intrusionDetection = {
+  enable = true;
+  enableAIDE = true;
+  enableAuditd = true;
+  enableProcessAccounting = true;
+  auditRules = [
+    "-a always,exit -F arch=b64 -S execve -k exec"
+    "-w /etc/passwd -p wa -k identity"
+    "-w /etc/shadow -p wa -k identity"
+  ];
+};
+```
+
+**Secure PostgreSQL:**
+
+```nix
+barbican.securePostgres = {
+  enable = true;
+  requireSSL = true;
+  passwordEncryption = "scram-sha-256";
+  listenAddresses = "127.0.0.1";  # Local only
+  enableAuditLog = true;
+  maxConnections = 100;
+};
+```
+
+---
+
+## Library Helpers
+
+Barbican exports Nix library functions for common security patterns:
+
+### Network Zones
 
 ```nix
 let
-  barbican = inputs.barbican;
-in {
-  # Network zone helpers for segmentation
-  networking = barbican.lib.networkZones.mkZones {
+  zones = barbican.lib.networkZones.mkZones {
     dmz = { subnet = "10.0.10.0/24"; vlan = 10; };
     backend = { subnet = "10.0.20.0/24"; vlan = 20; };
     monitoring = { subnet = "10.0.30.0/24"; vlan = 30; };
   };
-
-  # PKI certificate generation scripts
-  environment.systemPackages = [
-    (barbican.lib.pki.mkCAScript { org = "MyOrg"; })
-    (barbican.lib.pki.mkServerCertScript { ca = "/etc/ssl/ca"; })
-  ];
-
-  # Systemd hardening presets
-  systemd.services.myapp = barbican.lib.systemdHardening.webService // {
-    # ... your service config
-  };
+in {
+  networking.vlans = zones.vlans;
+  networking.firewall.extraCommands = zones.firewallRules;
 }
 ```
 
-## Security Audit & Testing
+### PKI Scripts
 
-Run self-contained NixOS VM tests to validate security controls:
-
-```bash
-# Run all security tests
-nix build .#checks.x86_64-linux.all -L
-
-# Run individual module tests
-nix build .#checks.x86_64-linux.secure-users -L
-nix build .#checks.x86_64-linux.hardened-ssh -L
-nix build .#checks.x86_64-linux.kernel-hardening -L
-nix build .#checks.x86_64-linux.secure-postgres -L
-nix build .#checks.x86_64-linux.time-sync -L
-nix build .#checks.x86_64-linux.intrusion-detection -L
-nix build .#checks.x86_64-linux.vm-firewall -L
-nix build .#checks.x86_64-linux.resource-limits -L
-
-# Run audit with report generation
-nix run .#audit
+```nix
+environment.systemPackages = [
+  (barbican.lib.pki.mkCAScript { org = "MyOrg"; })
+  (barbican.lib.pki.mkServerCertScript { ca = "/etc/ssl/ca"; })
+];
 ```
 
-### Test Coverage
+### Systemd Hardening Presets
 
-| Test | Controls | What It Validates |
-|------|----------|-------------------|
-| `secure-users` | CRT-001, CRT-002 | No empty passwords, no auto-login, SSH keys |
-| `hardened-ssh` | CRT-010 | Strong ciphers, fail2ban, password auth disabled |
-| `kernel-hardening` | MED-001 | ASLR, kptr_restrict, sysctl values |
-| `secure-postgres` | CRT-003, CRT-011-013 | scram-sha-256, restricted listen, audit logs |
-| `time-sync` | HIGH-011 | Chrony service, NTP sources |
-| `intrusion-detection` | CRT-015, CRT-016 | Auditd rules, AIDE installation |
-| `vm-firewall` | CRT-007, HIGH-005 | iptables rules, egress filtering |
-| `resource-limits` | HIGH-001 | Core dumps blocked, ulimits |
+```nix
+systemd.services.myapp = barbican.lib.systemdHardening.webService // {
+  description = "My Application";
+  serviceConfig.ExecStart = "${myapp}/bin/myapp";
+};
+# Applies: PrivateTmp, ProtectSystem=strict, NoNewPrivileges, etc.
+```
+
+---
+
+## Observability Stack Generator
+
+Generate FedRAMP-compliant observability infrastructure with Docker Compose:
+
+```bash
+# Interactive setup
+nix run .#observability-init
+
+# Or direct generation
+nix run .#observability-stack -- \
+  --app-name my-app \
+  --app-port 3000 \
+  --output ./observability \
+  --profile fedramp-moderate
+```
+
+### Generated Files (21 total)
+
+| Directory | Files | Purpose |
+|-----------|-------|---------|
+| `loki/` | `loki-config.yml`, `tenant-limits.yml` | Multi-tenant log aggregation |
+| `prometheus/` | `prometheus.yml`, `web.yml`, `rules/security-alerts.yml` | Metrics with TLS, 15+ alerts |
+| `grafana/` | `grafana.ini`, datasources, dashboards | OIDC SSO, security dashboard |
+| `alertmanager/` | `alertmanager.yml`, `web.yml` | Alert routing with TLS |
+| `scripts/` | `gen-certs.sh`, `backup-audit-logs.sh`, `health-check.sh` | Operations |
+| `docs/` | `FEDRAMP_CONTROLS.md`, `SSO_SETUP.md`, `OPERATIONS.md` | Compliance docs |
+| Root | `docker-compose.yml`, `.env.example` | Container deployment |
+
+### Compliance Profiles
+
+| Profile | Log Retention | mTLS | MFA | Container Security |
+|---------|---------------|------|-----|-------------------|
+| `fedramp-low` | 30 days | No | No | Basic |
+| `fedramp-moderate` | 90 days | No | Yes | Read-only FS |
+| `fedramp-high` | 365 days | Yes | Yes | Read-only + seccomp |
+| `soc2` | 90 days | No | Yes | Read-only FS |
+
+**FedRAMP Controls Implemented (20):** AU-2, AU-3, AU-4, AU-5, AU-6, AU-9, AU-11, AU-12, SC-8, SC-13, SC-28, IA-2, IA-2(1), AC-2, AC-3, AC-6, CP-9, IR-4, IR-5, SI-4
+
+---
+
+## Nix Apps
+
+All apps can be run with `nix run .#<app-name>`:
+
+### Security Audit
+
+```bash
+nix run .#audit  # Run all NixOS VM security tests with report
+```
+
+### Vault PKI
+
+```bash
+nix run .#vault-dev            # Start Vault dev server with PKI
+nix run .#vault-cert-server    # Issue server certificate
+nix run .#vault-cert-client    # Issue mTLS client certificate
+nix run .#vault-cert-postgres  # Issue PostgreSQL certificate
+nix run .#vault-ca-chain       # Export CA chain
+```
+
+### Observability
+
+```bash
+nix run .#observability-init   # Interactive stack setup
+nix run .#observability-stack  # Generate with CLI args
+```
+
+### Individual Test Runners
+
+```bash
+nix run .#test-secure-users
+nix run .#test-hardened-ssh
+nix run .#test-kernel-hardening
+nix run .#test-secure-postgres
+nix run .#test-time-sync
+nix run .#test-intrusion-detection
+nix run .#test-vm-firewall
+nix run .#test-resource-limits
+nix run .#test-vault-pki
+```
+
+---
+
+## Security Audit & Testing
+
+### Flake Checks
+
+Run all security validations with a single command:
+
+```bash
+nix flake check        # Run all checks (CI-friendly)
+nix run .#audit        # Run VM tests with audit report
+```
+
+### Check Categories
+
+| Check | Type | What It Validates |
+|-------|------|-------------------|
+| `flake-lock-check` | Static | All flake inputs have content-addressed hashes |
+| `cargo-audit` | Static | No known vulnerabilities in Rust dependencies |
+| `cargo-lock-check` | Static | Cargo.lock exists and is valid |
+| `secure-users` | VM Test | No empty passwords, SSH-only auth |
+| `hardened-ssh` | VM Test | Strong ciphers, fail2ban, key-only auth |
+| `hardened-nginx` | VM Test | TLS 1.2+, mTLS, rate limiting, headers |
+| `kernel-hardening` | VM Test | ASLR, kptr_restrict, sysctl hardening |
+| `secure-postgres` | VM Test | scram-sha-256, SSL, restricted listen |
+| `time-sync` | VM Test | Chrony NTP with secure servers |
+| `intrusion-detection` | VM Test | Auditd rules, AIDE file integrity |
+| `vm-firewall` | VM Test | Egress filtering, drop logging |
+| `resource-limits` | VM Test | Core dumps blocked, ulimits |
+| `vault-pki` | VM Test | PKI setup, certificate issuance |
+
+### Running Individual Tests
+
+```bash
+# Build and run specific VM test
+nix build .#checks.x86_64-linux.hardened-nginx -L
+
+# Or use the app runners
+nix run .#test-hardened-nginx
+```
 
 The combined test suite generates a JSON audit report with compliance rate.
 

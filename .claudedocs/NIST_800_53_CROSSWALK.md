@@ -21,7 +21,7 @@ implementation locations in the Barbican codebase. Each entry includes:
 | [Audit (AU)](#audit-and-accountability-au) | AU-2, AU-3, AU-8, AU-12, AU-14, AU-16 |
 | [Assessment (CA)](#assessment-authorization-monitoring-ca) | CA-7, CA-8 |
 | [Configuration (CM)](#configuration-management-cm) | CM-6, CM-8, CM-10 |
-| [Identification (IA)](#identification-and-authentication-ia) | IA-2, IA-5, IA-6, IA-8 |
+| [Identification (IA)](#identification-and-authentication-ia) | IA-2, IA-5, IA-5(JWT), IA-6, IA-8 |
 | [Incident Response (IR)](#incident-response-ir) | IR-4, IR-5 |
 | [System Protection (SC)](#system-and-communications-protection-sc) | SC-5, SC-8, SC-8(1), SC-10, SC-12, SC-13, SC-23 |
 | [System Integrity (SI)](#system-and-information-integrity-si) | SI-2, SI-3, SI-4, SI-7, SI-10, SI-11 |
@@ -394,8 +394,30 @@ fn extract_or_generate_correlation_id(request: &Request<Body>) -> String {
 |--------|----------|
 | **Implementation** | `src/testing.rs` |
 | **Functions** | `xss_payloads()`, `sql_injection_payloads()`, `command_injection_payloads()` |
-| **Test** | `cargo test test_xss_payloads_not_empty` |
+| **SecurityHeaders** | `SecurityHeaders::verify()`, `SecurityHeaders::api()`, `SecurityHeaders::production()` |
+| **Test** | `cargo test test_xss_payloads_not_empty`, `cargo test test_security_headers_*` |
 | **Verification** | Use provided payloads to test application endpoints |
+
+The testing module also provides SecurityHeaders for verification and generation:
+
+```rust
+use barbican::testing::SecurityHeaders;
+use barbican::compliance::ComplianceProfile;
+
+// Verify headers on responses
+let expected = SecurityHeaders::strict();
+let issues = expected.verify(&response_headers);
+assert!(issues.is_empty());
+
+// Generate headers for API endpoints
+let headers = SecurityHeaders::api();
+for (name, value) in headers.to_header_pairs() {
+    response.headers_mut().insert(name, value.parse().unwrap());
+}
+
+// Compliance-aware headers
+let headers = SecurityHeaders::for_compliance(ComplianceProfile::FedRampHigh);
+```
 
 ---
 
@@ -406,9 +428,10 @@ fn extract_or_generate_correlation_id(request: &Request<Body>) -> String {
 | Aspect | Location |
 |--------|----------|
 | **Secure Defaults** | `src/config.rs` (`Default` impl) |
-| **Security Headers** | `src/layers.rs:78-113` |
+| **Security Headers Middleware** | `src/layers.rs:78-113` |
+| **Security Headers Generation** | `src/testing.rs` (`SecurityHeaders::api()`, `production()`, `for_compliance()`) |
 | **Compliance Validation** | `src/compliance/validation.rs` |
-| **Test** | `cargo test test_validator_security_layers_headers_disabled` |
+| **Test** | `cargo test test_validator_security_layers_headers_disabled`, `cargo test test_security_headers_*` |
 | **Verification** | Verify secure defaults are applied |
 
 Security headers implemented:
@@ -540,6 +563,41 @@ pub struct PasswordPolicy {
     pub disallow_all_numeric: bool,
 }
 ```
+
+### IA-5 (JWT Secret): JWT Secret Validation
+
+| Aspect | Location |
+|--------|----------|
+| **Implementation** | `src/jwt_secret.rs` |
+| **Structs** | `JwtSecretValidator`, `JwtSecretPolicy`, `JwtSecretError` |
+| **Functions** | `validate()`, `generate_secure_secret()`, `calculate_entropy()` |
+| **Test** | `cargo test test_jwt_secret_*` |
+| **Verification** | Verify JWT secrets meet minimum entropy and policy requirements |
+
+The JWT secret validation module ensures secrets meet security requirements:
+
+```rust
+// src/jwt_secret.rs
+use barbican::jwt_secret::{JwtSecretValidator, JwtSecretPolicy};
+use barbican::compliance::config;
+
+// Derive policy from compliance profile
+let policy = JwtSecretPolicy::for_compliance(config().profile);
+
+// Or use environment-aware defaults
+let policy = JwtSecretPolicy::for_environment("production");
+
+// Validate a secret
+let validator = JwtSecretValidator::new(policy);
+validator.validate("my-jwt-secret")?;
+
+// Generate a cryptographically secure secret
+let secret = JwtSecretValidator::generate_secure_secret(64);
+```
+
+Policy settings by environment:
+- **Production**: 64 char min, 4.0 bits/char entropy, weak pattern detection
+- **Development**: 32 char min, 3.0 bits/char entropy, relaxed validation
 
 ### IA-6: Authentication Feedback
 
@@ -761,12 +819,27 @@ and network disconnect scenarios. See AC-11 for implementation details.
 
 | Aspect | Location |
 |--------|----------|
-| **Implementation** | `src/keys.rs` |
+| **Key Management** | `src/keys.rs` |
+| **JWT Secret Validation** | `src/jwt_secret.rs` |
 | **Trait** | `KeyStore` |
-| **Structs** | `RotationTracker`, `RotationPolicy` |
+| **Structs** | `RotationTracker`, `RotationPolicy`, `JwtSecretValidator`, `JwtSecretPolicy` |
 | **Config** | `src/compliance/profile.rs` (`key_rotation_interval`) |
-| **Test** | `cargo test test_rotation_tracker_*` |
-| **Verification** | Verify key rotation policy enforcement |
+| **Test** | `cargo test test_rotation_tracker_*`, `cargo test test_jwt_secret_*` |
+| **Verification** | Verify key rotation and JWT secret validation policies |
+
+JWT secret validation ensures secrets meet cryptographic requirements:
+
+```rust
+use barbican::jwt_secret::{JwtSecretValidator, JwtSecretPolicy};
+
+// Production-grade validation
+let policy = JwtSecretPolicy::for_environment("production");
+let validator = JwtSecretValidator::new(policy);
+validator.validate("my-secret")?;
+
+// Generate secure secret
+let secret = JwtSecretValidator::generate_secure_secret(64);
+```
 
 ### SC-13: Cryptographic Protection
 
@@ -978,6 +1051,7 @@ cargo test compliance       # All controls validation
 
 ---
 
-*Document generated: 2025-12-17*
+*Document generated: 2025-12-23*
 *Barbican version: 0.1.0*
 *NIST SP 800-53 Revision: 5*
+*Updates: JWT secret validation (IA-5, SC-12), SecurityHeaders generation (CM-6, CA-8)*

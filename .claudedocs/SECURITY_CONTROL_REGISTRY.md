@@ -1,7 +1,7 @@
 # Security Control Registry
 
 ## Project: Barbican Security Library
-## Last Updated: 2025-12-18 (Phase 1 Artifact Tests Complete)
+## Last Updated: 2025-12-23 (JWT Secret Validation, SecurityHeaders Generation)
 ## Frameworks: NIST SP 800-53 Rev 5
 
 **Current Status:**
@@ -79,7 +79,7 @@
 | CA-2 | Security Assessments | 🎯 FACILITATED | Audit report generation utilities | TBD | TBD | MEDIUM | 5 |
 | CA-5 | Plan of Action | 🎯 FACILITATED | Vulnerability tracking utilities | `src/supply_chain.rs` | `AuditResult` | LOW | 5 |
 | CA-7 | Continuous Monitoring | ✅ IMPLEMENTED | Health check framework | `src/health.rs` | `test_health_*` | HIGH | 3 |
-| CA-8 | Penetration Testing | ✅ IMPLEMENTED | Security test helpers | `src/testing.rs` | `test_xss_*`, `test_sql_*` | MEDIUM | 5 |
+| CA-8 | Penetration Testing | ✅ IMPLEMENTED | Security test helpers + SecurityHeaders verification/generation | `src/testing.rs` | `test_xss_*`, `test_sql_*`, `test_security_headers_*` | MEDIUM | 5 |
 
 **Gap Analysis:**
 - All high-priority CA controls implemented
@@ -94,7 +94,7 @@
 | CM-3 | Configuration Change Control | ⚠️ PARTIAL | Audit logging on config changes | `src/config.rs` | Logs config on load | HIGH | 3 |
 | CM-4 | Impact Analysis | 🎯 FACILITATED | Configuration validation | TBD | TBD | MEDIUM | 5 |
 | CM-5 | Access Restrictions | 🎯 FACILITATED | Config file permissions (NixOS) | `nix/modules/` | NixOS enforces | HIGH | - |
-| CM-6 | Configuration Settings | ✅ IMPLEMENTED | Secure defaults + security headers (HSTS, CSP, X-Frame-Options) | `src/config.rs`, `src/layers.rs:78-113` | `Default` impl, `test_validator_security_layers_headers_disabled` | CRITICAL | - |
+| CM-6 | Configuration Settings | ✅ IMPLEMENTED | Secure defaults + security headers generation (HSTS, CSP, X-Frame-Options) | `src/config.rs`, `src/layers.rs:78-113`, `src/testing.rs` | `Default` impl, `test_security_headers_*` | CRITICAL | - |
 | CM-7 | Least Functionality | ✅ IMPLEMENTED | Minimal NixOS system profiles | `nix/profiles/minimal.nix` | VM tests | HIGH | - |
 | CM-7(5) | Authorized Software | ⚠️ PARTIAL | NixOS package allowlist | NixOS config | NixOS enforces | MEDIUM | - |
 | CM-8 | System Component Inventory | ✅ IMPLEMENTED | SBOM generation (Cargo.lock) | `src/supply_chain.rs` | `test_generate_sbom` | MEDIUM | 4 |
@@ -135,7 +135,7 @@
 | IA-2(12) | PIV Credentials | 📋 PLANNED | PIV/CAC card support | TBD | TBD | LOW | 5 |
 | IA-3 | Device Identification | ✅ IMPLEMENTED | mTLS enforcement middleware + hardened-nginx module | `src/tls.rs:408-727`, `nix/modules/hardened-nginx.nix` | `test_ia3_mtls_enforcement` | MEDIUM | 4 |
 | IA-4 | Identifier Management | 🎯 FACILITATED | User ID generation helpers | TBD | TBD | HIGH | 2 |
-| IA-5 | Authenticator Management | ✅ IMPLEMENTED | Credential storage helpers with constant-time comparison | `src/crypto.rs` | `test_ia5_authenticator_management` | CRITICAL | - |
+| IA-5 | Authenticator Management | ✅ IMPLEMENTED | Credential storage helpers with constant-time comparison + JWT secret validation | `src/crypto.rs`, `src/jwt_secret.rs` | `test_ia5_authenticator_management`, `test_jwt_secret_*` | CRITICAL | - |
 | IA-5(1) | Password-Based Authentication | ✅ IMPLEMENTED | NIST 800-63B password policy | `src/password.rs` | `test_ia5_1_password_policy` | CRITICAL | 1 |
 | IA-5(2) | PKI-Based Authentication | ✅ IMPLEMENTED | Vault PKI for mTLS client certificates + DB SSL | `nix/modules/vault-pki.nix`, `src/database.rs` | `vault-pki` VM test, SSL tests | HIGH | 4 |
 | IA-5(4) | Automated Password Strength | ✅ IMPLEMENTED | Password strength estimation | `src/password.rs` | `test_strength_*` | MEDIUM | 1 |
@@ -257,7 +257,7 @@
 | SC-8(1) | Cryptographic Protection | ✅ IMPLEMENTED | TLS 1.2+ version validation in Strict mode | `src/tls.rs:225-245` | `test_tls_version_acceptable` | CRITICAL | - |
 | SC-10 | Network Disconnect | ✅ IMPLEMENTED | Session termination + request timeout | `src/session.rs:143-167`, `src/layers.rs:114-126` | `test_sc10_network_disconnect` | HIGH | - |
 | SC-11 | Trusted Path | 🎯 FACILITATED | Secure connection indicators | TBD | TBD | MEDIUM | 5 |
-| SC-12 | Cryptographic Key Management | ✅ IMPLEMENTED | Key rotation utilities + Vault PKI secrets engine | `src/keys.rs`, `nix/modules/vault-pki.nix` | `test_rotation_*`, `vault-pki` VM test | HIGH | 4 |
+| SC-12 | Cryptographic Key Management | ✅ IMPLEMENTED | Key rotation utilities + Vault PKI + JWT secret validation | `src/keys.rs`, `src/jwt_secret.rs`, `nix/modules/vault-pki.nix` | `test_rotation_*`, `test_jwt_secret_*`, `vault-pki` VM test | HIGH | 4 |
 | SC-12(1) | Key Availability | ✅ IMPLEMENTED | Vault HA with Raft consensus | `nix/modules/vault-pki.nix` | HA configuration | HIGH | 4 |
 | SC-13 | Cryptographic Protection | ✅ IMPLEMENTED | Approved algorithms (constant-time) + FIPS 140-3 mode (aws-lc-rs) | `src/crypto.rs`, `src/encryption.rs` | `test_sc13_constant_time`, `test_sc13_fips_crypto` | HIGH | - |
 | SC-15 | Collaborative Computing | 🎯 FACILITATED | Screen sharing controls | TBD | TBD | LOW | 5 |
@@ -373,7 +373,9 @@
 | `src/health.rs` | CA-7 | 12+ |
 | `src/keys.rs` | SC-12, SC-4 | 12+ |
 | `src/supply_chain.rs` | SR-3, SR-4, SR-11, SI-2, SI-3, SI-7, CM-8, CM-10 | 15+ |
-| `src/testing.rs` | SA-11, CA-8 | 18+ |
+| `src/testing.rs` | SA-11, CA-8, SC-8, CM-6 | 23+ |
+| `src/jwt_secret.rs` | IA-5, SC-12 | 10+ |
+| `src/integration.rs` | - (helper module) | 5+ |
 | `src/observability/` | AU-2, AU-3, AU-8, AU-12 | 10+ |
 | `src/tls.rs` | SC-8, SC-8(1), IA-3 | 25+ |
 | `src/encryption.rs` | SC-28, SC-13 (FIPS mode) | 15+ |
