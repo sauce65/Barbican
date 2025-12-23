@@ -6,7 +6,7 @@ pkgs.testers.nixosTest {
   name = "barbican-secure-users";
 
   nodes.machine = { config, pkgs, ... }: {
-    imports = [ ../../modules/secure-users.nix ];
+    imports = [ ../modules/secure-users.nix ];
 
     barbican.secureUsers = {
       enable = true;
@@ -31,8 +31,8 @@ pkgs.testers.nixosTest {
     # CRT-002: Verify no auto-login
     with subtest("Auto-login is disabled"):
       # Check if autologin is configured
-      result = machine.execute("grep -r 'autologin' /etc/systemd/system/getty* 2>/dev/null || echo 'not found'")
-      assert "not found" in result[1] or result[0] != 0, \
+      exit_code, output = machine.execute("grep -r 'autologin' /etc/systemd/system/getty* 2>/dev/null || echo 'not found'")
+      assert "not found" in output or exit_code != 0, \
         "Auto-login appears to be configured"
 
     # Verify SSH keys are set

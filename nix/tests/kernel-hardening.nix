@@ -6,7 +6,7 @@ pkgs.testers.nixosTest {
   name = "barbican-kernel-hardening";
 
   nodes.machine = { config, pkgs, ... }: {
-    imports = [ ../../modules/kernel-hardening.nix ];
+    imports = [ ../modules/kernel-hardening.nix ];
 
     barbican.kernelHardening = {
       enable = true;

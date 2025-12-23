@@ -6,7 +6,7 @@ pkgs.testers.nixosTest {
   name = "barbican-secure-postgres";
 
   nodes.machine = { config, pkgs, ... }: {
-    imports = [ ../../modules/secure-postgres.nix ];
+    imports = [ ../modules/secure-postgres.nix ];
 
     barbican.securePostgres = {
       enable = true;
@@ -81,7 +81,7 @@ pkgs.testers.nixosTest {
     with subtest("Reject connections from unauthorized hosts"):
       # The pg_hba.conf should have explicit reject for 0.0.0.0/0
       hba = machine.succeed("cat /var/lib/postgresql/*/pg_hba.conf 2>/dev/null || cat /etc/postgresql/*/pg_hba.conf 2>/dev/null || echo 'none'")
-      assert "reject" in hba, f"No reject rule in pg_hba.conf"
+      assert "reject" in hba, "No reject rule in pg_hba.conf: " + hba[:200]
 
     # Database and user creation
     with subtest("Test database created"):

@@ -7,8 +7,8 @@ pkgs.testers.nixosTest {
 
   nodes.machine = { config, pkgs, ... }: {
     imports = [
-      ../../modules/secure-users.nix
-      ../../modules/hardened-ssh.nix
+      ../modules/secure-users.nix
+      ../modules/hardened-ssh.nix
     ];
 
     barbican.secureUsers = {

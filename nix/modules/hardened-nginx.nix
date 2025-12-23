@@ -76,13 +76,13 @@ let
     ssl_client_certificate ${cfg.mtls.caCertPath};
     ssl_verify_client on;
     ssl_verify_depth ${toString cfg.mtls.verifyDepth};
-    ${optionalString cfg.mtls.crlPath != null "ssl_crl ${cfg.mtls.crlPath};"}
+    ${optionalString (cfg.mtls.crlPath != null) "ssl_crl ${cfg.mtls.crlPath};"}
   '' else if cfg.mtls.mode == "optional" then ''
     # IA-3: Request client certificate (optional)
     ssl_client_certificate ${cfg.mtls.caCertPath};
     ssl_verify_client optional;
     ssl_verify_depth ${toString cfg.mtls.verifyDepth};
-    ${optionalString cfg.mtls.crlPath != null "ssl_crl ${cfg.mtls.crlPath};"}
+    ${optionalString (cfg.mtls.crlPath != null) "ssl_crl ${cfg.mtls.crlPath};"}
   '' else ''
     # mTLS disabled
   '';

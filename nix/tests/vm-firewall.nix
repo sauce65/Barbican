@@ -6,7 +6,7 @@ pkgs.testers.nixosTest {
   name = "barbican-vm-firewall";
 
   nodes.machine = { config, pkgs, ... }: {
-    imports = [ ../../modules/vm-firewall.nix ];
+    imports = [ ../modules/vm-firewall.nix ];
 
     barbican.vmFirewall = {
       enable = true;

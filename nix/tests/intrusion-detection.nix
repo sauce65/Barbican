@@ -6,7 +6,7 @@ pkgs.testers.nixosTest {
   name = "barbican-intrusion-detection";
 
   nodes.machine = { config, pkgs, ... }: {
-    imports = [ ../../modules/intrusion-detection.nix ];
+    imports = [ ../modules/intrusion-detection.nix ];
 
     barbican.intrusionDetection = {
       enable = true;
@@ -56,30 +56,30 @@ pkgs.testers.nixosTest {
 
     with subtest("AIDE init service exists"):
       # Check if aide-init service unit exists
-      result = machine.execute("systemctl cat aide-init 2>&1")
+      exit_code, output = machine.execute("systemctl cat aide-init 2>&1")
       # Service should exist (may or may not have run yet)
-      assert result[0] == 0 or "aide" in result[1].lower(), f"AIDE init service not found"
+      assert exit_code == 0 or "aide" in output.lower(), f"AIDE init service not found: {output}"
 
     with subtest("AIDE check timer exists"):
-      result = machine.execute("systemctl list-timers aide-check.timer 2>&1")
+      exit_code, output = machine.execute("systemctl list-timers aide-check.timer 2>&1")
       # Timer should be listed
-      assert "aide" in result[1].lower() or result[0] == 0, f"AIDE check timer not found"
+      assert "aide" in output.lower() or exit_code == 0, f"AIDE check timer not found: {output}"
 
     # Process accounting
     with subtest("Process accounting enabled"):
-      result = machine.execute("systemctl is-active acct 2>&1")
+      exit_code, output = machine.execute("systemctl is-active acct 2>&1")
       # acct service should be active
-      assert "active" in result[1] or result[0] == 0, f"Process accounting not active: {result}"
+      assert "active" in output or exit_code == 0, f"Process accounting not active: {output}"
 
     with subtest("lastcomm works"):
       # lastcomm should be available
-      result = machine.execute("which lastcomm 2>&1")
-      assert "/nix/store" in result[1] or result[0] == 0, f"lastcomm not available: {result}"
+      exit_code, output = machine.execute("which lastcomm 2>&1")
+      assert "/nix/store" in output or exit_code == 0, f"lastcomm not available: {output}"
 
     # Log directory exists
     with subtest("Audit log directory exists"):
-      result = machine.execute("ls -la /var/log/audit/ 2>&1")
-      assert result[0] == 0 or "audit" in result[1], f"Audit log directory issue: {result}"
+      exit_code, output = machine.execute("ls -la /var/log/audit/ 2>&1")
+      assert exit_code == 0 or "audit" in output, f"Audit log directory issue: {output}"
 
     print("All intrusion-detection tests passed!")
   '';

@@ -48,7 +48,6 @@ pkgs.testers.nixosTest {
       tls = {
         certPath = "/run/certs/server.crt";
         keyPath = "/run/certs/server.key";
-        minVersion = "TLSv1.2";
       };
 
       mtls = {
@@ -59,7 +58,7 @@ pkgs.testers.nixosTest {
       rateLimit = {
         enable = true;
         requestsPerSecond = 10;
-        burstSize = 20;
+        burst = 20;
       };
 
       # upstream defaults to 127.0.0.1:3000 which matches our test backend
@@ -105,9 +104,9 @@ with socketserver.TCPServer(("127.0.0.1", 3000), Handler) as httpd:
     # SC-8: TLS Configuration Tests
     with subtest("SC-8: TLS 1.2+ only - reject TLS 1.1"):
       # Try connecting with TLS 1.1 - should fail
-      result = machine.execute("echo | openssl s_client -connect localhost:8443 -tls1_1 2>&1 || true")
-      assert "no protocols available" in result[1].lower() or "handshake failure" in result[1].lower() or "wrong version" in result[1].lower(), \
-        f"TLS 1.1 should be rejected: {result[1]}"
+      exit_code, output = machine.execute("echo | openssl s_client -connect localhost:8443 -tls1_1 2>&1 || true")
+      assert "no protocols available" in output.lower() or "handshake failure" in output.lower() or "wrong version" in output.lower(), \
+        f"TLS 1.1 should be rejected: {output}"
 
     with subtest("SC-8: TLS 1.2 accepted"):
       # TLS 1.2 should work
@@ -116,11 +115,11 @@ with socketserver.TCPServer(("127.0.0.1", 3000), Handler) as httpd:
 
     with subtest("SC-8: TLS 1.3 accepted"):
       # TLS 1.3 should work (if supported by system OpenSSL)
-      result = machine.execute("echo | openssl s_client -connect localhost:8443 -tls1_3 2>&1")
+      exit_code, output = machine.execute("echo | openssl s_client -connect localhost:8443 -tls1_3 2>&1")
       # May not be available on all systems, but if it connects, it should work
-      if result[0] == 0:
-        assert "tls" in result[1].lower() or "connected" in result[1].lower(), \
-          f"TLS 1.3 should work if available: {result[1]}"
+      if exit_code == 0:
+        assert "tls" in output.lower() or "connected" in output.lower(), \
+          f"TLS 1.3 should work if available: {output}"
 
     with subtest("SC-8(1): Strong cipher suites"):
       # Check cipher suites in use
@@ -155,15 +154,15 @@ with socketserver.TCPServer(("127.0.0.1", 3000), Handler) as httpd:
     # IA-3: mTLS Tests
     with subtest("IA-3: mTLS optional mode accepts requests without cert"):
       # Should work without client cert in optional mode
-      result = machine.succeed("curl -ks https://localhost:8443/")
-      assert "ok" in result.lower() or result.strip() != "", \
-        f"Should accept requests without client cert: {result}"
+      body = machine.succeed("curl -ks https://localhost:8443/")
+      assert "ok" in body.lower() or body.strip() != "", \
+        f"Should accept requests without client cert: {body}"
 
     with subtest("IA-3: Client cert headers forwarded"):
       # Check that mTLS headers are available (will be empty without cert)
-      result = machine.execute("curl -ks -I https://localhost:8443/ 2>&1")
+      exit_code, output = machine.execute("curl -ks -I https://localhost:8443/ 2>&1")
       # In optional mode, request should succeed
-      assert result[0] == 0 or "200" in result[1], f"Request should succeed: {result}"
+      assert exit_code == 0 or "200" in output, f"Request should succeed: {output}"
 
     # SC-5: Rate Limiting Tests
     with subtest("SC-5: Rate limiting configured"):
@@ -176,8 +175,8 @@ with socketserver.TCPServer(("127.0.0.1", 3000), Handler) as httpd:
       # Make many requests quickly
       results = []
       for i in range(30):
-        result = machine.execute(f"curl -ks -o /dev/null -w '%{{http_code}}' https://localhost:8443/ 2>&1")
-        results.append(result[1].strip())
+        _, http_code = machine.execute("curl -ks -o /dev/null -w '%{http_code}' https://localhost:8443/ 2>&1")
+        results.append(http_code.strip())
 
       # Should see some 429 responses after burst is exceeded
       # Note: This may not trigger in all test scenarios depending on timing
@@ -202,8 +201,8 @@ with socketserver.TCPServer(("127.0.0.1", 3000), Handler) as httpd:
 
     # Proxy functionality
     with subtest("Proxy forwards requests to backend"):
-      result = machine.succeed("curl -ks https://localhost:8443/")
-      assert "ok" in result.lower(), f"Proxy should forward to backend: {result}"
+      response = machine.succeed("curl -ks https://localhost:8443/")
+      assert "ok" in response.lower(), f"Proxy should forward to backend: {response}"
 
     with subtest("X-Request-ID header generated"):
       # Check that request ID is added (appears in backend headers)

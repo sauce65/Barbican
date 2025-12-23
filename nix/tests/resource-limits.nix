@@ -6,7 +6,7 @@ pkgs.testers.nixosTest {
   name = "barbican-resource-limits";
 
   nodes.machine = { config, pkgs, ... }: {
-    imports = [ ../../modules/resource-limits.nix ];
+    imports = [ ../modules/resource-limits.nix ];
 
     barbican.resourceLimits = {
       enable = true;
@@ -64,8 +64,8 @@ pkgs.testers.nixosTest {
     # Verify systemd defaults can be applied
     with subtest("Systemd service limits can be queried"):
       # Just verify systemd is working with limits
-      result = machine.execute("systemctl show --property=DefaultLimitNOFILE 2>&1")
-      assert result[0] == 0, f"Cannot query systemd limits: {result}"
+      exit_code, output = machine.execute("systemctl show --property=DefaultLimitNOFILE 2>&1")
+      assert exit_code == 0, f"Cannot query systemd limits: {output}"
 
     print("All resource-limits tests passed!")
   '';
