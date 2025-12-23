@@ -36,11 +36,18 @@ The library is designed to make your job easier by providing traceable evidence 
 Run the compliance test suite:
 
 ```bash
+# Run compliance tests
 cargo test --features compliance-artifacts
+
+# Generate unsigned report (development)
 cargo run --example generate_compliance_report --features compliance-artifacts
+
+# Generate signed report (production - recommended)
+COMPLIANCE_SIGNING_KEY=your-secret-key cargo run --example generate_compliance_report \
+  --features compliance-artifacts -- --sign --key-id production-key-2025
 ```
 
-This produces a signed JSON report in `./compliance-artifacts/` containing:
+This produces a JSON report in `./compliance-artifacts/` containing:
 - Control ID and name (e.g., "AC-7", "Unsuccessful Logon Attempts")
 - Test name and description
 - Source code location (file, line numbers)
@@ -96,17 +103,48 @@ You'll see the `LoginTracker` struct with lockout logic. The tests exercise this
 
 ### Step 4: Verify Report Integrity
 
-Reports are HMAC-SHA256 signed. The signature covers the entire report content:
+Reports can be HMAC-SHA256 signed for integrity verification. Generate signed reports with:
+
+```bash
+COMPLIANCE_SIGNING_KEY=your-secret-key cargo run --example generate_compliance_report \
+  --features compliance-artifacts -- --sign --key-id production-key-2025
+```
+
+The signature field in the report:
 
 ```json
 {
-  "signature": "abc123...",
-  "signing_key_id": "production-signing-key-2025",
-  "signed_at": "2025-12-18T15:30:00Z"
+  "signature": {
+    "algorithm": "HMAC-SHA256",
+    "key_id": "production-key-2025",
+    "value": "qVmoawroyu0b7FM0Rs28OTgD1FHc816tAGq+g5cN3Wo=",
+    "signed_at": "2025-12-23T17:33:43.289191918Z"
+  }
 }
 ```
 
-To verify: compute HMAC-SHA256 over the report JSON (excluding signature fields) with the organization's signing key.
+**To verify manually:**
+1. Load the report JSON
+2. Remove the `signature` field entirely
+3. Serialize the remaining JSON (compact, no whitespace)
+4. Compute HMAC-SHA256 over the JSON bytes using the signing key
+5. Base64-encode the result and compare with `signature.value`
+
+**To verify programmatically (Rust):**
+```rust
+use barbican::compliance::ComplianceTestReport;
+
+let report: ComplianceTestReport = serde_json::from_str(&json)?;
+let key = std::env::var("COMPLIANCE_SIGNING_KEY")?.into_bytes();
+
+if report.verify(&key)? {
+    println!("Report is authentic and unmodified");
+} else {
+    println!("WARNING: Report may have been tampered with!");
+}
+```
+
+The verification uses constant-time comparison to prevent timing attacks.
 
 ## Key Documentation Files
 
@@ -167,12 +205,18 @@ Some controls can be disabled via configuration (e.g., `SECURITY_HEADERS_ENABLED
 
 **Q: How do I verify the tests aren't faked?**
 
-The tests exercise real code paths. You can run them yourself:
+Multiple verification methods:
+
+1. **Signature verification**: Signed reports include HMAC-SHA256 signatures. Verify the signature matches using the organization's signing key (see Step 4).
+
+2. **Run the tests yourself**:
 ```bash
 git clone <repo>
 cargo test --features compliance-artifacts
 ```
 The same tests that generate artifacts are the same tests that must pass for the build to succeed.
+
+3. **Check CI/CD pipeline**: Request access to the build pipeline to confirm reports are generated from the same codebase that's deployed.
 
 ---
 
