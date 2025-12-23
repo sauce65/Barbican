@@ -273,6 +273,9 @@ pub mod secrets;
 pub mod supply_chain;
 pub mod testing;
 
+// Integration support module
+pub mod integration;
+
 // Re-exports for convenience
 pub use config::{SecurityConfig, SecurityConfigBuilder};
 pub use crypto::{constant_time_eq, constant_time_str_eq};
