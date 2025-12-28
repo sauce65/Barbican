@@ -10,6 +10,12 @@ pkgs.testers.nixosTest {
       ../modules/hardened-nginx.nix
     ];
 
+    # Add required packages for testing
+    environment.systemPackages = with pkgs; [
+      openssl
+      curl
+    ];
+
     # Create test certificates
     systemd.services.generate-test-certs = {
       description = "Generate test TLS certificates";
@@ -36,7 +42,10 @@ pkgs.testers.nixosTest {
           -subj "/CN=Test CA"
 
         chmod 644 /run/certs/*.crt
-        chmod 600 /run/certs/*.key
+        # Make key readable by nginx (in production, use group permissions or acme)
+        chmod 640 /run/certs/server.key
+        chown root:nginx /run/certs/server.key
+        chmod 600 /run/certs/ca.key
       '';
     };
 
@@ -166,10 +175,11 @@ with socketserver.TCPServer(("127.0.0.1", 3000), Handler) as httpd:
 
     # SC-5: Rate Limiting Tests
     with subtest("SC-5: Rate limiting configured"):
-      # Check nginx config has rate limiting zones
-      config = machine.succeed("cat /etc/nginx/nginx.conf 2>&1")
-      assert "limit_req_zone" in config, f"Rate limit zone not configured: {config}"
-      assert "limit_conn_zone" in config, f"Connection limit zone not configured: {config}"
+      # Check nginx config has rate limiting zones (NixOS stores config in /nix/store)
+      config_path = machine.succeed("systemctl cat nginx | grep 'ExecStart' | grep -oP '/nix/store/[^/]+/nginx.conf' || find /nix/store -name nginx.conf -newer /proc/1 2>/dev/null | head -1")
+      config = machine.succeed(f"cat {config_path.strip()}")
+      assert "limit_req_zone" in config, f"Rate limit zone not configured: {config[:500]}"
+      assert "limit_conn_zone" in config, f"Connection limit zone not configured: {config[:500]}"
 
     with subtest("SC-5: Excessive requests get limited"):
       # Make many requests quickly
@@ -186,9 +196,10 @@ with socketserver.TCPServer(("127.0.0.1", 3000), Handler) as httpd:
 
     # AU-2/AU-3: Logging Tests
     with subtest("AU-2: JSON log format configured"):
-      config = machine.succeed("cat /etc/nginx/nginx.conf 2>&1")
+      config_path = machine.succeed("systemctl cat nginx | grep 'ExecStart' | grep -oP '/nix/store/[^/]+/nginx.conf' || find /nix/store -name nginx.conf -newer /proc/1 2>/dev/null | head -1")
+      config = machine.succeed(f"cat {config_path.strip()}")
       assert "escape=json" in config or "log_format" in config, \
-        f"JSON log format not configured: {config}"
+        f"JSON log format not configured: {config[:500]}"
 
     with subtest("AU-3: Access log captures security fields"):
       # Make a request to generate log entry
@@ -206,9 +217,10 @@ with socketserver.TCPServer(("127.0.0.1", 3000), Handler) as httpd:
 
     with subtest("X-Request-ID header generated"):
       # Check that request ID is added (appears in backend headers)
-      config = machine.succeed("cat /etc/nginx/nginx.conf 2>&1")
+      config_path = machine.succeed("systemctl cat nginx | grep 'ExecStart' | grep -oP '/nix/store/[^/]+/nginx.conf' || find /nix/store -name nginx.conf -newer /proc/1 2>/dev/null | head -1")
+      config = machine.succeed(f"cat {config_path.strip()}")
       assert "x-request-id" in config.lower() or "request_id" in config.lower(), \
-        f"Request ID not configured: {config}"
+        f"Request ID not configured: {config[:500]}"
 
     print("All hardened-nginx tests passed!")
   '';

@@ -37,9 +37,14 @@ in {
   };
 
   config = mkIf cfg.enable {
-    # Remove empty root password - require SSH keys
+    # Lock root password - require SSH keys only
     users.users.root = {
-      # No password set - only SSH key auth
+      # Lock password login (! means locked)
+      # Use mkForce to override any hashedPasswordFile from test framework
+      hashedPassword = mkForce "!";
+      hashedPasswordFile = mkForce null;
+      password = mkForce null;
+      # Set up SSH key auth
       openssh.authorizedKeys.keys = cfg.authorizedKeys;
     };
 

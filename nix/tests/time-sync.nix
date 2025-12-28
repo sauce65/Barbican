@@ -34,10 +34,8 @@ pkgs.testers.nixosTest {
         f"No servers in chrony config: {config}"
 
     with subtest("NTP servers configured"):
-      # Check chronyc sources output for configured servers
-      sources = machine.succeed("chronyc -n sources 2>/dev/null || echo 'sources'")
-      # In test VM, servers may show as unreachable but should be configured
-      config_check = machine.succeed("systemctl cat chronyd")
+      # Get the chrony.conf path from systemd unit and check for our servers
+      config_check = machine.succeed("cat $(systemctl cat chronyd | grep 'ExecStart' | sed 's/.*-f //' | cut -d' ' -f1)")
       has_servers = "cloudflare" in config_check.lower() or "google" in config_check.lower() or "time" in config_check.lower()
       assert has_servers, f"Expected NTP servers not found in config: {config_check}"
 
@@ -64,8 +62,8 @@ pkgs.testers.nixosTest {
         f"systemd-timesyncd may still be enabled: {output}"
 
     with subtest("Poll intervals configured"):
-      # Check systemd unit for config file location and content
-      config = machine.succeed("systemctl cat chronyd")
+      # Get the chrony.conf path from systemd unit and check its contents
+      config = machine.succeed("cat $(systemctl cat chronyd | grep 'ExecStart' | sed 's/.*-f //' | cut -d' ' -f1)")
       assert "minpoll" in config, f"minpoll not configured: {config}"
       assert "maxpoll" in config, f"maxpoll not configured: {config}"
 

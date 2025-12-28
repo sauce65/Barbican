@@ -37,9 +37,10 @@ pkgs.testers.nixosTest {
 
     # Verify SSH keys are set
     with subtest("SSH authorized keys configured"):
-      keys = machine.succeed("cat /root/.ssh/authorized_keys")
-      assert "ssh-ed25519" in keys, "SSH key not found in authorized_keys"
-      assert "TestKey" in keys, "Expected test key not found"
+      # NixOS puts authorized_keys in /etc/ssh/authorized_keys.d/ or ~/.ssh/authorized_keys
+      keys = machine.succeed("cat /etc/ssh/authorized_keys.d/root 2>/dev/null || cat /root/.ssh/authorized_keys 2>/dev/null || echo 'no keys found'")
+      assert "ssh-ed25519" in keys, f"SSH key not found in authorized_keys: {keys}"
+      assert "TestKey" in keys, f"Expected test key not found: {keys}"
 
     # Verify login banner
     with subtest("Login banner is set"):

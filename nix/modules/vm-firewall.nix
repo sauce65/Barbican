@@ -92,18 +92,13 @@ in {
     networking.firewall = {
       enable = true;
 
-      # Allowed TCP ports (from allowedInbound with from="any")
-      allowedTCPPorts = map (r: r.port) (
-        filter (r: r.from == "any" && r.proto == "tcp") cfg.allowedInbound
-      );
+      # We add all rules via extraCommands to ensure they appear in the INPUT chain
+      # (allowedTCPPorts goes to nixos-fw chain which isn't visible in INPUT -L)
 
-      allowedUDPPorts = map (r: r.port) (
-        filter (r: r.from == "any" && r.proto == "udp") cfg.allowedInbound
-      );
-
-      # Custom rules for source-restricted access
       extraCommands = let
-        inboundRules = filter (r: r.from != "any") cfg.allowedInbound;
+        # Separate source-restricted rules from "any" rules
+        sourceRestrictedRules = filter (r: r.from != "any") cfg.allowedInbound;
+        anySourceRules = filter (r: r.from == "any") cfg.allowedInbound;
         outboundRules = if cfg.enableEgressFiltering then cfg.allowedOutbound else [];
       in ''
         # Default policies
@@ -133,7 +128,12 @@ in {
         # Source-restricted inbound rules
         ${concatMapStringsSep "\n" (r: ''
           iptables -A INPUT -p ${r.proto} --dport ${toString r.port} -s ${r.from} -j ACCEPT
-        '') inboundRules}
+        '') sourceRestrictedRules}
+
+        # Inbound rules from any source (added to INPUT chain for visibility)
+        ${concatMapStringsSep "\n" (r: ''
+          iptables -A INPUT -p ${r.proto} --dport ${toString r.port} -j ACCEPT
+        '') anySourceRules}
 
         # Outbound rules (if egress filtering enabled)
         ${concatMapStringsSep "\n" (r: ''

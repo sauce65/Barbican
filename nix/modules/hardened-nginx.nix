@@ -182,10 +182,8 @@ let
         access_log /var/log/nginx/barbican_access.log barbican_security;
         error_log /var/log/nginx/barbican_error.log warn;
 
-        # Rate limiting (SC-5)
+        # Rate limiting status codes (SC-5)
         ${optionalString cfg.rateLimit.enable ''
-        limit_req zone=barbican_global burst=${toString cfg.rateLimit.burst} ${if cfg.rateLimit.nodelay then "nodelay" else ""};
-        limit_conn barbican_conn ${toString cfg.rateLimit.maxConnections};
         limit_req_status 429;
         limit_conn_status 429;
         ''}
@@ -199,25 +197,26 @@ let
         location /health {
             ${proxyHeaders}
             proxy_pass http://${cfg.upstream.address}:${toString cfg.upstream.port};
-
-            # Skip rate limiting for health checks
-            limit_req off;
-            limit_conn off;
         }
 
-        # Auth endpoints (stricter rate limiting)
+        # Auth endpoints (stricter rate limiting) (AC-7)
         location ~ ^/(login|auth|oauth) {
             ${proxyHeaders}
             proxy_pass http://${cfg.upstream.address}:${toString cfg.upstream.port};
-
-            # Stricter rate limit for auth endpoints (AC-7)
+            ${optionalString cfg.rateLimit.enable ''
             limit_req zone=barbican_auth burst=5 nodelay;
+            limit_conn barbican_conn ${toString cfg.rateLimit.maxConnections};
+            ''}
         }
 
-        # All other requests
+        # All other requests (standard rate limiting)
         location / {
             ${proxyHeaders}
             proxy_pass http://${cfg.upstream.address}:${toString cfg.upstream.port};
+            ${optionalString cfg.rateLimit.enable ''
+            limit_req zone=barbican_global burst=${toString cfg.rateLimit.burst} ${if cfg.rateLimit.nodelay then "nodelay" else ""};
+            limit_conn barbican_conn ${toString cfg.rateLimit.maxConnections};
+            ''}
         }
 
         # Block common exploit paths
@@ -465,13 +464,11 @@ in {
       recommendedOptimisation = true;
       recommendedProxySettings = true;
 
-      # We use appendConfig for events block
-      appendConfig = ''
-        events {
-            worker_connections 1024;
-            use epoll;
-            multi_accept on;
-        }
+      # NixOS handles the events block automatically
+      eventsConfig = ''
+        worker_connections 1024;
+        use epoll;
+        multi_accept on;
       '';
 
       # Combined HTTP config: global settings + vhost
@@ -479,8 +476,7 @@ in {
         ${logFormat}
         ${rateLimitZone}
 
-        # Timeouts
-        keepalive_timeout 65;
+        # Timeouts (keepalive_timeout is set by recommendedProxySettings)
         send_timeout 60;
 
         # Buffer settings
@@ -488,8 +484,7 @@ in {
         proxy_buffers 4 256k;
         proxy_busy_buffers_size 256k;
 
-        # Security: hide nginx version
-        server_tokens off;
+        # Security: server_tokens off is set in securityHeaders
 
         # Security: prevent host header injection
         map $http_host $valid_host {
