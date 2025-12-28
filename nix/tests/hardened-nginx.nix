@@ -176,7 +176,7 @@ with socketserver.TCPServer(("127.0.0.1", 3000), Handler) as httpd:
     # SC-5: Rate Limiting Tests
     with subtest("SC-5: Rate limiting configured"):
       # Check nginx config has rate limiting zones (NixOS stores config in /nix/store)
-      config_path = machine.succeed("systemctl cat nginx | grep 'ExecStart' | grep -oP '/nix/store/[^/]+/nginx.conf' || find /nix/store -name nginx.conf -newer /proc/1 2>/dev/null | head -1")
+      config_path = machine.succeed("systemctl cat nginx | grep -o '/nix/store/[^/]*/nginx.conf' | head -1")
       config = machine.succeed(f"cat {config_path.strip()}")
       assert "limit_req_zone" in config, f"Rate limit zone not configured: {config[:500]}"
       assert "limit_conn_zone" in config, f"Connection limit zone not configured: {config[:500]}"
@@ -196,7 +196,7 @@ with socketserver.TCPServer(("127.0.0.1", 3000), Handler) as httpd:
 
     # AU-2/AU-3: Logging Tests
     with subtest("AU-2: JSON log format configured"):
-      config_path = machine.succeed("systemctl cat nginx | grep 'ExecStart' | grep -oP '/nix/store/[^/]+/nginx.conf' || find /nix/store -name nginx.conf -newer /proc/1 2>/dev/null | head -1")
+      config_path = machine.succeed("systemctl cat nginx | grep -o '/nix/store/[^/]*/nginx.conf' | head -1")
       config = machine.succeed(f"cat {config_path.strip()}")
       assert "escape=json" in config or "log_format" in config, \
         f"JSON log format not configured: {config[:500]}"
@@ -217,7 +217,7 @@ with socketserver.TCPServer(("127.0.0.1", 3000), Handler) as httpd:
 
     with subtest("X-Request-ID header generated"):
       # Check that request ID is added (appears in backend headers)
-      config_path = machine.succeed("systemctl cat nginx | grep 'ExecStart' | grep -oP '/nix/store/[^/]+/nginx.conf' || find /nix/store -name nginx.conf -newer /proc/1 2>/dev/null | head -1")
+      config_path = machine.succeed("systemctl cat nginx | grep -o '/nix/store/[^/]*/nginx.conf' | head -1")
       config = machine.succeed(f"cat {config_path.strip()}")
       assert "x-request-id" in config.lower() or "request_id" in config.lower(), \
         f"Request ID not configured: {config[:500]}"
