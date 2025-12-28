@@ -40,12 +40,14 @@ in {
 
     services.chrony = {
       enable = true;
-      servers = cfg.servers;
+      # Don't use the servers option - we'll configure them in extraConfig with poll intervals
+      servers = [];
 
       extraConfig = ''
-        # Minimum and maximum polling intervals
-        minpoll ${toString cfg.minPoll}
-        maxpoll ${toString cfg.maxPoll}
+        # NTP servers with polling intervals
+        ${concatMapStringsSep "\n" (server:
+          "server ${server} iburst minpoll ${toString cfg.minPoll} maxpoll ${toString cfg.maxPoll}"
+        ) cfg.servers}
 
         # Allow only local management
         cmdallow 127.0.0.1
@@ -56,6 +58,10 @@ in {
 
         # Make first sync faster
         makestep 1.0 3
+
+        # Allow running without network connectivity (important for VM tests)
+        # This prevents chronyd from failing if servers are unreachable
+        local stratum 10
       '';
 
       # Use NixOS native RTC trimming (replaces deprecated rtcsync)

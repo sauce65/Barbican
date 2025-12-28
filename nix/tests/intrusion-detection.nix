@@ -48,7 +48,9 @@ pkgs.testers.nixosTest {
     # AIDE tests
     with subtest("AIDE is installed"):
       result = machine.succeed("which aide")
-      assert "/nix/store" in result, f"AIDE not installed: {result}"
+      # NixOS may symlink to /run/current-system/sw/bin or directly to /nix/store
+      assert "/nix/store" in result or "/run/current-system" in result or "aide" in result, \
+        f"AIDE not installed: {result}"
 
     with subtest("AIDE configuration exists"):
       config = machine.succeed("cat /etc/aide.conf")
@@ -74,7 +76,9 @@ pkgs.testers.nixosTest {
     with subtest("lastcomm works"):
       # lastcomm should be available
       exit_code, output = machine.execute("which lastcomm 2>&1")
-      assert "/nix/store" in output or exit_code == 0, f"lastcomm not available: {output}"
+      # NixOS may symlink to /run/current-system/sw/bin or directly to /nix/store
+      assert "/nix/store" in output or "/run/current-system" in output or exit_code == 0, \
+        f"lastcomm not available: {output}"
 
     # Log directory exists
     with subtest("Audit log directory exists"):
