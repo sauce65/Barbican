@@ -378,7 +378,13 @@ pub use login::{
 };
 
 // Alerting re-exports (IR-4, IR-5)
-pub use alerting::{AlertConfig, AlertManager, Alert, AlertSeverity, AlertCategory};
+pub use alerting::{
+    AlertConfig, AlertManager, Alert, AlertSeverity, AlertCategory,
+    alert_critical, alert_brute_force, alert_account_locked,
+    alert_suspicious_activity, alert_database_disconnected,
+    // IR-4 Enforcement: Axum Integration
+    AlertingExtension, alerting_middleware, alerting_layer,
+};
 
 // Health check re-exports (CA-7)
 pub use health::{

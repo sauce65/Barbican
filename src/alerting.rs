@@ -833,6 +833,153 @@ pub fn alert_database_disconnected(
 }
 
 // ============================================================================
+// IR-4 Enforcement: Axum Integration
+// ============================================================================
+
+use axum::extract::Request;
+use axum::middleware::Next;
+use axum::response::Response;
+use axum::Extension;
+
+/// Extension for sharing AlertManager with request handlers
+///
+/// Handlers can extract this to send alerts:
+///
+/// ```ignore
+/// use barbican::alerting::{AlertingExtension, Alert, AlertSeverity, AlertCategory};
+///
+/// async fn risky_operation(
+///     Extension(alerting): Extension<AlertingExtension>,
+/// ) -> impl IntoResponse {
+///     // Perform operation...
+///     if suspicious_activity_detected {
+///         alerting.alert(Alert::new(
+///             AlertSeverity::Warning,
+///             "Suspicious activity",
+///             "Unusual pattern detected",
+///         ).with_category(AlertCategory::SecurityIncident));
+///     }
+///     "OK"
+/// }
+/// ```
+#[derive(Clone)]
+pub struct AlertingExtension {
+    manager: AlertManager,
+}
+
+impl AlertingExtension {
+    /// Create a new alerting extension
+    pub fn new(manager: AlertManager) -> Self {
+        Self { manager }
+    }
+
+    /// Send an alert through the manager
+    pub fn alert(&self, alert: Alert) -> bool {
+        self.manager.send(alert)
+    }
+
+    /// Send a critical alert
+    pub fn alert_critical(&self, summary: impl Into<String>, description: impl Into<String>) -> bool {
+        alert_critical(summary, description, &self.manager)
+    }
+
+    /// Send a brute force detection alert
+    pub fn alert_brute_force(&self, ip: &str, attempt_count: u32) -> bool {
+        alert_brute_force(ip, attempt_count, &self.manager)
+    }
+
+    /// Send an account lockout alert
+    pub fn alert_account_locked(&self, identifier: &str, reason: &str) -> bool {
+        alert_account_locked(identifier, reason, &self.manager)
+    }
+
+    /// Send a suspicious activity alert
+    pub fn alert_suspicious(&self, description: &str, user_id: Option<&str>, ip: Option<&str>) -> bool {
+        alert_suspicious_activity(description, user_id, ip, &self.manager)
+    }
+
+    /// Send a database disconnection alert
+    pub fn alert_database_disconnected(&self, database_name: &str, reason: &str) -> bool {
+        alert_database_disconnected(database_name, reason, &self.manager)
+    }
+
+    /// Get the underlying manager for advanced usage
+    pub fn manager(&self) -> &AlertManager {
+        &self.manager
+    }
+}
+
+impl std::fmt::Debug for AlertingExtension {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AlertingExtension")
+            .field("manager", &"AlertManager { ... }")
+            .finish()
+    }
+}
+
+/// Middleware that provides AlertingExtension to handlers
+///
+/// This middleware injects the `AlertingExtension` into all requests,
+/// allowing handlers to send alerts as needed.
+///
+/// # Example
+///
+/// ```ignore
+/// use barbican::alerting::{alerting_middleware, AlertManager, AlertConfig};
+/// use axum::{Router, middleware};
+///
+/// let manager = AlertManager::new(AlertConfig::default());
+///
+/// let app = Router::new()
+///     .route("/api/action", post(risky_handler))
+///     .layer(middleware::from_fn(move |req, next| {
+///         let manager = manager.clone();
+///         async move {
+///             alerting_middleware(req, next, manager).await
+///         }
+///     }));
+/// ```
+pub async fn alerting_middleware(
+    mut req: Request,
+    next: Next,
+    manager: AlertManager,
+) -> Response {
+    // Inject the alerting extension
+    req.extensions_mut().insert(AlertingExtension::new(manager));
+
+    next.run(req).await
+}
+
+/// Create an Axum layer that provides alerting to all handlers
+///
+/// This is a convenience wrapper around `alerting_middleware`.
+///
+/// # Example
+///
+/// ```ignore
+/// use barbican::alerting::{alerting_layer, AlertManager, AlertConfig};
+/// use axum::Router;
+///
+/// let manager = AlertManager::new(AlertConfig::default());
+///
+/// let app = Router::new()
+///     .route("/api/action", post(handler))
+///     .layer(alerting_layer(manager));
+/// ```
+pub fn alerting_layer(manager: AlertManager) -> axum::middleware::FromFnLayer<
+    impl Fn(Request, Next) -> std::pin::Pin<Box<dyn std::future::Future<Output = Response> + Send>> + Clone + Send,
+    (),
+    Request,
+> {
+    axum::middleware::from_fn(move |req: Request, next: Next| {
+        let manager = manager.clone();
+        Box::pin(async move {
+            alerting_middleware(req, next, manager).await
+        }) as std::pin::Pin<Box<dyn std::future::Future<Output = Response> + Send>>
+    })
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
@@ -1028,5 +1175,82 @@ mod tests {
             AlertCategory::from(SecurityEvent::SessionDestroyed),
             AlertCategory::Session
         );
+    }
+
+    // ========================================================================
+    // IR-4 Enforcement Tests
+    // ========================================================================
+
+    #[test]
+    fn test_alerting_extension_creation() {
+        let manager = AlertManager::with_default_config();
+        let extension = AlertingExtension::new(manager);
+
+        // Should be able to send alerts
+        let sent = extension.alert(Alert::new(
+            AlertSeverity::Critical,
+            "Test",
+            "Test alert",
+        ));
+        assert!(sent);
+    }
+
+    #[test]
+    fn test_alerting_extension_convenience_methods() {
+        let manager = AlertManager::with_default_config();
+        let extension = AlertingExtension::new(manager);
+
+        // Critical alert
+        assert!(extension.alert_critical("Test", "Critical alert"));
+
+        // Brute force alert
+        assert!(extension.alert_brute_force("192.168.1.1", 5));
+
+        // Account locked alert
+        assert!(extension.alert_account_locked("user@example.com", "Too many attempts"));
+
+        // Suspicious activity alert
+        assert!(extension.alert_suspicious(
+            "Unusual login pattern",
+            Some("user123"),
+            Some("10.0.0.1")
+        ));
+
+        // Database disconnected alert
+        assert!(extension.alert_database_disconnected("primary", "Connection timeout"));
+    }
+
+    #[test]
+    fn test_alerting_extension_debug() {
+        let manager = AlertManager::with_default_config();
+        let extension = AlertingExtension::new(manager);
+
+        let debug_output = format!("{:?}", extension);
+        assert!(debug_output.contains("AlertingExtension"));
+    }
+
+    #[test]
+    fn test_alerting_extension_manager_access() {
+        let config = AlertConfig::builder()
+            .min_severity(AlertSeverity::Error)
+            .build();
+        let manager = AlertManager::new(config);
+        let extension = AlertingExtension::new(manager);
+
+        // Should be able to access the underlying manager
+        let _manager = extension.manager();
+    }
+
+    #[test]
+    fn test_alerting_extension_clone() {
+        let manager = AlertManager::with_default_config();
+        let extension = AlertingExtension::new(manager);
+
+        // Should be cloneable (needed for Axum extension)
+        let cloned = extension.clone();
+
+        // Both should work
+        assert!(extension.alert_critical("Test 1", "Test"));
+        assert!(cloned.alert_critical("Test 2", "Test"));
     }
 }

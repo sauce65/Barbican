@@ -70,7 +70,7 @@ These controls are marked as ✅ IMPLEMENTED in the Security Control Registry an
 ### Incident Response (IR) - 2 controls
 | Control ID | Name | Claimed Location | Audit Status |
 |------------|------|------------------|--------------|
-| IR-4 | Incident Handling | `src/alerting.rs` | **PARTIAL** - AlertManager exists; no auto-integration |
+| IR-4 | Incident Handling | `src/alerting.rs` | **PASS** - AlertingExtension + alerting_middleware + alerting_layer + 19 tests |
 | IR-5 | Incident Monitoring | `src/alerting.rs` | **PARTIAL** - Dashboards/logs exist; no persistent tracking |
 
 ### Media Protection (MP) - 1 control
@@ -201,6 +201,7 @@ These controls are marked as ✅ IMPLEMENTED in the Security Control Registry an
 | 2025-12-29 | SC-28 | **PASS** | encryption_enforcement_middleware + EncryptionExtension + validate_encryption_startup + 29 tests |
 | 2025-12-29 | SI-10 | **PASS** | ValidatedJson/Query/Path extractors + ValidationConfig + ValidationRejection + 21 tests |
 | 2025-12-29 | CA-7 | **PASS** | health_routes() + HealthEndpointConfig + /health, /live, /ready endpoints + 21 tests |
+| 2025-12-29 | IR-4 | **PASS** | AlertingExtension + alerting_middleware + alerting_layer + 5 convenience methods + 19 tests |
 
 ---
 
