@@ -34,7 +34,7 @@ These controls are marked as ✅ IMPLEMENTED in the Security Control Registry an
 ### Assessment, Authorization, Monitoring (CA) - 2 controls
 | Control ID | Name | Claimed Location | Audit Status |
 |------------|------|------------------|--------------|
-| CA-7 | Continuous Monitoring | `src/health.rs` | **PARTIAL** - Framework exists; no auto-enforcement |
+| CA-7 | Continuous Monitoring | `src/health.rs` | **PASS** - health_routes() + /health, /live, /ready endpoints + 21 tests |
 | CA-8 | Penetration Testing | `src/testing.rs` | NOT STARTED |
 
 ### Configuration Management (CM) - 5 controls
@@ -200,6 +200,7 @@ These controls are marked as ✅ IMPLEMENTED in the Security Control Registry an
 | 2025-12-29 | AC-12 | **PASS** | session_enforcement_middleware + max_lifetime check + SessionConfig + exempt paths |
 | 2025-12-29 | SC-28 | **PASS** | encryption_enforcement_middleware + EncryptionExtension + validate_encryption_startup + 29 tests |
 | 2025-12-29 | SI-10 | **PASS** | ValidatedJson/Query/Path extractors + ValidationConfig + ValidationRejection + 21 tests |
+| 2025-12-29 | CA-7 | **PASS** | health_routes() + HealthEndpointConfig + /health, /live, /ready endpoints + 21 tests |
 
 ---
 

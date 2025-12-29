@@ -499,6 +499,293 @@ fn log_health_check(report: &HealthReport) {
 }
 
 // ============================================================================
+// CA-7 Enforcement: Axum Health Endpoints
+// ============================================================================
+
+use axum::extract::{Extension, State};
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use axum::routing::get;
+use axum::Json;
+use axum::Router;
+use serde::Serialize;
+
+/// Health endpoint configuration
+#[derive(Debug, Clone)]
+pub struct HealthEndpointConfig {
+    /// Path for overall health endpoint (default: "/health")
+    pub health_path: String,
+
+    /// Path for liveness probe (default: "/health/live")
+    pub live_path: String,
+
+    /// Path for readiness probe (default: "/health/ready")
+    pub ready_path: String,
+
+    /// Include detailed check results in response
+    pub include_details: bool,
+
+    /// Only return 200 OK for healthy status (strict mode)
+    pub strict_mode: bool,
+}
+
+impl Default for HealthEndpointConfig {
+    fn default() -> Self {
+        Self {
+            health_path: "/health".to_string(),
+            live_path: "/health/live".to_string(),
+            ready_path: "/health/ready".to_string(),
+            include_details: true,
+            strict_mode: false,
+        }
+    }
+}
+
+impl HealthEndpointConfig {
+    /// Create a minimal config for production (no details exposed)
+    pub fn production() -> Self {
+        Self {
+            include_details: false,
+            strict_mode: true,
+            ..Default::default()
+        }
+    }
+
+    /// Create a development config with full details
+    pub fn development() -> Self {
+        Self {
+            include_details: true,
+            strict_mode: false,
+            ..Default::default()
+        }
+    }
+}
+
+/// JSON response for health endpoints
+#[derive(Debug, Serialize)]
+pub struct HealthResponse {
+    /// Overall status: "healthy", "degraded", or "unhealthy"
+    pub status: String,
+
+    /// Individual check results (if include_details is true)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checks: Option<Vec<CheckResult>>,
+
+    /// Total duration in milliseconds
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+}
+
+/// Individual check result for JSON response
+#[derive(Debug, Serialize)]
+pub struct CheckResult {
+    /// Check name
+    pub name: String,
+
+    /// Check status
+    pub status: String,
+
+    /// Optional message
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+
+    /// Duration in milliseconds
+    pub duration_ms: u64,
+}
+
+impl From<&HealthReport> for HealthResponse {
+    fn from(report: &HealthReport) -> Self {
+        let checks: Vec<CheckResult> = report
+            .checks
+            .iter()
+            .map(|(name, status)| CheckResult {
+                name: name.clone(),
+                status: format!("{:?}", status.status).to_lowercase(),
+                message: status.message.clone(),
+                duration_ms: status.duration.as_millis() as u64,
+            })
+            .collect();
+
+        Self {
+            status: format!("{:?}", report.status).to_lowercase(),
+            checks: Some(checks),
+            duration_ms: Some(report.total_duration.as_millis() as u64),
+        }
+    }
+}
+
+/// Shared state for health endpoints
+#[derive(Clone)]
+pub struct HealthState {
+    checker: Arc<HealthChecker>,
+    config: HealthEndpointConfig,
+}
+
+impl HealthState {
+    /// Create new health state
+    pub fn new(checker: HealthChecker, config: HealthEndpointConfig) -> Self {
+        Self {
+            checker: Arc::new(checker),
+            config,
+        }
+    }
+}
+
+/// Create an Axum router with health check endpoints
+///
+/// This provides three endpoints:
+/// - `/health` - Full health check with all registered checks
+/// - `/health/live` - Liveness probe (always returns 200 if server is running)
+/// - `/health/ready` - Readiness probe (returns 200 only if all checks pass)
+///
+/// # Example
+///
+/// ```ignore
+/// use barbican::health::{health_routes, HealthChecker, HealthCheck, HealthStatus, HealthEndpointConfig};
+/// use axum::Router;
+///
+/// let mut checker = HealthChecker::new();
+/// checker.add_check(HealthCheck::new("database", || async {
+///     HealthStatus::healthy()
+/// }));
+///
+/// let app = Router::new()
+///     .merge(health_routes(checker, HealthEndpointConfig::default()));
+/// ```
+pub fn health_routes(checker: HealthChecker, config: HealthEndpointConfig) -> Router {
+    let state = HealthState::new(checker, config.clone());
+
+    Router::new()
+        .route(&config.health_path, get(health_handler))
+        .route(&config.live_path, get(live_handler))
+        .route(&config.ready_path, get(ready_handler))
+        .with_state(state)
+}
+
+/// Handler for /health endpoint
+async fn health_handler(State(state): State<HealthState>) -> Response {
+    let report = state.checker.check_all().await;
+    let status_code = status_to_http(&report.status, state.config.strict_mode);
+
+    let response = if state.config.include_details {
+        HealthResponse::from(&report)
+    } else {
+        HealthResponse {
+            status: format!("{:?}", report.status).to_lowercase(),
+            checks: None,
+            duration_ms: None,
+        }
+    };
+
+    tracing::debug!(
+        control = "CA-7",
+        status = %response.status,
+        endpoint = "/health",
+        "Health check completed"
+    );
+
+    (status_code, Json(response)).into_response()
+}
+
+/// Handler for /health/live endpoint (liveness probe)
+///
+/// Always returns 200 OK if the server is running.
+/// Used by Kubernetes to determine if the container should be restarted.
+async fn live_handler() -> Response {
+    tracing::debug!(control = "CA-7", endpoint = "/health/live", "Liveness probe");
+
+    (
+        StatusCode::OK,
+        Json(HealthResponse {
+            status: "alive".to_string(),
+            checks: None,
+            duration_ms: None,
+        }),
+    )
+        .into_response()
+}
+
+/// Handler for /health/ready endpoint (readiness probe)
+///
+/// Returns 200 OK only if all critical checks pass.
+/// Used by Kubernetes to determine if the pod should receive traffic.
+async fn ready_handler(State(state): State<HealthState>) -> Response {
+    let report = state.checker.check_all().await;
+    let is_ready = report.status != Status::Unhealthy;
+
+    let status_code = if is_ready {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+
+    let response = if state.config.include_details {
+        HealthResponse::from(&report)
+    } else {
+        HealthResponse {
+            status: if is_ready { "ready" } else { "not_ready" }.to_string(),
+            checks: None,
+            duration_ms: None,
+        }
+    };
+
+    tracing::debug!(
+        control = "CA-7",
+        status = %response.status,
+        endpoint = "/health/ready",
+        "Readiness probe completed"
+    );
+
+    (status_code, Json(response)).into_response()
+}
+
+/// Convert health status to HTTP status code
+fn status_to_http(status: &Status, strict: bool) -> StatusCode {
+    match (status, strict) {
+        (Status::Healthy, _) => StatusCode::OK,
+        (Status::Degraded, false) => StatusCode::OK, // Degraded is operational
+        (Status::Degraded, true) => StatusCode::SERVICE_UNAVAILABLE,
+        (Status::Unhealthy, _) => StatusCode::SERVICE_UNAVAILABLE,
+    }
+}
+
+/// Extension for sharing HealthChecker with handlers
+///
+/// Handlers can extract this to run health checks or add dynamic checks:
+///
+/// ```ignore
+/// async fn custom_health(
+///     Extension(health): Extension<HealthExtension>,
+/// ) -> impl IntoResponse {
+///     let report = health.check_all().await;
+///     Json(report)
+/// }
+/// ```
+#[derive(Clone)]
+pub struct HealthExtension {
+    checker: Arc<HealthChecker>,
+}
+
+impl HealthExtension {
+    /// Create a new health extension
+    pub fn new(checker: HealthChecker) -> Self {
+        Self {
+            checker: Arc::new(checker),
+        }
+    }
+
+    /// Run all health checks
+    pub async fn check_all(&self) -> HealthReport {
+        self.checker.check_all().await
+    }
+
+    /// Run a specific check
+    pub async fn check_one(&self, name: &str) -> Option<HealthStatus> {
+        self.checker.check_one(name).await
+    }
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
@@ -647,5 +934,111 @@ mod tests {
     fn test_always_healthy() {
         let check = always_healthy("test");
         assert_eq!(check.config.name, "test");
+    }
+
+    // ========================================================================
+    // CA-7 Enforcement Tests
+    // ========================================================================
+
+    #[test]
+    fn test_health_endpoint_config_defaults() {
+        let config = HealthEndpointConfig::default();
+        assert_eq!(config.health_path, "/health");
+        assert_eq!(config.live_path, "/health/live");
+        assert_eq!(config.ready_path, "/health/ready");
+        assert!(config.include_details);
+        assert!(!config.strict_mode);
+    }
+
+    #[test]
+    fn test_health_endpoint_config_production() {
+        let config = HealthEndpointConfig::production();
+        assert!(!config.include_details);
+        assert!(config.strict_mode);
+    }
+
+    #[test]
+    fn test_health_endpoint_config_development() {
+        let config = HealthEndpointConfig::development();
+        assert!(config.include_details);
+        assert!(!config.strict_mode);
+    }
+
+    #[test]
+    fn test_status_to_http() {
+        // Non-strict mode
+        assert_eq!(status_to_http(&Status::Healthy, false), StatusCode::OK);
+        assert_eq!(status_to_http(&Status::Degraded, false), StatusCode::OK);
+        assert_eq!(status_to_http(&Status::Unhealthy, false), StatusCode::SERVICE_UNAVAILABLE);
+
+        // Strict mode
+        assert_eq!(status_to_http(&Status::Healthy, true), StatusCode::OK);
+        assert_eq!(status_to_http(&Status::Degraded, true), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(status_to_http(&Status::Unhealthy, true), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[test]
+    fn test_health_response_from_report() {
+        let mut checks = HashMap::new();
+        checks.insert(
+            "database".to_string(),
+            HealthStatus::healthy_with_message("Connected"),
+        );
+        checks.insert(
+            "cache".to_string(),
+            HealthStatus::degraded("Slow").with_duration(Duration::from_millis(50)),
+        );
+
+        let report = HealthReport {
+            status: Status::Degraded,
+            checks,
+            generated_at: Instant::now(),
+            total_duration: Duration::from_millis(100),
+        };
+
+        let response = HealthResponse::from(&report);
+        assert_eq!(response.status, "degraded");
+        assert!(response.checks.is_some());
+        assert_eq!(response.checks.as_ref().unwrap().len(), 2);
+        assert_eq!(response.duration_ms, Some(100));
+    }
+
+    #[test]
+    fn test_check_result_serialization() {
+        let result = CheckResult {
+            name: "test".to_string(),
+            status: "healthy".to_string(),
+            message: Some("All good".to_string()),
+            duration_ms: 10,
+        };
+
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains("\"name\":\"test\""));
+        assert!(json.contains("\"status\":\"healthy\""));
+        assert!(json.contains("\"message\":\"All good\""));
+    }
+
+    #[tokio::test]
+    async fn test_health_extension() {
+        let checker = HealthChecker::new()
+            .with_check(always_healthy("test"));
+        let extension = HealthExtension::new(checker);
+
+        let report = extension.check_all().await;
+        assert_eq!(report.status, Status::Healthy);
+
+        let status = extension.check_one("test").await;
+        assert!(status.is_some());
+        assert_eq!(status.unwrap().status, Status::Healthy);
+    }
+
+    #[test]
+    fn test_health_state() {
+        let checker = HealthChecker::new();
+        let config = HealthEndpointConfig::default();
+        let state = HealthState::new(checker, config.clone());
+
+        // State should be cloneable
+        let _cloned = state.clone();
     }
 }

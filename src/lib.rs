@@ -381,7 +381,13 @@ pub use login::{
 pub use alerting::{AlertConfig, AlertManager, Alert, AlertSeverity, AlertCategory};
 
 // Health check re-exports (CA-7)
-pub use health::{HealthChecker, HealthCheck, HealthStatus, HealthReport, Status as HealthStatusKind};
+pub use health::{
+    HealthChecker, HealthCheck, HealthStatus, HealthReport, Status as HealthStatusKind,
+    HealthCheckConfig, always_healthy, always_unhealthy, memory_check, http_check,
+    // CA-7 Enforcement: Axum Health Endpoints
+    HealthEndpointConfig, HealthResponse, CheckResult, HealthState, HealthExtension,
+    health_routes,
+};
 
 // Key management re-exports (SC-12)
 pub use keys::{KeyStore, KeyMetadata, KeyPurpose, KeyState, RotationTracker, RotationPolicy};
