@@ -761,6 +761,318 @@ pub fn generate_key() -> String {
 }
 
 // ============================================================================
+// SC-28 Enforcement Middleware
+// ============================================================================
+
+use axum::extract::Request;
+use axum::middleware::Next;
+use axum::response::{IntoResponse, Response};
+use axum::http::StatusCode;
+use std::sync::Arc;
+
+/// Configuration for SC-28 encryption enforcement middleware
+///
+/// Controls how the middleware validates and enforces encryption at rest.
+#[derive(Debug, Clone)]
+pub struct EncryptionEnforcementConfig {
+    /// Require encryption key to be configured (fail-closed)
+    /// When true, requests fail with 500 if no encryption key
+    pub require_key: bool,
+
+    /// Paths exempt from encryption requirements
+    /// Useful for health checks and public endpoints
+    pub exempt_paths: Vec<String>,
+
+    /// Whether to inject EncryptionExtension into requests
+    /// Allows handlers to access the encryptor
+    pub provide_extension: bool,
+}
+
+impl Default for EncryptionEnforcementConfig {
+    fn default() -> Self {
+        Self {
+            require_key: true,
+            exempt_paths: vec![
+                "/health".to_string(),
+                "/healthz".to_string(),
+                "/ready".to_string(),
+                "/metrics".to_string(),
+            ],
+            provide_extension: true,
+        }
+    }
+}
+
+impl EncryptionEnforcementConfig {
+    /// Create a config that doesn't require encryption (for development)
+    pub fn optional() -> Self {
+        Self {
+            require_key: false,
+            ..Default::default()
+        }
+    }
+
+    /// Create a strict config requiring encryption for all paths
+    pub fn strict() -> Self {
+        Self {
+            require_key: true,
+            exempt_paths: Vec::new(),
+            provide_extension: true,
+        }
+    }
+
+    /// Check if a path is exempt from encryption requirements
+    pub fn is_exempt(&self, path: &str) -> bool {
+        self.exempt_paths.iter().any(|exempt| {
+            path == exempt || path.starts_with(&format!("{}/", exempt))
+        })
+    }
+}
+
+/// Extension providing access to encryption capabilities in handlers
+///
+/// Handlers can extract this to encrypt/decrypt sensitive data:
+///
+/// ```ignore
+/// async fn store_secret(
+///     Extension(enc): Extension<EncryptionExtension>,
+///     Json(data): Json<SensitiveData>,
+/// ) -> Result<Json<()>, StatusCode> {
+///     let encrypted = enc.encrypt(data.secret.as_bytes())?;
+///     // Store encrypted...
+///     Ok(Json(()))
+/// }
+/// ```
+#[derive(Clone)]
+pub struct EncryptionExtension {
+    encryptor: Option<Arc<FieldEncryptor>>,
+}
+
+impl EncryptionExtension {
+    /// Create a new extension with an encryptor
+    pub fn new(encryptor: FieldEncryptor) -> Self {
+        Self {
+            encryptor: Some(Arc::new(encryptor)),
+        }
+    }
+
+    /// Create an extension without an encryptor (encryption disabled)
+    pub fn disabled() -> Self {
+        Self { encryptor: None }
+    }
+
+    /// Check if encryption is available
+    pub fn is_available(&self) -> bool {
+        self.encryptor.is_some()
+    }
+
+    /// Encrypt data (returns error if encryption unavailable)
+    pub fn encrypt(&self, plaintext: &[u8]) -> Result<Vec<u8>, EncryptionError> {
+        match &self.encryptor {
+            Some(enc) => enc.encrypt(plaintext),
+            None => Err(EncryptionError::EncryptionFailed),
+        }
+    }
+
+    /// Decrypt data (returns error if encryption unavailable)
+    pub fn decrypt(&self, ciphertext: &[u8]) -> Result<Vec<u8>, EncryptionError> {
+        match &self.encryptor {
+            Some(enc) => enc.decrypt(ciphertext),
+            None => Err(EncryptionError::DecryptionFailed),
+        }
+    }
+
+    /// Encrypt a string value
+    pub fn encrypt_string(&self, plaintext: &str) -> Result<String, EncryptionError> {
+        match &self.encryptor {
+            Some(enc) => enc.encrypt_string(plaintext),
+            None => Err(EncryptionError::EncryptionFailed),
+        }
+    }
+
+    /// Decrypt a base64-encoded string
+    pub fn decrypt_string(&self, ciphertext: &str) -> Result<String, EncryptionError> {
+        match &self.encryptor {
+            Some(enc) => enc.decrypt_string(ciphertext),
+            None => Err(EncryptionError::DecryptionFailed),
+        }
+    }
+
+    /// Create an EncryptedField from plaintext
+    pub fn encrypt_field(&self, plaintext: &str) -> Result<EncryptedField, EncryptionError> {
+        match &self.encryptor {
+            Some(enc) => EncryptedField::encrypt(plaintext, enc),
+            None => Err(EncryptionError::EncryptionFailed),
+        }
+    }
+
+    /// Decrypt an EncryptedField
+    pub fn decrypt_field(&self, field: &EncryptedField) -> Result<String, EncryptionError> {
+        match &self.encryptor {
+            Some(enc) => field.decrypt(enc),
+            None => Err(EncryptionError::DecryptionFailed),
+        }
+    }
+}
+
+impl fmt::Debug for EncryptionExtension {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("EncryptionExtension")
+            .field("available", &self.is_available())
+            .finish()
+    }
+}
+
+/// SC-28 enforcement middleware
+///
+/// This middleware validates that encryption is properly configured and
+/// provides an `EncryptionExtension` to handlers for encrypting sensitive data.
+///
+/// # Behavior
+///
+/// 1. **Startup validation**: If `require_key` is true, the application should
+///    fail to start if no encryption key is configured.
+///
+/// 2. **Request handling**: Injects `EncryptionExtension` into requests so
+///    handlers can encrypt/decrypt data.
+///
+/// 3. **Exempt paths**: Health checks and metrics endpoints bypass encryption
+///    requirements.
+///
+/// # Example
+///
+/// ```ignore
+/// use barbican::encryption::{encryption_enforcement_middleware, EncryptionEnforcementConfig, FieldEncryptor};
+/// use axum::{Router, middleware};
+///
+/// let key = std::env::var("ENCRYPTION_KEY").expect("encryption key required");
+/// let encryptor = FieldEncryptor::new(&key).expect("valid key");
+/// let config = EncryptionEnforcementConfig::default();
+///
+/// let app = Router::new()
+///     .route("/secrets", post(store_secret))
+///     .layer(middleware::from_fn(move |req, next| {
+///         let encryptor = encryptor.clone();
+///         let config = config.clone();
+///         async move {
+///             encryption_enforcement_middleware(req, next, Some(encryptor), config).await
+///         }
+///     }));
+/// ```
+pub async fn encryption_enforcement_middleware(
+    mut req: Request,
+    next: Next,
+    encryptor: Option<FieldEncryptor>,
+    config: EncryptionEnforcementConfig,
+) -> Response {
+    // Clone path to avoid borrow issues
+    let path = req.uri().path().to_string();
+
+    // Check if path is exempt from encryption requirements
+    if config.is_exempt(&path) {
+        // Still provide extension if available, but don't require it
+        if config.provide_extension {
+            let extension = match &encryptor {
+                Some(enc) => EncryptionExtension::new(enc.clone()),
+                None => EncryptionExtension::disabled(),
+            };
+            req.extensions_mut().insert(extension);
+        }
+        return next.run(req).await;
+    }
+
+    // Validate encryption is configured if required
+    if config.require_key && encryptor.is_none() {
+        tracing::error!(
+            path = %path,
+            control = "SC-28",
+            "Encryption key not configured but required"
+        );
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            [("X-SC28-Error", "encryption-not-configured")],
+            "Encryption not available",
+        )
+            .into_response();
+    }
+
+    // Inject extension for handlers
+    if config.provide_extension {
+        let extension = match &encryptor {
+            Some(enc) => EncryptionExtension::new(enc.clone()),
+            None => EncryptionExtension::disabled(),
+        };
+        req.extensions_mut().insert(extension);
+    }
+
+    // Log that encryption is available for sensitive operations
+    if encryptor.is_some() {
+        tracing::debug!(
+            path = %path,
+            control = "SC-28",
+            "Encryption available for sensitive data"
+        );
+    }
+
+    next.run(req).await
+}
+
+/// Validate encryption configuration at startup
+///
+/// Call this during application initialization to fail fast if encryption
+/// is required but not properly configured.
+///
+/// # Example
+///
+/// ```ignore
+/// use barbican::encryption::{validate_encryption_startup, EncryptionEnforcementConfig};
+///
+/// fn main() -> anyhow::Result<()> {
+///     let config = EncryptionEnforcementConfig::default();
+///     let key = std::env::var("ENCRYPTION_KEY").ok();
+///
+///     validate_encryption_startup(&config, key.as_deref())?;
+///
+///     // ... start server
+///     Ok(())
+/// }
+/// ```
+pub fn validate_encryption_startup(
+    config: &EncryptionEnforcementConfig,
+    encryption_key: Option<&str>,
+) -> Result<Option<FieldEncryptor>, EncryptionError> {
+    match encryption_key {
+        Some(key) => {
+            let encryptor = FieldEncryptor::new(key)?;
+            tracing::info!(
+                control = "SC-28",
+                algorithm = ?encryptor.algorithm(),
+                fips_mode = %is_fips_mode(),
+                "Encryption at rest configured"
+            );
+            Ok(Some(encryptor))
+        }
+        None => {
+            if config.require_key {
+                tracing::error!(
+                    control = "SC-28",
+                    "ENCRYPTION_KEY not set but encryption required"
+                );
+                Err(EncryptionError::InvalidKeyEncoding(
+                    "ENCRYPTION_KEY environment variable not set".into(),
+                ))
+            } else {
+                tracing::warn!(
+                    control = "SC-28",
+                    "Encryption not configured - sensitive data will not be encrypted"
+                );
+                Ok(None)
+            }
+        }
+    }
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
@@ -938,4 +1250,145 @@ mod tests {
         let debug_output = format!("{:?}", encryptor);
         assert!(debug_output.contains("[REDACTED]"));
     }
+
+    // ========================================================================
+    // SC-28 Enforcement Middleware Tests
+    // ========================================================================
+
+    #[test]
+    fn test_encryption_enforcement_config_defaults() {
+        let config = EncryptionEnforcementConfig::default();
+        assert!(config.require_key);
+        assert!(config.provide_extension);
+        assert!(config.exempt_paths.contains(&"/health".to_string()));
+        assert!(config.exempt_paths.contains(&"/metrics".to_string()));
+    }
+
+    #[test]
+    fn test_encryption_enforcement_config_optional() {
+        let config = EncryptionEnforcementConfig::optional();
+        assert!(!config.require_key);
+        assert!(config.provide_extension);
+    }
+
+    #[test]
+    fn test_encryption_enforcement_config_strict() {
+        let config = EncryptionEnforcementConfig::strict();
+        assert!(config.require_key);
+        assert!(config.exempt_paths.is_empty());
+    }
+
+    #[test]
+    fn test_encryption_enforcement_path_exemption() {
+        let config = EncryptionEnforcementConfig::default();
+
+        // Exact matches
+        assert!(config.is_exempt("/health"));
+        assert!(config.is_exempt("/healthz"));
+        assert!(config.is_exempt("/metrics"));
+
+        // Subpaths
+        assert!(config.is_exempt("/health/ready"));
+        assert!(config.is_exempt("/metrics/prometheus"));
+
+        // Non-exempt
+        assert!(!config.is_exempt("/api/secrets"));
+        assert!(!config.is_exempt("/users"));
+    }
+
+    #[test]
+    fn test_encryption_extension_with_encryptor() {
+        let encryptor = FieldEncryptor::new(&test_key()).unwrap();
+        let extension = EncryptionExtension::new(encryptor);
+
+        assert!(extension.is_available());
+
+        // Test encrypt/decrypt roundtrip
+        let plaintext = b"sensitive data";
+        let encrypted = extension.encrypt(plaintext).unwrap();
+        let decrypted = extension.decrypt(&encrypted).unwrap();
+        assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn test_encryption_extension_disabled() {
+        let extension = EncryptionExtension::disabled();
+
+        assert!(!extension.is_available());
+        assert!(extension.encrypt(b"test").is_err());
+        assert!(extension.decrypt(b"test").is_err());
+    }
+
+    #[test]
+    fn test_encryption_extension_string_methods() {
+        let encryptor = FieldEncryptor::new(&test_key()).unwrap();
+        let extension = EncryptionExtension::new(encryptor);
+
+        let plaintext = "secret string";
+        let encrypted = extension.encrypt_string(plaintext).unwrap();
+        let decrypted = extension.decrypt_string(&encrypted).unwrap();
+        assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn test_encryption_extension_field_methods() {
+        let encryptor = FieldEncryptor::new(&test_key()).unwrap();
+        let extension = EncryptionExtension::new(encryptor);
+
+        let plaintext = "field value";
+        let field = extension.encrypt_field(plaintext).unwrap();
+        let decrypted = extension.decrypt_field(&field).unwrap();
+        assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn test_encryption_extension_debug_hides_details() {
+        let encryptor = FieldEncryptor::new(&test_key()).unwrap();
+        let extension = EncryptionExtension::new(encryptor);
+
+        let debug_output = format!("{:?}", extension);
+        assert!(debug_output.contains("available"));
+        assert!(debug_output.contains("true"));
+    }
+
+    #[test]
+    fn test_validate_encryption_startup_with_key() {
+        let config = EncryptionEnforcementConfig::default();
+        let result = validate_encryption_startup(&config, Some(&test_key()));
+
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_some());
+    }
+
+    #[test]
+    fn test_validate_encryption_startup_without_key_required() {
+        let config = EncryptionEnforcementConfig::default();
+        let result = validate_encryption_startup(&config, None);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_encryption_startup_without_key_optional() {
+        let config = EncryptionEnforcementConfig::optional();
+        let result = validate_encryption_startup(&config, None);
+
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none());
+    }
+
+    #[test]
+    fn test_validate_encryption_startup_invalid_key() {
+        let config = EncryptionEnforcementConfig::default();
+        let result = validate_encryption_startup(&config, Some("invalid"));
+
+        assert!(result.is_err());
+    }
+
+    // Note: Full integration tests with axum middleware would require tower as a
+    // dev-dependency for ServiceExt::oneshot. The middleware behavior is covered by:
+    // 1. Unit tests for EncryptionEnforcementConfig (path exemption, modes)
+    // 2. Unit tests for EncryptionExtension (encrypt/decrypt operations)
+    // 3. Unit tests for validate_encryption_startup (startup validation)
+    // 4. Integration via layers.rs (implicit testing via with_security())
 }

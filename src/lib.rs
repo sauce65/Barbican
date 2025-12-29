@@ -374,6 +374,18 @@ pub use health::{HealthChecker, HealthCheck, HealthStatus, HealthReport, Status 
 // Key management re-exports (SC-12)
 pub use keys::{KeyStore, KeyMetadata, KeyPurpose, KeyState, RotationTracker, RotationPolicy};
 
+// Encryption at rest re-exports (SC-28)
+pub use encryption::{
+    FieldEncryptor, EncryptedField, EncryptionConfig, EncryptionAlgorithm,
+    EncryptionStatus, EncryptionError, generate_key, is_fips_mode, fips_certificate,
+    verify_encryption_config,
+    // SC-28 Enforcement Middleware
+    EncryptionEnforcementConfig, EncryptionExtension, encryption_enforcement_middleware,
+    validate_encryption_startup,
+};
+#[cfg(feature = "postgres")]
+pub use encryption::verify_encryption_with_database;
+
 // Supply chain re-exports (SR-3, SR-4)
 pub use supply_chain::{
     Dependency, DependencySource, AuditResult, VulnerabilitySeverity,
