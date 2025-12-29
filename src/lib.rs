@@ -338,8 +338,20 @@ pub use parse::{parse_duration, parse_size};
 // Error handling re-exports
 pub use error::{AppError, ErrorConfig, ErrorKind};
 
-// Validation re-exports
-pub use validation::{ValidationError, ValidationErrorCode, Validate};
+// Validation re-exports (SI-10)
+pub use validation::{
+    ValidationError, ValidationErrorCode, Validate,
+    // SI-10 Enforcement Extractors
+    ValidationConfig, ValidationRejection, ValidatedJson, ValidatedQuery, ValidatedPath,
+    // Validator functions
+    validate_required, validate_length, validate_email, validate_url,
+    validate_alphanumeric_underscore, validate_slug, validate_ascii_printable,
+    validate_one_of, validate_range, validate_positive,
+    validate_collection_size, validate_unique, validate_safe_content,
+    // Sanitization functions
+    sanitize_html, escape_html, escape_sql_like, strip_null_bytes,
+    contains_dangerous_patterns,
+};
 
 // Password policy re-exports
 pub use password::{PasswordError, PasswordPolicy, PasswordStrength};

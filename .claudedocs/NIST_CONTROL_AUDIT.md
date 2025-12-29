@@ -117,7 +117,7 @@ These controls are marked as ✅ IMPLEMENTED in the Security Control Registry an
 | SI-4(2) | Automated Real-Time Analysis | `src/alerting.rs` | **PASS** - Brute force detection + tiered rate limiting + PromQL real-time analysis |
 | SI-4(5) | System-Generated Alerts | `src/alerting.rs` | **PASS** - 5-stage AlertManager + SecurityEvent mapping + Prometheus rules + FedRAMP profiles |
 | SI-7 | Software Integrity | `src/supply_chain.rs` | **PARTIAL** - Checksum extraction + AIDE; no enforcement |
-| SI-10 | Information Input Validation | `src/validation.rs` | **PARTIAL** - Validators exist, no auto-enforcement |
+| SI-10 | Information Input Validation | `src/validation.rs` | **PASS** - ValidatedJson/Query/Path extractors + 21 tests |
 | SI-11 | Error Handling | `src/error.rs` | **PASS** - Secure error responses, auto-integrated |
 | SI-16 | Memory Protection | `nix/modules/kernel-hardening.nix` | **PASS** - ASLR + kptr_restrict + W^X + NixOS VM test |
 
@@ -199,6 +199,7 @@ These controls are marked as ✅ IMPLEMENTED in the Security Control Registry an
 | 2025-12-29 | AC-11 | **PASS** | session_enforcement_middleware + JWT iat/exp extraction + SessionExtension + 18 tests |
 | 2025-12-29 | AC-12 | **PASS** | session_enforcement_middleware + max_lifetime check + SessionConfig + exempt paths |
 | 2025-12-29 | SC-28 | **PASS** | encryption_enforcement_middleware + EncryptionExtension + validate_encryption_startup + 29 tests |
+| 2025-12-29 | SI-10 | **PASS** | ValidatedJson/Query/Path extractors + ValidationConfig + ValidationRejection + 21 tests |
 
 ---
 

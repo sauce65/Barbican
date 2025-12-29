@@ -579,6 +579,326 @@ pub fn validate_unique<T: std::hash::Hash + Eq>(
 }
 
 // ============================================================================
+// SI-10 Enforcement: Axum Extractors
+// ============================================================================
+
+use axum::extract::{FromRequest, Query, Request};
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use axum::Json;
+use serde::de::DeserializeOwned;
+
+/// Configuration for validation enforcement
+#[derive(Debug, Clone)]
+pub struct ValidationConfig {
+    /// Check for dangerous patterns in all string fields
+    pub check_dangerous_patterns: bool,
+
+    /// Sanitize HTML from string fields
+    pub sanitize_html_content: bool,
+
+    /// Strip null bytes from string fields
+    pub strip_null_bytes: bool,
+
+    /// Maximum allowed string field length (0 = unlimited)
+    pub max_string_length: usize,
+
+    /// Log validation failures
+    pub log_failures: bool,
+}
+
+impl Default for ValidationConfig {
+    fn default() -> Self {
+        Self {
+            check_dangerous_patterns: true,
+            sanitize_html_content: false, // Opt-in sanitization
+            strip_null_bytes: true,
+            max_string_length: 0, // Unlimited by default
+            log_failures: true,
+        }
+    }
+}
+
+impl ValidationConfig {
+    /// Strict configuration for high-security environments
+    pub fn strict() -> Self {
+        Self {
+            check_dangerous_patterns: true,
+            sanitize_html_content: true,
+            strip_null_bytes: true,
+            max_string_length: 10000,
+            log_failures: true,
+        }
+    }
+
+    /// Relaxed configuration for development
+    pub fn development() -> Self {
+        Self {
+            check_dangerous_patterns: false,
+            sanitize_html_content: false,
+            strip_null_bytes: false,
+            max_string_length: 0,
+            log_failures: false,
+        }
+    }
+}
+
+/// Validation rejection response
+#[derive(Debug)]
+pub struct ValidationRejection {
+    /// The validation error that caused the rejection
+    pub error: ValidationError,
+}
+
+impl IntoResponse for ValidationRejection {
+    fn into_response(self) -> Response {
+        let body = serde_json::json!({
+            "error": "validation_error",
+            "code": self.error.code.to_string(),
+            "field": self.error.field,
+            "message": self.error.message,
+        });
+
+        (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            [("content-type", "application/json")],
+            body.to_string(),
+        )
+            .into_response()
+    }
+}
+
+impl From<ValidationError> for ValidationRejection {
+    fn from(error: ValidationError) -> Self {
+        Self { error }
+    }
+}
+
+/// Validated JSON extractor (SI-10)
+///
+/// Automatically deserializes and validates JSON payloads.
+/// The inner type must implement both `DeserializeOwned` and `Validate`.
+///
+/// # Example
+///
+/// ```ignore
+/// use barbican::validation::{ValidatedJson, Validate, ValidationError};
+/// use serde::Deserialize;
+///
+/// #[derive(Deserialize)]
+/// struct CreateUser {
+///     username: String,
+///     email: String,
+/// }
+///
+/// impl Validate for CreateUser {
+///     fn validate(&self) -> Result<(), ValidationError> {
+///         validate_length(&self.username, 3, 32, "username")?;
+///         validate_email(&self.email)?;
+///         Ok(())
+///     }
+/// }
+///
+/// async fn create_user(ValidatedJson(payload): ValidatedJson<CreateUser>) -> impl IntoResponse {
+///     // payload is guaranteed to be valid
+///     format!("Creating user: {}", payload.username)
+/// }
+/// ```
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ValidatedJson<T>(pub T);
+
+impl<T, S> FromRequest<S> for ValidatedJson<T>
+where
+    T: DeserializeOwned + Validate,
+    S: Send + Sync,
+{
+    type Rejection = Response;
+
+    async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
+        // First, extract the JSON
+        let Json(value) = Json::<T>::from_request(req, state)
+            .await
+            .map_err(|e| {
+                tracing::warn!(
+                    control = "SI-10",
+                    error = %e,
+                    "JSON parsing failed"
+                );
+                (
+                    StatusCode::BAD_REQUEST,
+                    [("content-type", "application/json")],
+                    r#"{"error":"invalid_json","message":"Failed to parse JSON body"}"#,
+                )
+                    .into_response()
+            })?;
+
+        // Then validate it
+        if let Err(error) = value.validate() {
+            tracing::warn!(
+                control = "SI-10",
+                field = ?error.field,
+                code = %error.code,
+                message = %error.message,
+                "Validation failed"
+            );
+            return Err(ValidationRejection::from(error).into_response());
+        }
+
+        tracing::debug!(control = "SI-10", "JSON payload validated successfully");
+        Ok(ValidatedJson(value))
+    }
+}
+
+/// Validated Query extractor (SI-10)
+///
+/// Automatically deserializes and validates query parameters.
+/// The inner type must implement both `DeserializeOwned` and `Validate`.
+///
+/// # Example
+///
+/// ```ignore
+/// use barbican::validation::{ValidatedQuery, Validate, ValidationError};
+/// use serde::Deserialize;
+///
+/// #[derive(Deserialize)]
+/// struct SearchParams {
+///     q: String,
+///     page: Option<u32>,
+/// }
+///
+/// impl Validate for SearchParams {
+///     fn validate(&self) -> Result<(), ValidationError> {
+///         validate_length(&self.q, 1, 100, "q")?;
+///         if let Some(page) = self.page {
+///             validate_range(page, 1, 1000, "page")?;
+///         }
+///         Ok(())
+///     }
+/// }
+///
+/// async fn search(ValidatedQuery(params): ValidatedQuery<SearchParams>) -> impl IntoResponse {
+///     format!("Searching for: {}", params.q)
+/// }
+/// ```
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ValidatedQuery<T>(pub T);
+
+impl<T, S> FromRequest<S> for ValidatedQuery<T>
+where
+    T: DeserializeOwned + Validate,
+    S: Send + Sync,
+{
+    type Rejection = Response;
+
+    async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
+        // First, extract the query parameters
+        let Query(value) = Query::<T>::from_request(req, state)
+            .await
+            .map_err(|e| {
+                tracing::warn!(
+                    control = "SI-10",
+                    error = %e,
+                    "Query parameter parsing failed"
+                );
+                (
+                    StatusCode::BAD_REQUEST,
+                    [("content-type", "application/json")],
+                    r#"{"error":"invalid_query","message":"Failed to parse query parameters"}"#,
+                )
+                    .into_response()
+            })?;
+
+        // Then validate it
+        if let Err(error) = value.validate() {
+            tracing::warn!(
+                control = "SI-10",
+                field = ?error.field,
+                code = %error.code,
+                message = %error.message,
+                "Query validation failed"
+            );
+            return Err(ValidationRejection::from(error).into_response());
+        }
+
+        tracing::debug!(control = "SI-10", "Query parameters validated successfully");
+        Ok(ValidatedQuery(value))
+    }
+}
+
+/// Validated Path extractor (SI-10)
+///
+/// Automatically deserializes and validates path parameters.
+/// The inner type must implement both `DeserializeOwned` and `Validate`.
+///
+/// # Example
+///
+/// ```ignore
+/// use barbican::validation::{ValidatedPath, Validate, ValidationError};
+/// use serde::Deserialize;
+///
+/// #[derive(Deserialize)]
+/// struct UserPath {
+///     id: String,
+/// }
+///
+/// impl Validate for UserPath {
+///     fn validate(&self) -> Result<(), ValidationError> {
+///         validate_alphanumeric_underscore(&self.id, "id")?;
+///         validate_length(&self.id, 1, 64, "id")?;
+///         Ok(())
+///     }
+/// }
+///
+/// async fn get_user(ValidatedPath(path): ValidatedPath<UserPath>) -> impl IntoResponse {
+///     format!("Getting user: {}", path.id)
+/// }
+/// ```
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ValidatedPath<T>(pub T);
+
+impl<T, S> FromRequest<S> for ValidatedPath<T>
+where
+    T: DeserializeOwned + Validate + Send,
+    S: Send + Sync,
+{
+    type Rejection = Response;
+
+    async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
+        // First, extract the path parameters
+        let axum::extract::Path(value) = axum::extract::Path::<T>::from_request(req, state)
+            .await
+            .map_err(|e| {
+                tracing::warn!(
+                    control = "SI-10",
+                    error = %e,
+                    "Path parameter parsing failed"
+                );
+                (
+                    StatusCode::BAD_REQUEST,
+                    [("content-type", "application/json")],
+                    r#"{"error":"invalid_path","message":"Failed to parse path parameters"}"#,
+                )
+                    .into_response()
+            })?;
+
+        // Then validate it
+        if let Err(error) = value.validate() {
+            tracing::warn!(
+                control = "SI-10",
+                field = ?error.field,
+                code = %error.code,
+                message = %error.message,
+                "Path validation failed"
+            );
+            return Err(ValidationRejection::from(error).into_response());
+        }
+
+        tracing::debug!(control = "SI-10", "Path parameters validated successfully");
+        Ok(ValidatedPath(value))
+    }
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
@@ -682,5 +1002,122 @@ mod tests {
     fn test_validate_unique() {
         assert!(validate_unique(&[1, 2, 3], "field").is_ok());
         assert!(validate_unique(&[1, 2, 2], "field").is_err());
+    }
+
+    // ========================================================================
+    // SI-10 Enforcement Tests
+    // ========================================================================
+
+    #[test]
+    fn test_validation_config_defaults() {
+        let config = ValidationConfig::default();
+        assert!(config.check_dangerous_patterns);
+        assert!(!config.sanitize_html_content);
+        assert!(config.strip_null_bytes);
+        assert_eq!(config.max_string_length, 0);
+        assert!(config.log_failures);
+    }
+
+    #[test]
+    fn test_validation_config_strict() {
+        let config = ValidationConfig::strict();
+        assert!(config.check_dangerous_patterns);
+        assert!(config.sanitize_html_content);
+        assert!(config.strip_null_bytes);
+        assert_eq!(config.max_string_length, 10000);
+        assert!(config.log_failures);
+    }
+
+    #[test]
+    fn test_validation_config_development() {
+        let config = ValidationConfig::development();
+        assert!(!config.check_dangerous_patterns);
+        assert!(!config.sanitize_html_content);
+        assert!(!config.strip_null_bytes);
+        assert_eq!(config.max_string_length, 0);
+        assert!(!config.log_failures);
+    }
+
+    #[test]
+    fn test_validation_rejection_into_response() {
+        let error = ValidationError::for_field(
+            "username",
+            ValidationErrorCode::TooShort,
+            "Username too short",
+        );
+        let rejection = ValidationRejection::from(error);
+        let response = rejection.into_response();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[test]
+    fn test_validation_error_display() {
+        let error = ValidationError::for_field("email", ValidationErrorCode::InvalidEmail, "Bad email");
+        assert_eq!(format!("{}", error), "email: Bad email");
+
+        let error = ValidationError::new(ValidationErrorCode::Required, "Missing value");
+        assert_eq!(format!("{}", error), "Missing value");
+    }
+
+    #[test]
+    fn test_validation_error_code_display() {
+        assert_eq!(format!("{}", ValidationErrorCode::Required), "required");
+        assert_eq!(format!("{}", ValidationErrorCode::TooShort), "too_short");
+        assert_eq!(format!("{}", ValidationErrorCode::TooLong), "too_long");
+        assert_eq!(format!("{}", ValidationErrorCode::InvalidCharacters), "invalid_characters");
+        assert_eq!(format!("{}", ValidationErrorCode::InvalidFormat), "invalid_format");
+        assert_eq!(format!("{}", ValidationErrorCode::InvalidEmail), "invalid_email");
+        assert_eq!(format!("{}", ValidationErrorCode::InvalidUrl), "invalid_url");
+        assert_eq!(format!("{}", ValidationErrorCode::NotAllowed), "not_allowed");
+        assert_eq!(format!("{}", ValidationErrorCode::DangerousContent), "dangerous_content");
+        assert_eq!(format!("{}", ValidationErrorCode::Custom), "custom");
+    }
+
+    // Test the Validate trait implementation
+    #[derive(Debug)]
+    struct TestUser {
+        username: String,
+        email: String,
+    }
+
+    impl Validate for TestUser {
+        fn validate(&self) -> Result<(), ValidationError> {
+            validate_length(&self.username, 3, 32, "username")?;
+            validate_alphanumeric_underscore(&self.username, "username")?;
+            validate_email(&self.email)?;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_validate_trait_valid() {
+        let user = TestUser {
+            username: "john_doe".to_string(),
+            email: "john@example.com".to_string(),
+        };
+        assert!(user.validate().is_ok());
+        assert!(user.is_valid());
+    }
+
+    #[test]
+    fn test_validate_trait_invalid_username() {
+        let user = TestUser {
+            username: "ab".to_string(), // too short
+            email: "john@example.com".to_string(),
+        };
+        assert!(user.validate().is_err());
+        assert!(!user.is_valid());
+    }
+
+    #[test]
+    fn test_validate_trait_invalid_email() {
+        let user = TestUser {
+            username: "john_doe".to_string(),
+            email: "invalid".to_string(),
+        };
+        let result = user.validate();
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert_eq!(error.code, ValidationErrorCode::InvalidEmail);
     }
 }
