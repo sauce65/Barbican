@@ -64,6 +64,25 @@ in {
       description = "Enable comprehensive audit logging";
     };
 
+    enablePgaudit = mkOption {
+      type = types.bool;
+      default = true;
+      description = "Enable pgaudit extension for object-level audit logging (AU-2)";
+    };
+
+    pgauditLogClasses = mkOption {
+      type = types.listOf (types.enum [ "read" "write" "function" "role" "ddl" "misc" "all" ]);
+      default = [ "write" "role" "ddl" ];
+      description = "pgaudit log classes to capture. 'write' captures INSERT/UPDATE/DELETE, 'role' captures GRANT/REVOKE, 'ddl' captures schema changes.";
+      example = [ "all" ];
+    };
+
+    pgauditLogRelation = mkOption {
+      type = types.bool;
+      default = true;
+      description = "Log object names instead of just command class";
+    };
+
     maxConnections = mkOption {
       type = types.int;
       default = 50;
@@ -82,6 +101,9 @@ in {
       enable = true;
       package = pkgs.postgresql_16;
       enableTCPIP = true;
+
+      # pgaudit extension for AU-2 compliance
+      extensions = mkIf cfg.enablePgaudit (ps: [ ps.pgaudit ]);
 
       # Secure authentication - NO trust, require scram-sha-256
       authentication = mkForce ''
@@ -144,6 +166,14 @@ in {
         log_checkpoints = true;
         log_lock_waits = true;
         log_temp_files = 0;
+      } // optionalAttrs cfg.enablePgaudit {
+        # pgaudit extension settings (AU-2: Audit Events)
+        shared_preload_libraries = "pgaudit";
+        "pgaudit.log" = concatStringsSep "," cfg.pgauditLogClasses;
+        "pgaudit.log_relation" = cfg.pgauditLogRelation;
+        "pgaudit.log_catalog" = false;  # Avoid noise from system catalog queries
+        "pgaudit.log_client" = true;    # Include client info in audit log
+        "pgaudit.log_level" = "log";    # Use LOG level for audit entries
       };
 
       # Initial database setup (password set via secret)
@@ -152,6 +182,11 @@ in {
         CREATE USER ${cfg.username};
         GRANT ALL PRIVILEGES ON DATABASE ${cfg.database} TO ${cfg.username};
         ALTER DATABASE ${cfg.database} OWNER TO ${cfg.username};
+        ${optionalString cfg.enablePgaudit ''
+        -- Enable pgaudit extension for AU-2 compliance
+        \c ${cfg.database}
+        CREATE EXTENSION IF NOT EXISTS pgaudit;
+        ''}
       '';
     };
 

@@ -1,5 +1,6 @@
 # Barbican Test: Secure PostgreSQL Module
 # Tests: CRT-003 (trust auth), CRT-011 (listen all), CRT-012 (no audit), CRT-013 (no TLS)
+# Tests: AU-2 (pgaudit extension for object-level audit logging)
 { pkgs, lib, ... }:
 
 pkgs.testers.nixosTest {
@@ -16,6 +17,9 @@ pkgs.testers.nixosTest {
       username = "testuser";
       enableSSL = false;  # Skip SSL for basic test (no certs)
       enableAuditLog = true;
+      enablePgaudit = true;
+      pgauditLogClasses = [ "write" "role" "ddl" ];
+      pgauditLogRelation = true;
       maxConnections = 50;
       statementTimeout = 30000;
     };
@@ -92,6 +96,19 @@ pkgs.testers.nixosTest {
     with subtest("Test database created"):
       result = machine.succeed("sudo -u postgres psql -t -c \"SELECT datname FROM pg_database WHERE datname='testdb';\"")
       assert "testdb" in result, f"Test database not created: {result}"
+
+    # AU-2: pgaudit extension tests
+    with subtest("AU-2: pgaudit extension loaded"):
+      result = machine.succeed("sudo -u postgres psql -t -c \"SHOW shared_preload_libraries;\"")
+      assert "pgaudit" in result, "pgaudit not loaded"
+
+    with subtest("AU-2: pgaudit.log configured"):
+      result = machine.succeed("sudo -u postgres psql -t -c \"SHOW pgaudit.log;\"")
+      assert "write" in result.lower() or "ddl" in result.lower(), "pgaudit.log not set"
+
+    with subtest("AU-2: pgaudit extension in testdb"):
+      result = machine.succeed("sudo -u postgres psql -d testdb -t -c \"SELECT extname FROM pg_extension WHERE extname='pgaudit';\"")
+      assert "pgaudit" in result, "pgaudit extension missing"
 
     print("All secure-postgres tests passed!")
   '';
