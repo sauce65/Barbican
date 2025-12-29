@@ -1,6 +1,6 @@
 # Barbican Security Module: Secure PostgreSQL
 # Addresses: CRT-003 (trust auth), CRT-011 (listen all), CRT-012 (no audit), CRT-013 (no TLS)
-# Standards: NIST IA-5, SC-8, AU-2, AU-9, CIS PostgreSQL
+# Standards: NIST IA-5, IA-5(2), SC-8, AU-2, AU-9, CIS PostgreSQL
 { config, lib, pkgs, ... }:
 
 with lib;
@@ -56,6 +56,25 @@ in {
       type = types.nullOr types.path;
       default = null;
       description = "Path to SSL private key";
+    };
+
+    # IA-5(2): PKI-Based Authentication
+    enableClientCert = mkOption {
+      type = types.bool;
+      default = false;
+      description = "Require client certificate authentication (IA-5(2)). When enabled, clients must present a valid certificate signed by the CA.";
+    };
+
+    clientCaCertFile = mkOption {
+      type = types.nullOr types.path;
+      default = null;
+      description = "Path to CA certificate for client certificate verification. Required when enableClientCert is true.";
+    };
+
+    clientCertMode = mkOption {
+      type = types.enum [ "verify-ca" "verify-full" ];
+      default = "verify-full";
+      description = "Client certificate verification mode. verify-full also checks that the CN matches the username.";
     };
 
     enableAuditLog = mkOption {
@@ -130,15 +149,20 @@ in {
       # pgaudit extension for AU-2 compliance
       extensions = mkIf cfg.enablePgaudit (ps: [ ps.pgaudit ]);
 
-      # Secure authentication - NO trust, require scram-sha-256
+      # Secure authentication - NO trust, require scram-sha-256 or client cert
       authentication = mkForce ''
         # Local postgres user for admin via peer
         local all postgres peer
         # Local connections require password
         local all all scram-sha-256
-        # Network connections require SSL + password
+        # Network connections require SSL + authentication
         ${concatMapStringsSep "\n" (cidr:
-          "hostssl all all ${cidr} scram-sha-256"
+          if cfg.enableClientCert then
+            # IA-5(2): PKI-based authentication with client certificates
+            "hostssl all all ${cidr} cert clientcert=${cfg.clientCertMode}"
+          else
+            # Password-based authentication
+            "hostssl all all ${cidr} scram-sha-256"
         ) cfg.allowedClients}
         # Reject everything else
         host all all 0.0.0.0/0 reject
@@ -173,6 +197,9 @@ in {
         ssl_cert_file = cfg.sslCertFile;
       } // optionalAttrs (cfg.sslKeyFile != null) {
         ssl_key_file = cfg.sslKeyFile;
+      } // optionalAttrs (cfg.clientCaCertFile != null) {
+        # IA-5(2): CA certificate for client cert verification
+        ssl_ca_file = cfg.clientCaCertFile;
       } // optionalAttrs cfg.enableAuditLog {
         # Audit logging
         logging_collector = true;

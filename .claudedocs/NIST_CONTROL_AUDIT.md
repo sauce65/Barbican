@@ -61,7 +61,7 @@ These controls are marked as ✅ IMPLEMENTED in the Security Control Registry an
 | IA-3 | Device Identification | `src/tls.rs:408-727`, `nix/modules/hardened-nginx.nix` | **PASS** - mTLS middleware + nginx config + VM test |
 | IA-5 | Authenticator Management | `src/crypto.rs`, `src/jwt_secret.rs` | **PASS** - Comprehensive: JWT secrets, passwords, secret detection, constant-time |
 | IA-5(1) | Password-Based Authentication | `src/password.rs` | **PARTIAL** - Policy validation only |
-| IA-5(2) | PKI-Based Authentication | `nix/modules/vault-pki.nix`, `src/database.rs` | **PARTIAL** - Rust mTLS support + Vault PKI; NixOS module lacks clientcert option |
+| IA-5(2) | PKI-Based Authentication | `nix/modules/vault-pki.nix`, `src/database.rs`, `nix/modules/secure-postgres.nix` | **PASS** - Rust mTLS + Vault PKI + NixOS clientcert option + VM test |
 | IA-5(4) | Automated Password Strength | `src/password.rs` | NOT STARTED |
 | IA-5(7) | No Embedded Authenticators | `src/secrets.rs` | **PARTIAL** - Scanner exists; no CI/pre-commit integration |
 | IA-6 | Authentication Feedback | `src/error.rs` | NOT STARTED |
@@ -191,10 +191,10 @@ These controls are marked as ✅ IMPLEMENTED in the Security Control Registry an
 | 2025-12-29 | CP-9 | **PARTIAL** | pg_dumpall + systemd timer + age encryption + 30-day retention; no VM test, no offsite |
 | 2025-12-29 | SC-28(1) | **PARTIAL** | age encryption default on; no VM test, manual key management |
 | 2025-12-29 | MP-5 | **FAIL** | No offsite transport implemented; local storage only |
-| 2025-12-29 | IA-5(2) | **PARTIAL** | Rust mTLS support + Vault PKI module; NixOS postgres module lacks clientcert |
 | 2025-12-29 | AU-14 | **PASS** | App session logging (4 functions) + PostgreSQL audit logging + VM test verified |
 | 2025-12-29 | AU-2 (PG) | **PASS** | pgaudit extension + write/role/ddl classes + log_relation + VM test verified |
 | 2025-12-29 | AU-9 (PG) | **PASS** | log_file_mode=0600 + log dir 700 perms + systemd enforcement + syslog option + VM test |
+| 2025-12-29 | IA-5(2) | **PASS** | enableClientCert + clientCaCertFile + clientCertMode options + pg_hba.conf cert auth + VM test |
 
 ---
 

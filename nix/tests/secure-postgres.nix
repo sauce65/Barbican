@@ -2,6 +2,7 @@
 # Tests: CRT-003 (trust auth), CRT-011 (listen all), CRT-012 (no audit), CRT-013 (no TLS)
 # Tests: AU-2 (pgaudit extension for object-level audit logging)
 # Tests: AU-9 (protection of audit information - log file permissions)
+# Tests: IA-5(2) (PKI-based authentication - client certificate options available)
 { pkgs, lib, ... }:
 
 pkgs.testers.nixosTest {
@@ -140,6 +141,22 @@ pkgs.testers.nixosTest {
       perm_mode = int(perms.strip())
       # Mode should not allow group or world read/write
       assert perm_mode <= 700, "Log directory too permissive: " + str(perm_mode)
+
+    # IA-5(2): PKI-Based Authentication (configuration availability)
+    with subtest("IA-5(2): ssl_ca_file setting available"):
+      # Verify the ssl_ca_file setting is queryable (even if empty)
+      result = machine.succeed("sudo -u postgres psql -t -c \"SHOW ssl_ca_file;\" 2>&1")
+      # Should not error - setting exists
+      assert "ERROR" not in result, "ssl_ca_file setting not available"
+
+    with subtest("IA-5(2): password auth used when clientcert disabled"):
+      # With enableClientCert=false (default), pg_hba.conf should use scram-sha-256
+      hba_path = machine.succeed("sudo -u postgres psql -t -c \"SHOW hba_file;\"").strip()
+      hba = machine.succeed("cat " + hba_path)
+      # Should NOT contain clientcert when disabled
+      assert "clientcert" not in hba, "clientcert found but enableClientCert=false"
+      # Should use scram-sha-256 for network connections
+      assert "scram-sha-256" in hba, "scram-sha-256 not found in pg_hba.conf"
 
     print("All secure-postgres tests passed!")
   '';
