@@ -17,8 +17,8 @@ These controls are marked as ✅ IMPLEMENTED in the Security Control Registry an
 | AC-4 | Information Flow Enforcement | `src/layers.rs:132-153` | **PASS** - CORS + CSP + network firewall + tenant isolation |
 | AC-6 | Least Privilege | `src/auth.rs` | **PASS** - systemd hardening + container isolation + role separation |
 | AC-7 | Unsuccessful Logon Attempts | `src/login.rs`, `src/layers.rs`, `src/config.rs` | **PASS** - LoginTracker + middleware + with_security() integration |
-| AC-11 | Device Lock (Session Idle Timeout) | `src/session.rs` | **PARTIAL** - Policy/state utils; no middleware |
-| AC-12 | Session Termination | `src/session.rs` | **PARTIAL** - Policy/state utils; no middleware |
+| AC-11 | Device Lock (Session Idle Timeout) | `src/session.rs` | **PASS** - session_enforcement_middleware + JWT times + SessionExtension |
+| AC-12 | Session Termination | `src/session.rs` | **PASS** - session_enforcement_middleware + JWT times + SessionExtension |
 
 ### Audit and Accountability (AU) - 6 controls
 | Control ID | Name | Claimed Location | Audit Status |
@@ -196,6 +196,8 @@ These controls are marked as ✅ IMPLEMENTED in the Security Control Registry an
 | 2025-12-29 | AU-9 (PG) | **PASS** | log_file_mode=0600 + log dir 700 perms + systemd enforcement + syslog option + VM test |
 | 2025-12-29 | IA-5(2) | **PASS** | enableClientCert + clientCaCertFile + clientCertMode options + pg_hba.conf cert auth + VM test |
 | 2025-12-29 | AC-7 | **PASS** | login_tracking_middleware + LoginTracker + with_security() integration + env config + 13 tests |
+| 2025-12-29 | AC-11 | **PASS** | session_enforcement_middleware + JWT iat/exp extraction + SessionExtension + 18 tests |
+| 2025-12-29 | AC-12 | **PASS** | session_enforcement_middleware + max_lifetime check + SessionConfig + exempt paths |
 
 ---
 

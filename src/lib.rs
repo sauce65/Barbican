@@ -351,7 +351,11 @@ pub use jwt_secret::{JwtSecretError, JwtSecretPolicy, JwtSecretValidator};
 pub use auth::{Claims, log_access_decision, log_access_denied, MfaPolicy, log_mfa_success, log_mfa_required};
 
 // Session management re-exports (AC-11, AC-12)
-pub use session::{SessionPolicy, SessionState, SessionTerminationReason};
+pub use session::{
+    SessionPolicy, SessionState, SessionTerminationReason,
+    // AC-11/AC-12 Enforcement Middleware
+    SessionConfig, SessionExtension, session_enforcement_middleware,
+};
 
 // Login tracking re-exports (AC-7)
 pub use login::{

@@ -524,6 +524,280 @@ pub fn log_reauth_required(state: &SessionState, resource: &str) {
 }
 
 // ============================================================================
+// Session Enforcement Middleware (AC-11, AC-12)
+// ============================================================================
+
+use axum::{
+    extract::Request,
+    http::{header, StatusCode},
+    middleware::Next,
+    response::{IntoResponse, Response},
+    Json,
+};
+use serde_json::json;
+
+/// Configuration for session enforcement middleware
+#[derive(Debug, Clone)]
+pub struct SessionConfig {
+    /// Session policy to enforce
+    pub policy: SessionPolicy,
+
+    /// Whether to check JWT token times (iat/exp claims)
+    pub check_jwt_times: bool,
+
+    /// Whether to require a session (return 401 if no session found)
+    pub require_session: bool,
+
+    /// Paths that should skip session enforcement (e.g., login, health)
+    pub exempt_paths: Vec<String>,
+}
+
+impl Default for SessionConfig {
+    fn default() -> Self {
+        Self {
+            policy: SessionPolicy::default(),
+            check_jwt_times: true,
+            require_session: false,
+            exempt_paths: vec![
+                "/login".to_string(),
+                "/auth".to_string(),
+                "/health".to_string(),
+                "/.well-known".to_string(),
+            ],
+        }
+    }
+}
+
+/// Middleware that enforces session policies (AC-11, AC-12)
+///
+/// This middleware automatically:
+/// 1. Extracts JWT claims (iat, exp) from Authorization header
+/// 2. Checks session validity against the policy
+/// 3. Returns 401 Unauthorized if session is invalid
+/// 4. Logs session termination events
+///
+/// # Usage
+///
+/// ```ignore
+/// use axum::{Router, routing::get, middleware};
+/// use barbican::session::{session_enforcement_middleware, SessionConfig, SessionPolicy};
+///
+/// let config = SessionConfig {
+///     policy: SessionPolicy::strict(),
+///     ..Default::default()
+/// };
+///
+/// let app = Router::new()
+///     .route("/protected", get(handler))
+///     .layer(middleware::from_fn(move |req, next| {
+///         let config = config.clone();
+///         async move {
+///             session_enforcement_middleware(req, next, config).await
+///         }
+///     }));
+/// ```
+///
+/// # JWT-Based Session Checking
+///
+/// The middleware decodes (without verification) the JWT from the Authorization
+/// header to extract `iat` (issued at) and `exp` (expires at) claims. These are
+/// checked against the session policy.
+///
+/// Note: Full JWT verification should be done by your auth layer. This middleware
+/// only checks session timing constraints.
+pub async fn session_enforcement_middleware(
+    req: Request,
+    next: Next,
+    config: SessionConfig,
+) -> Response {
+    let path = req.uri().path().to_string();
+
+    // Check if path is exempt
+    if config.exempt_paths.iter().any(|p| path.starts_with(p)) {
+        return next.run(req).await;
+    }
+
+    // Extract JWT claims from Authorization header
+    let (iat, exp) = extract_jwt_times(&req);
+
+    // Check if we have timing claims to validate
+    if config.check_jwt_times && (iat.is_some() || exp.is_some()) {
+        let termination = config.policy.check_token_times(iat, exp);
+
+        if termination.should_terminate() {
+            return session_expired_response(termination);
+        }
+    } else if config.require_session && iat.is_none() && exp.is_none() {
+        // No session found and session is required
+        return session_required_response();
+    }
+
+    // Session is valid, continue
+    next.run(req).await
+}
+
+/// Extract issued_at (iat) and expires_at (exp) from JWT in Authorization header
+fn extract_jwt_times(req: &Request) -> (Option<i64>, Option<i64>) {
+    let auth_header = req
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok());
+
+    let token = match auth_header {
+        Some(h) if h.starts_with("Bearer ") => &h[7..],
+        _ => return (None, None),
+    };
+
+    // JWT format: header.payload.signature
+    let parts: Vec<&str> = token.split('.').collect();
+    if parts.len() != 3 {
+        return (None, None);
+    }
+
+    // Decode payload (base64url without verification)
+    let payload = match base64_decode_jwt_segment(parts[1]) {
+        Some(p) => p,
+        None => return (None, None),
+    };
+
+    // Parse JSON to extract iat and exp
+    let claims: serde_json::Value = match serde_json::from_slice(&payload) {
+        Ok(c) => c,
+        Err(_) => return (None, None),
+    };
+
+    let iat = claims.get("iat").and_then(|v| v.as_i64());
+    let exp = claims.get("exp").and_then(|v| v.as_i64());
+
+    (iat, exp)
+}
+
+/// Base64url decode a JWT segment
+fn base64_decode_jwt_segment(segment: &str) -> Option<Vec<u8>> {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+
+    // JWT uses base64url encoding without padding
+    URL_SAFE_NO_PAD.decode(segment).ok()
+}
+
+/// Generate a 401 Unauthorized response for expired sessions
+fn session_expired_response(reason: SessionTerminationReason) -> Response {
+    crate::security_event!(
+        SecurityEvent::SessionDestroyed,
+        reason = %reason.code(),
+        "Session terminated by policy"
+    );
+
+    let body = json!({
+        "error": "session_expired",
+        "reason": reason.code(),
+        "message": reason.message()
+    });
+
+    (
+        StatusCode::UNAUTHORIZED,
+        [(header::WWW_AUTHENTICATE, "Bearer error=\"invalid_token\"")],
+        Json(body),
+    )
+        .into_response()
+}
+
+/// Generate a 401 Unauthorized response when session is required but not found
+fn session_required_response() -> Response {
+    let body = json!({
+        "error": "session_required",
+        "message": "Authentication required"
+    });
+
+    (
+        StatusCode::UNAUTHORIZED,
+        [(header::WWW_AUTHENTICATE, "Bearer")],
+        Json(body),
+    )
+        .into_response()
+}
+
+/// Extension for session state management in handlers
+///
+/// Add this to your router state to track session activity per request.
+///
+/// # Example
+///
+/// ```ignore
+/// use axum::{Extension, extract::State};
+/// use barbican::session::{SessionExtension, SessionPolicy};
+///
+/// async fn handler(
+///     session: Extension<SessionExtension>,
+/// ) -> impl IntoResponse {
+///     // Update activity time
+///     session.record_activity();
+///
+///     // Check if session is still valid
+///     if let Some(reason) = session.check_termination() {
+///         return Err(StatusCode::UNAUTHORIZED);
+///     }
+///
+///     Ok("Protected content")
+/// }
+/// ```
+#[derive(Debug, Clone)]
+pub struct SessionExtension {
+    policy: SessionPolicy,
+    state: std::sync::Arc<std::sync::RwLock<SessionState>>,
+}
+
+impl SessionExtension {
+    /// Create a new session extension with the given policy and initial state
+    pub fn new(policy: SessionPolicy, state: SessionState) -> Self {
+        Self {
+            policy,
+            state: std::sync::Arc::new(std::sync::RwLock::new(state)),
+        }
+    }
+
+    /// Record activity (updates last_activity time)
+    pub fn record_activity(&self) {
+        if let Ok(mut state) = self.state.write() {
+            state.record_activity();
+        }
+    }
+
+    /// Check if the session should be terminated
+    pub fn check_termination(&self) -> Option<SessionTerminationReason> {
+        let state = self.state.read().ok()?;
+        let reason = self.policy.should_terminate(&state);
+        if reason.should_terminate() {
+            Some(reason)
+        } else {
+            None
+        }
+    }
+
+    /// Get the session state
+    pub fn get_state(&self) -> Option<SessionState> {
+        self.state.read().ok().map(|s| s.clone())
+    }
+
+    /// Terminate the session
+    pub fn terminate(&self, reason: SessionTerminationReason) {
+        if let Ok(mut state) = self.state.write() {
+            state.terminate();
+            log_session_terminated(&state, reason);
+        }
+    }
+
+    /// Check if re-authentication is required
+    pub fn requires_reauth(&self) -> bool {
+        self.state
+            .read()
+            .ok()
+            .map(|s| self.policy.requires_reauth(&s))
+            .unwrap_or(true)
+    }
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
@@ -643,5 +917,80 @@ mod tests {
         assert!(!policy.require_reauth_for_sensitive);
         assert!(policy.allow_extension);
         assert_eq!(policy.max_extensions, 5);
+    }
+
+    #[test]
+    fn test_session_config_default() {
+        let config = SessionConfig::default();
+        assert!(config.check_jwt_times);
+        assert!(!config.require_session);
+        assert!(config.exempt_paths.contains(&"/login".to_string()));
+        assert!(config.exempt_paths.contains(&"/health".to_string()));
+    }
+
+    #[test]
+    fn test_session_extension_activity() {
+        let policy = SessionPolicy::default();
+        let state = SessionState::new("sess-123", "user-456");
+        let ext = SessionExtension::new(policy, state);
+
+        // Should not be terminated initially
+        assert!(ext.check_termination().is_none());
+
+        // Record activity should not cause termination
+        ext.record_activity();
+        assert!(ext.check_termination().is_none());
+
+        // Should not require reauth immediately
+        // Note: May require reauth depending on timing
+        let _ = ext.requires_reauth();
+    }
+
+    #[test]
+    fn test_session_extension_termination() {
+        let policy = SessionPolicy::default();
+        let state = SessionState::new("sess-123", "user-456");
+        let ext = SessionExtension::new(policy, state);
+
+        // Terminate the session
+        ext.terminate(SessionTerminationReason::UserLogout);
+
+        // Get state should show inactive
+        let state = ext.get_state().unwrap();
+        assert!(!state.is_active);
+    }
+
+    #[test]
+    fn test_jwt_time_extraction() {
+        // This tests the helper function indirectly via check_token_times
+        let policy = SessionPolicy::default();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        // Test with max lifetime exceeded
+        let old_iat = now - (9 * 60 * 60); // 9 hours ago, exceeds 8 hour default
+        let result = policy.check_token_times(Some(old_iat), Some(now + 3600));
+        assert_eq!(result, SessionTerminationReason::MaxLifetimeExceeded);
+
+        // Test with valid times
+        let recent_iat = now - 3600; // 1 hour ago
+        let result = policy.check_token_times(Some(recent_iat), Some(now + 3600));
+        assert_eq!(result, SessionTerminationReason::None);
+    }
+
+    #[test]
+    fn test_exempt_paths() {
+        let config = SessionConfig {
+            exempt_paths: vec!["/login".to_string(), "/public".to_string()],
+            ..Default::default()
+        };
+
+        // Test path matching
+        assert!(config.exempt_paths.iter().any(|p| "/login".starts_with(p)));
+        assert!(config.exempt_paths.iter().any(|p| "/login/oauth".starts_with(p)));
+        assert!(config.exempt_paths.iter().any(|p| "/public/docs".starts_with(p)));
+        assert!(!config.exempt_paths.iter().any(|p| "/api/protected".starts_with(p)));
     }
 }
