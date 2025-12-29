@@ -354,7 +354,12 @@ pub use auth::{Claims, log_access_decision, log_access_denied, MfaPolicy, log_mf
 pub use session::{SessionPolicy, SessionState, SessionTerminationReason};
 
 // Login tracking re-exports (AC-7)
-pub use login::{LockoutPolicy, LoginTracker, AttemptResult, LockoutInfo};
+pub use login::{
+    AttemptResult, LockoutInfo, LockoutPolicy, LoginTracker,
+    // AC-7 Enforcement Middleware
+    LoginTrackingConfig, LoginTrackerExtension, login_tracking_middleware,
+    LOGIN_IDENTIFIER_HEADER,
+};
 
 // Alerting re-exports (IR-4, IR-5)
 pub use alerting::{AlertConfig, AlertManager, Alert, AlertSeverity, AlertCategory};

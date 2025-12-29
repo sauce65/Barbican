@@ -3,6 +3,7 @@
 //! Provides a builder-pattern configuration for all security controls.
 
 use std::time::Duration;
+use crate::login::{LoginTracker, LockoutPolicy, LoginTrackingConfig};
 use crate::parse::{parse_duration, parse_size};
 use crate::tls::TlsMode;
 
@@ -66,6 +67,18 @@ pub struct SecurityConfig {
     /// TLS enforcement mode (SC-8)
     /// Controls HTTPS requirement for incoming requests
     pub tls_mode: TlsMode,
+
+    /// Enable login tracking middleware (AC-7)
+    /// Automatically enforces login attempt limits on auth endpoints
+    pub login_tracking_enabled: bool,
+
+    /// Login tracker instance (AC-7)
+    /// Shared across requests for tracking login attempts
+    pub login_tracker: Option<LoginTracker>,
+
+    /// Login tracking configuration (AC-7)
+    /// Configures which paths to track and enforcement behavior
+    pub login_tracking_config: LoginTrackingConfig,
 }
 
 impl Default for SecurityConfig {
@@ -80,6 +93,10 @@ impl Default for SecurityConfig {
             security_headers_enabled: true,
             tracing_enabled: true,
             tls_mode: TlsMode::Required, // SC-8: HTTPS required by default
+            // AC-7: Login tracking enabled by default with standard tracker
+            login_tracking_enabled: true,
+            login_tracker: Some(LoginTracker::with_default_policy()),
+            login_tracking_config: LoginTrackingConfig::default(),
         }
     }
 }
@@ -100,6 +117,10 @@ impl SecurityConfig {
             security_headers_enabled: false,
             tracing_enabled: true,
             tls_mode: TlsMode::Disabled, // Development only!
+            // AC-7: Login tracking with relaxed policy for development
+            login_tracking_enabled: true,
+            login_tracker: Some(LoginTracker::new(LockoutPolicy::relaxed())),
+            login_tracking_config: LoginTrackingConfig::default(),
         }
     }
 }
@@ -118,6 +139,10 @@ impl SecurityConfig {
     /// - `SECURITY_HEADERS_ENABLED`: "true"/"false" (default: "true")
     /// - `TRACING_ENABLED`: "true"/"false" (default: "true")
     /// - `TLS_MODE`: "disabled", "opportunistic", "required", "strict" (default: "required")
+    /// - `LOGIN_TRACKING_ENABLED`: "true"/"false" (default: "true")
+    /// - `LOGIN_MAX_ATTEMPTS`: max failed attempts before lockout (default: 5)
+    /// - `LOGIN_LOCKOUT_DURATION`: e.g., "15m", "1h" (default: "15m")
+    /// - `LOGIN_AUTH_PATHS`: comma-separated auth paths (default: "/login,/auth/token,/oauth/token")
     pub fn from_env() -> Self {
         let max_request_size = std::env::var("MAX_REQUEST_SIZE")
             .map(|s| parse_size(&s))
@@ -167,6 +192,43 @@ impl SecurityConfig {
             .and_then(|s| TlsMode::from_str_loose(&s))
             .unwrap_or(TlsMode::Required);
 
+        // AC-7: Login tracking configuration
+        let login_tracking_enabled = std::env::var("LOGIN_TRACKING_ENABLED")
+            .map(|s| s.to_lowercase() != "false")
+            .unwrap_or(true);
+
+        let login_max_attempts = std::env::var("LOGIN_MAX_ATTEMPTS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(5);
+
+        let login_lockout_duration = std::env::var("LOGIN_LOCKOUT_DURATION")
+            .map(|s| parse_duration(&s))
+            .unwrap_or(Duration::from_secs(15 * 60));
+
+        let login_auth_paths = std::env::var("LOGIN_AUTH_PATHS")
+            .map(|s| {
+                s.split(',')
+                    .map(|p| p.trim().to_string())
+                    .filter(|p| !p.is_empty())
+                    .collect()
+            })
+            .unwrap_or_else(|_| vec![
+                "/login".to_string(),
+                "/auth/token".to_string(),
+                "/oauth/token".to_string(),
+            ]);
+
+        let login_policy = LockoutPolicy::builder()
+            .max_attempts(login_max_attempts)
+            .lockout_duration(login_lockout_duration)
+            .build();
+
+        let login_tracking_config = LoginTrackingConfig {
+            auth_paths: login_auth_paths,
+            ..Default::default()
+        };
+
         Self {
             max_request_size,
             request_timeout,
@@ -177,6 +239,13 @@ impl SecurityConfig {
             security_headers_enabled,
             tracing_enabled,
             tls_mode,
+            login_tracking_enabled,
+            login_tracker: if login_tracking_enabled {
+                Some(LoginTracker::new(login_policy))
+            } else {
+                None
+            },
+            login_tracking_config,
         }
     }
 
@@ -261,6 +330,27 @@ impl SecurityConfigBuilder {
     /// Disable TLS enforcement (development only!).
     pub fn disable_tls_enforcement(mut self) -> Self {
         self.config.tls_mode = TlsMode::Disabled;
+        self
+    }
+
+    /// Enable login tracking with custom policy (AC-7).
+    pub fn login_tracking(mut self, policy: LockoutPolicy) -> Self {
+        self.config.login_tracking_enabled = true;
+        self.config.login_tracker = Some(LoginTracker::new(policy));
+        self
+    }
+
+    /// Disable login tracking (for testing only!).
+    pub fn disable_login_tracking(mut self) -> Self {
+        self.config.login_tracking_enabled = false;
+        self.config.login_tracker = None;
+        self
+    }
+
+    /// Set login tracking auth paths (AC-7).
+    pub fn login_auth_paths(mut self, paths: Vec<&str>) -> Self {
+        self.config.login_tracking_config.auth_paths =
+            paths.into_iter().map(String::from).collect();
         self
     }
 

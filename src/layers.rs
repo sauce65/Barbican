@@ -15,6 +15,7 @@ use tower_http::{
 use tower_governor::{governor::GovernorConfigBuilder, GovernorLayer};
 
 use crate::config::SecurityConfig;
+use crate::login::login_tracking_middleware;
 use crate::tls::{tls_enforcement_middleware, TlsMode};
 
 /// Extension trait for applying security layers to an Axum Router.
@@ -44,8 +45,9 @@ pub trait SecureRouter {
     /// 3. CorsLayer (handles preflight)
     /// 4. Security Headers
     /// 5. Rate Limiting
-    /// 6. Request Body Limit
-    /// 7. Timeout (innermost)
+    /// 6. Login Tracking (AC-7 - enforces login attempt limits)
+    /// 7. Request Body Limit
+    /// 8. Timeout (innermost)
     fn with_security(self, config: SecurityConfig) -> Self;
 }
 
@@ -76,6 +78,22 @@ where
                 .finish()
                 .expect("Invalid rate limiter configuration");
             router = router.layer(GovernorLayer::new(rate_limit_config));
+        }
+
+        // AC-7: Unsuccessful Logon Attempts - Automatically enforces
+        // login attempt limits and account lockout on auth endpoints
+        if config.login_tracking_enabled {
+            if let Some(ref tracker) = config.login_tracker {
+                let tracker = tracker.clone();
+                let login_config = config.login_tracking_config.clone();
+                router = router.layer(middleware::from_fn(move |req, next| {
+                    let tracker = tracker.clone();
+                    let login_config = login_config.clone();
+                    async move {
+                        login_tracking_middleware(req, next, tracker, login_config).await
+                    }
+                }));
+            }
         }
 
         // Security Headers - NIST 800-53 SC-8 (Transmission Confidentiality),

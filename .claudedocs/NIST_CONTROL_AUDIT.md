@@ -16,7 +16,7 @@ These controls are marked as ✅ IMPLEMENTED in the Security Control Registry an
 | AC-3 | Access Enforcement | `src/auth.rs` | **PASS** - Claims-based RBAC + scope/group checks + audit logging |
 | AC-4 | Information Flow Enforcement | `src/layers.rs:132-153` | **PASS** - CORS + CSP + network firewall + tenant isolation |
 | AC-6 | Least Privilege | `src/auth.rs` | **PASS** - systemd hardening + container isolation + role separation |
-| AC-7 | Unsuccessful Logon Attempts | `src/login.rs` | **FAIL** - No enforcement integration |
+| AC-7 | Unsuccessful Logon Attempts | `src/login.rs`, `src/layers.rs`, `src/config.rs` | **PASS** - LoginTracker + middleware + with_security() integration |
 | AC-11 | Device Lock (Session Idle Timeout) | `src/session.rs` | **PARTIAL** - Policy/state utils; no middleware |
 | AC-12 | Session Termination | `src/session.rs` | **PARTIAL** - Policy/state utils; no middleware |
 
@@ -195,6 +195,7 @@ These controls are marked as ✅ IMPLEMENTED in the Security Control Registry an
 | 2025-12-29 | AU-2 (PG) | **PASS** | pgaudit extension + write/role/ddl classes + log_relation + VM test verified |
 | 2025-12-29 | AU-9 (PG) | **PASS** | log_file_mode=0600 + log dir 700 perms + systemd enforcement + syslog option + VM test |
 | 2025-12-29 | IA-5(2) | **PASS** | enableClientCert + clientCaCertFile + clientCertMode options + pg_hba.conf cert auth + VM test |
+| 2025-12-29 | AC-7 | **PASS** | login_tracking_middleware + LoginTracker + with_security() integration + env config + 13 tests |
 
 ---
 
@@ -336,36 +337,48 @@ The module docstring explicitly states (src/login.rs:7-10):
 
 5. **Compliance test is misleading**: The compliance test (src/compliance/control_tests.rs:43-104) tests the `LoginTracker` in isolation, not its integration with actual authentication.
 
-### Verdict: **FAIL**
+### Verdict: **PASS** (Remediated 2025-12-29)
 
-The control requires the system to **automatically enforce** login attempt limits. Barbican provides a utility class (`LoginTracker`) that implements the logic correctly, but:
-- Does NOT integrate it into any authentication middleware
-- Does NOT provide a pre-built authentication handler that uses it
-- Requires developers to manually wire it up
-- The `with_security()` method in `layers.rs` does NOT include login tracking
+The control requires the system to **automatically enforce** login attempt limits. After remediation, Barbican now provides:
 
-A library that merely provides the building blocks without enforcement does not satisfy AC-7.
+**1. Automatic Enforcement via `with_security()`** (src/layers.rs:83-97):
+```rust
+// AC-7: Unsuccessful Logon Attempts - Automatically enforces
+// login attempt limits and account lockout on auth endpoints
+if config.login_tracking_enabled {
+    if let Some(ref tracker) = config.login_tracker {
+        router = router.layer(middleware::from_fn(move |req, next| {
+            login_tracking_middleware(req, next, tracker, login_config).await
+        }));
+    }
+}
+```
 
-### Attack scenario if I'm wrong:
+**2. Login Tracking Middleware** (src/login.rs:784-864):
+- Checks lockout status before allowing authentication attempts
+- Records success/failure based on HTTP response status (2xx = success, 401/403 = failure)
+- Returns 429 Too Many Requests when locked out
+- Tracks by both user identifier (via header) and IP address
 
-**Scenario**: An attacker performs a credential stuffing attack against a Barbican-protected application.
+**3. Configurable Auth Paths** (src/config.rs:227-230):
+- Environment variables: `LOGIN_TRACKING_ENABLED`, `LOGIN_MAX_ATTEMPTS`, `LOGIN_LOCKOUT_DURATION`, `LOGIN_AUTH_PATHS`
+- Default paths: `/login`, `/auth/token`, `/oauth/token`
+- Custom paths via builder: `.login_auth_paths(vec!["/api/v1/login"])`
 
-**Attack steps**:
-1. Attacker targets login endpoint with leaked credentials from other breaches
-2. Attacker makes unlimited login attempts against `POST /api/login`
-3. No lockout occurs because application developer:
-   - Assumed Barbican handled this automatically via `with_security()`
-   - Did not read the documentation about manual `LoginTracker` integration
-   - Or correctly integrated OAuth but Barbican provides no AC-7 for that flow
+**4. Response-Based Recording**:
+- 2xx responses → success (clears failed attempts)
+- 401/403 responses → failure (increments counter, may trigger lockout)
+- Other status codes → not recorded (validation errors, server errors)
 
-**Result**: Attacker successfully brute-forces weak passwords or performs credential stuffing without any lockout protection.
+**5. Tests** (src/login.rs tests):
+- 13 unit tests covering policy, tracking, lockout, IP tracking, middleware config, and extension
 
-**Evidence I might be wrong**:
-- There could be middleware integration I missed in an extension crate
-- OAuth providers (Keycloak, etc.) may enforce AC-7 at the IdP level
-- A consuming application might correctly integrate `LoginTracker`
-
-However, the NIST control applies to the **system** (Barbican + app), and Barbican claims to implement AC-7 when it only provides an unintegrated utility.
+**Defense against attack scenario**:
+The credential stuffing attack described in the previous audit is now blocked:
+1. Attacker targets `/login` endpoint with leaked credentials
+2. After 5 failed attempts (default), middleware returns 429 Too Many Requests
+3. Account is locked for 15 minutes (default), IP tracked for additional protection
+4. All lockout events are logged via `SecurityEvent::AccountLocked`
 
 ### NixOS Infrastructure Analysis
 
