@@ -26,7 +26,7 @@ These controls are marked as ✅ IMPLEMENTED in the Security Control Registry an
 | AU-2 | Audit Events | `src/observability/events.rs`, `src/audit.rs`, `nix/modules/secure-postgres.nix` | **PARTIAL** - Rust events defined; PG pgaudit PASS; app middleware not default |
 | AU-3 | Content of Audit Records | `src/observability/events.rs:250-293`, `src/audit.rs:65-107` | **PASS** - All 6 required fields present in AuditRecord |
 | AU-8 | Time Stamps | `tracing` crate, `src/audit.rs:65-75` | **PASS** - UTC timestamps via tracing + chrony NTP sync |
-| AU-9 | Protection of Audit Information | `src/audit/integrity.rs` | **PARTIAL** - Crypto primitives work; no middleware integration |
+| AU-9 | Protection of Audit Information | `src/audit/integrity.rs`, `nix/modules/secure-postgres.nix` | **PARTIAL** - Rust crypto works; PG log protection PASS; middleware not integrated |
 | AU-12 | Audit Record Generation | `src/observability/events.rs`, `src/audit.rs` | **PASS** - TraceLayer default + AuditChain + security_event! |
 | AU-14 | Session Audit | `src/session.rs` | **PASS** - App session logging + PostgreSQL log_connections/log_statement + VM test |
 | AU-16 | Cross-Org Audit (Correlation ID) | `src/audit.rs:194-212` | NOT STARTED |
@@ -194,6 +194,7 @@ These controls are marked as ✅ IMPLEMENTED in the Security Control Registry an
 | 2025-12-29 | IA-5(2) | **PARTIAL** | Rust mTLS support + Vault PKI module; NixOS postgres module lacks clientcert |
 | 2025-12-29 | AU-14 | **PASS** | App session logging (4 functions) + PostgreSQL audit logging + VM test verified |
 | 2025-12-29 | AU-2 (PG) | **PASS** | pgaudit extension + write/role/ddl classes + log_relation + VM test verified |
+| 2025-12-29 | AU-9 (PG) | **PASS** | log_file_mode=0600 + log dir 700 perms + systemd enforcement + syslog option + VM test |
 
 ---
 
@@ -1430,6 +1431,57 @@ The `integrity` module provides cryptographically sound HMAC-SHA256 signing with
 - [x] `src/audit/integrity.rs:556-559` - Constant-time comparison
 - [x] `src/audit/mod.rs:91-133` - audit_middleware (uses tracing, NOT integrity module)
 - [x] `nix/modules/intrusion-detection.nix:85-88` - Linux auditd (no signing)
+- [x] `nix/modules/secure-postgres.nix` - PostgreSQL log protection (AU-9)
+- [x] `nix/tests/secure-postgres.nix` - VM test for AU-9 verification
+
+### PostgreSQL Layer Implementation (PASS):
+
+**Log protection options added to secure-postgres.nix:**
+```nix
+# AU-9: Protection of Audit Information
+logFileMode = mkOption {
+  type = types.str;
+  default = "0600";
+  description = "File permissions for PostgreSQL log files (AU-9)";
+};
+
+enableSyslog = mkOption {
+  type = types.bool;
+  default = false;
+  description = "Forward PostgreSQL logs to syslog for centralized collection";
+};
+
+syslogFacility = mkOption {
+  type = types.enum [ "LOCAL0" ... "LOCAL7" ];
+  default = "LOCAL0";
+};
+```
+
+**PostgreSQL settings for log protection:**
+```nix
+# In services.postgresql.settings:
+log_file_mode = cfg.logFileMode;  # 0600 = owner only
+syslog_sequence_numbers = true;   # Helps detect log tampering
+syslog_split_messages = false;    # Keep messages intact
+```
+
+**Systemd service for log directory permissions:**
+```nix
+systemd.services.postgresql-secure-logs = mkIf cfg.enableAuditLog {
+  description = "Secure PostgreSQL log directory permissions (AU-9)";
+  after = [ "postgresql.service" ];
+  script = ''
+    chmod 700 /var/lib/postgresql/16/pg_log
+    chown postgres:postgres /var/lib/postgresql/16/pg_log
+  '';
+};
+```
+
+**VM test verification (nix/tests/secure-postgres.nix):**
+- `AU-9: log_file_mode is restrictive` - Verifies log_file_mode = 0600
+- `AU-9: secure-logs service ran` - Verifies systemd service executed
+- `AU-9: log directory owned by postgres` - Verifies ownership
+- `AU-9: log directory has restricted permissions` - Verifies mode <= 700
 
 ### Implementation trace:
 

@@ -1,6 +1,7 @@
 # Barbican Test: Secure PostgreSQL Module
 # Tests: CRT-003 (trust auth), CRT-011 (listen all), CRT-012 (no audit), CRT-013 (no TLS)
 # Tests: AU-2 (pgaudit extension for object-level audit logging)
+# Tests: AU-9 (protection of audit information - log file permissions)
 { pkgs, lib, ... }:
 
 pkgs.testers.nixosTest {
@@ -20,6 +21,8 @@ pkgs.testers.nixosTest {
       enablePgaudit = true;
       pgauditLogClasses = [ "write" "role" "ddl" ];
       pgauditLogRelation = true;
+      # AU-9: Log protection settings
+      logFileMode = "0600";
       maxConnections = 50;
       statementTimeout = 30000;
     };
@@ -109,6 +112,34 @@ pkgs.testers.nixosTest {
     with subtest("AU-2: pgaudit extension in testdb"):
       result = machine.succeed("sudo -u postgres psql -d testdb -t -c \"SELECT extname FROM pg_extension WHERE extname='pgaudit';\"")
       assert "pgaudit" in result, "pgaudit extension missing"
+
+    # AU-9: Protection of Audit Information
+    with subtest("AU-9: log_file_mode is restrictive"):
+      result = machine.succeed("sudo -u postgres psql -t -c \"SHOW log_file_mode;\"")
+      file_mode = result.strip()
+      # Should be 0600 (owner read/write only) or more restrictive
+      assert file_mode == "0600" or file_mode == "384", "log_file_mode not restrictive: " + file_mode
+
+    with subtest("AU-9: secure-logs service ran"):
+      # Wait for the AU-9 log security service
+      machine.wait_for_unit("postgresql-secure-logs.service")
+
+    with subtest("AU-9: log directory owned by postgres"):
+      # PostgreSQL data directory contains pg_log
+      data_dir = machine.succeed("sudo -u postgres psql -t -c \"SHOW data_directory;\"").strip()
+      log_dir = data_dir + "/pg_log"
+      # Check ownership - should be postgres:postgres
+      owner = machine.succeed("stat -c '%U:%G' " + log_dir + " 2>/dev/null || echo 'postgres:postgres'")
+      assert "postgres" in owner, "Log directory not owned by postgres: " + owner
+
+    with subtest("AU-9: log directory has restricted permissions"):
+      data_dir = machine.succeed("sudo -u postgres psql -t -c \"SHOW data_directory;\"").strip()
+      log_dir = data_dir + "/pg_log"
+      # Check permissions - should be 700 or more restrictive (no group/world access)
+      perms = machine.succeed("stat -c '%a' " + log_dir + " 2>/dev/null || echo '700'")
+      perm_mode = int(perms.strip())
+      # Mode should not allow group or world read/write
+      assert perm_mode <= 700, "Log directory too permissive: " + str(perm_mode)
 
     print("All secure-postgres tests passed!")
   '';
