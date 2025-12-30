@@ -400,7 +400,12 @@ pub use health::{
 };
 
 // Key management re-exports (SC-12)
-pub use keys::{KeyStore, KeyMetadata, KeyPurpose, KeyState, RotationTracker, RotationPolicy};
+pub use keys::{
+    KeyStore, KeyMetadata, KeyPurpose, KeyState, KeyMaterial, KeyError,
+    RotationTracker, RotationPolicy, RotationStatus, EnvKeyStore,
+    // SC-12 Enforcement: Axum Integration
+    InMemoryKeyStore, KeyStoreExtension, key_store_middleware,
+};
 
 // Encryption at rest re-exports (SC-28)
 pub use encryption::{

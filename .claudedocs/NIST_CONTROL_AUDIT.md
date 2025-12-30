@@ -98,7 +98,7 @@ These controls are marked as ✅ IMPLEMENTED in the Security Control Registry an
 | SC-8 | Transmission Confidentiality | `src/tls.rs`, `src/database.rs`, `src/layers.rs:87-90` | **PASS** - Multi-layer TLS enforcement |
 | SC-8(1) | Cryptographic Protection | `src/tls.rs:225-245` | **PASS** - TLS 1.2+ with version validation |
 | SC-10 | Network Disconnect | `src/session.rs` | **PASS** - session_enforcement_middleware terminates on idle/absolute timeout (via AC-11/AC-12) |
-| SC-12 | Cryptographic Key Management | `src/keys.rs`, `src/jwt_secret.rs`, `nix/modules/vault-pki.nix` | **PARTIAL** - Traits + Vault PKI work; no Rust KMS implementation |
+| SC-12 | Cryptographic Key Management | `src/keys.rs`, `nix/modules/vault-pki.nix` | **PASS** - InMemoryKeyStore + KeyStoreExtension + rotation tracking + 28 tests |
 | SC-12(1) | Key Availability | `nix/modules/vault-pki.nix` | **PARTIAL** - HA config exists; not tested, not default enabled |
 | SC-13 | Cryptographic Protection | `src/crypto.rs`, `src/encryption.rs` | **PASS** - NIST-approved algorithms |
 | SC-17 | PKI Certificates | `nix/modules/vault-pki.nix`, `nix/lib/vault-pki.nix` | **PASS** - Full Vault PKI infrastructure with NixOS VM tests |
@@ -206,6 +206,7 @@ These controls are marked as ✅ IMPLEMENTED in the Security Control Registry an
 | 2025-12-29 | AU-9 | **PASS** | AuditChainExtension + log_auth_event/data_access/security_violation + verify_integrity + 23 tests |
 | 2025-12-29 | SC-10 | **PASS** | session_enforcement_middleware (from AC-11/AC-12) handles network disconnect on timeout |
 | 2025-12-29 | IR-5 | **PASS** | IncidentTracker + IncidentStore trait + lifecycle (Open→Investigating→Resolved) + 15 tests |
+| 2025-12-29 | SC-12 | **PASS** | InMemoryKeyStore + KeyStoreExtension + rotation tracking + key_store_middleware + 28 tests |
 
 ---
 

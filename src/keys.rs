@@ -629,6 +629,324 @@ fn base64_decode(input: &str) -> Result<Vec<u8>, ()> {
 }
 
 // ============================================================================
+// In-Memory Key Store (Testing/Development)
+// ============================================================================
+
+use std::sync::RwLock;
+
+/// In-memory key store for testing and development
+///
+/// Provides a simple key store that keeps keys in memory. Useful for
+/// testing and development, but NOT suitable for production use.
+///
+/// # Example
+///
+/// ```ignore
+/// use barbican::keys::{InMemoryKeyStore, KeyMaterial, KeyPurpose};
+///
+/// let store = InMemoryKeyStore::new();
+/// store.set_key("signing-key", KeyMaterial::new("signing-key", vec![1, 2, 3, 4]));
+///
+/// let key = store.get_key("signing-key").await?;
+/// ```
+#[derive(Debug, Default)]
+pub struct InMemoryKeyStore {
+    keys: RwLock<HashMap<String, KeyMaterial>>,
+    metadata: RwLock<HashMap<String, KeyMetadata>>,
+}
+
+impl InMemoryKeyStore {
+    /// Create a new empty in-memory store
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set a key in the store
+    pub fn set_key(&self, id: impl Into<String>, material: KeyMaterial) {
+        let id = id.into();
+        let meta = KeyMetadata::new(&id)
+            .with_state(KeyState::Active)
+            .with_created_at(SystemTime::now());
+
+        if let Ok(mut keys) = self.keys.write() {
+            keys.insert(id.clone(), material);
+        }
+        if let Ok(mut metadata) = self.metadata.write() {
+            metadata.insert(id, meta);
+        }
+    }
+
+    /// Set a key with custom metadata
+    pub fn set_key_with_metadata(&self, material: KeyMaterial, meta: KeyMetadata) {
+        let id = material.key_id().to_string();
+        if let Ok(mut keys) = self.keys.write() {
+            keys.insert(id.clone(), material);
+        }
+        if let Ok(mut metadata) = self.metadata.write() {
+            metadata.insert(id, meta);
+        }
+    }
+
+    /// Remove a key from the store
+    pub fn remove_key(&self, id: &str) {
+        if let Ok(mut keys) = self.keys.write() {
+            keys.remove(id);
+        }
+        if let Ok(mut metadata) = self.metadata.write() {
+            metadata.remove(id);
+        }
+    }
+
+    /// Get the number of keys in the store
+    pub fn len(&self) -> usize {
+        self.keys.read().map(|k| k.len()).unwrap_or(0)
+    }
+
+    /// Check if the store is empty
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+impl KeyStore for InMemoryKeyStore {
+    fn get_key(&self, id: &str) -> Pin<Box<dyn Future<Output = Result<KeyMaterial, KeyError>> + Send + '_>> {
+        let id = id.to_string();
+        Box::pin(async move {
+            let keys = self.keys.read()
+                .map_err(|_| KeyError::Other("Lock poisoned".to_string()))?;
+
+            keys.get(&id)
+                .cloned()
+                .ok_or_else(|| KeyError::NotFound(id))
+        })
+    }
+
+    fn key_exists(&self, id: &str) -> Pin<Box<dyn Future<Output = Result<bool, KeyError>> + Send + '_>> {
+        let id = id.to_string();
+        Box::pin(async move {
+            let keys = self.keys.read()
+                .map_err(|_| KeyError::Other("Lock poisoned".to_string()))?;
+            Ok(keys.contains_key(&id))
+        })
+    }
+
+    fn rotate_key(&self, id: &str) -> Pin<Box<dyn Future<Output = Result<KeyMaterial, KeyError>> + Send + '_>> {
+        let id = id.to_string();
+        Box::pin(async move {
+            // Get current key
+            let current = {
+                let keys = self.keys.read()
+                    .map_err(|_| KeyError::Other("Lock poisoned".to_string()))?;
+                keys.get(&id).cloned()
+            };
+
+            match current {
+                Some(material) => {
+                    // Generate "rotated" key (just increment last byte for testing)
+                    let mut new_bytes = material.as_bytes().to_vec();
+                    if let Some(last) = new_bytes.last_mut() {
+                        *last = last.wrapping_add(1);
+                    }
+                    let new_material = KeyMaterial::new(&id, new_bytes);
+
+                    // Update store
+                    if let Ok(mut keys) = self.keys.write() {
+                        keys.insert(id.clone(), new_material.clone());
+                    }
+                    if let Ok(mut metadata) = self.metadata.write() {
+                        if let Some(meta) = metadata.get_mut(&id) {
+                            meta.version += 1;
+                            meta.rotated_at = Some(SystemTime::now());
+                        }
+                    }
+
+                    Ok(new_material)
+                }
+                None => Err(KeyError::NotFound(id)),
+            }
+        })
+    }
+
+    fn get_metadata(&self, id: &str) -> Pin<Box<dyn Future<Output = Result<KeyMetadata, KeyError>> + Send + '_>> {
+        let id = id.to_string();
+        Box::pin(async move {
+            let metadata = self.metadata.read()
+                .map_err(|_| KeyError::Other("Lock poisoned".to_string()))?;
+
+            metadata.get(&id)
+                .cloned()
+                .ok_or_else(|| KeyError::NotFound(id))
+        })
+    }
+
+    fn list_keys(&self) -> Pin<Box<dyn Future<Output = Result<Vec<String>, KeyError>> + Send + '_>> {
+        Box::pin(async move {
+            let keys = self.keys.read()
+                .map_err(|_| KeyError::Other("Lock poisoned".to_string()))?;
+            Ok(keys.keys().cloned().collect())
+        })
+    }
+}
+
+// ============================================================================
+// SC-12 Enforcement: Axum Integration
+// ============================================================================
+
+use std::sync::Arc;
+use axum::extract::Request;
+use axum::middleware::Next;
+use axum::response::Response;
+
+/// Axum extension for accessing key store in handlers (SC-12)
+///
+/// Provides handlers with access to the key management system.
+///
+/// # Example
+///
+/// ```ignore
+/// use axum::Extension;
+/// use barbican::keys::KeyStoreExtension;
+///
+/// async fn sign_document(
+///     Extension(keys): Extension<KeyStoreExtension>,
+///     body: String,
+/// ) -> impl IntoResponse {
+///     let key = keys.get_key("signing-key").await?;
+///     // Use key to sign document...
+///     "Signed"
+/// }
+/// ```
+#[derive(Clone)]
+pub struct KeyStoreExtension {
+    store: Arc<dyn KeyStore>,
+    tracker: Option<Arc<RwLock<RotationTracker>>>,
+}
+
+impl KeyStoreExtension {
+    /// Create a new extension with the given key store
+    pub fn new<S: KeyStore + 'static>(store: S) -> Self {
+        Self {
+            store: Arc::new(store),
+            tracker: None,
+        }
+    }
+
+    /// Create with a rotation tracker
+    pub fn with_tracker<S: KeyStore + 'static>(store: S, tracker: RotationTracker) -> Self {
+        Self {
+            store: Arc::new(store),
+            tracker: Some(Arc::new(RwLock::new(tracker))),
+        }
+    }
+
+    /// Create with an in-memory store (for development/testing)
+    pub fn in_memory() -> Self {
+        Self::new(InMemoryKeyStore::new())
+    }
+
+    /// Create with an environment variable store
+    pub fn from_env(prefix: impl Into<String>) -> Self {
+        Self::new(EnvKeyStore::new(prefix))
+    }
+
+    /// Get a key by ID
+    pub async fn get_key(&self, id: &str) -> Result<KeyMaterial, KeyError> {
+        self.store.get_key(id).await
+    }
+
+    /// Check if a key exists
+    pub async fn key_exists(&self, id: &str) -> Result<bool, KeyError> {
+        self.store.key_exists(id).await
+    }
+
+    /// Rotate a key
+    pub async fn rotate_key(&self, id: &str) -> Result<KeyMaterial, KeyError> {
+        let result = self.store.rotate_key(id).await;
+        if result.is_ok() {
+            if let Some(ref tracker) = self.tracker {
+                if let Ok(mut t) = tracker.write() {
+                    t.record_rotation(id);
+                }
+            }
+        }
+        result
+    }
+
+    /// Get key metadata
+    pub async fn get_metadata(&self, id: &str) -> Result<KeyMetadata, KeyError> {
+        self.store.get_metadata(id).await
+    }
+
+    /// List all keys
+    pub async fn list_keys(&self) -> Result<Vec<String>, KeyError> {
+        self.store.list_keys().await
+    }
+
+    /// Check if a key needs rotation (if tracker is configured)
+    pub fn needs_rotation(&self, id: &str) -> bool {
+        self.tracker
+            .as_ref()
+            .and_then(|t| t.read().ok())
+            .map(|t| t.needs_rotation(id))
+            .unwrap_or(false)
+    }
+
+    /// Get rotation status (if tracker is configured)
+    pub fn rotation_status(&self) -> Option<RotationStatus> {
+        self.tracker
+            .as_ref()
+            .and_then(|t| t.read().ok())
+            .map(|t| t.status_report())
+    }
+
+    /// Register a key for rotation tracking
+    pub fn register_for_rotation(&self, key_id: impl Into<String>, policy: RotationPolicy) {
+        if let Some(ref tracker) = self.tracker {
+            if let Ok(mut t) = tracker.write() {
+                t.register(key_id, policy);
+            }
+        }
+    }
+}
+
+impl std::fmt::Debug for KeyStoreExtension {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KeyStoreExtension")
+            .field("has_tracker", &self.tracker.is_some())
+            .finish()
+    }
+}
+
+/// Middleware that provides KeyStoreExtension to handlers
+///
+/// # Example
+///
+/// ```ignore
+/// use barbican::keys::{key_store_middleware, InMemoryKeyStore};
+/// use axum::{Router, middleware};
+///
+/// let store = InMemoryKeyStore::new();
+/// let ext = KeyStoreExtension::new(store);
+///
+/// let app = Router::new()
+///     .route("/sign", post(sign_handler))
+///     .layer(middleware::from_fn(move |req, next| {
+///         let ext = ext.clone();
+///         async move {
+///             key_store_middleware(req, next, ext).await
+///         }
+///     }));
+/// ```
+pub async fn key_store_middleware(
+    mut req: Request,
+    next: Next,
+    extension: KeyStoreExtension,
+) -> Response {
+    req.extensions_mut().insert(extension);
+    next.run(req).await
+}
+
+// ============================================================================
 // Logging
 // ============================================================================
 
@@ -776,5 +1094,191 @@ mod tests {
 
         let err = KeyError::AccessDenied("permission denied".to_string());
         assert!(err.to_string().contains("Access denied"));
+    }
+
+    // ========================================================================
+    // SC-12 In-Memory Store Tests
+    // ========================================================================
+
+    #[test]
+    fn test_in_memory_store_new() {
+        let store = InMemoryKeyStore::new();
+        assert!(store.is_empty());
+        assert_eq!(store.len(), 0);
+    }
+
+    #[test]
+    fn test_in_memory_store_set_key() {
+        let store = InMemoryKeyStore::new();
+        let material = KeyMaterial::new("test-key", vec![1, 2, 3, 4]);
+
+        store.set_key("test-key", material);
+
+        assert!(!store.is_empty());
+        assert_eq!(store.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_in_memory_store_get_key() {
+        let store = InMemoryKeyStore::new();
+        let material = KeyMaterial::new("test-key", vec![1, 2, 3, 4]);
+        store.set_key("test-key", material);
+
+        let retrieved = store.get_key("test-key").await.unwrap();
+        assert_eq!(retrieved.key_id(), "test-key");
+        assert_eq!(retrieved.as_bytes(), &[1, 2, 3, 4]);
+    }
+
+    #[tokio::test]
+    async fn test_in_memory_store_key_exists() {
+        let store = InMemoryKeyStore::new();
+        let material = KeyMaterial::new("test-key", vec![1, 2, 3, 4]);
+        store.set_key("test-key", material);
+
+        assert!(store.key_exists("test-key").await.unwrap());
+        assert!(!store.key_exists("nonexistent").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_in_memory_store_rotate_key() {
+        let store = InMemoryKeyStore::new();
+        let material = KeyMaterial::new("test-key", vec![1, 2, 3, 4]);
+        store.set_key("test-key", material);
+
+        let rotated = store.rotate_key("test-key").await.unwrap();
+        assert_eq!(rotated.key_id(), "test-key");
+        // Last byte should be incremented
+        assert_eq!(rotated.as_bytes(), &[1, 2, 3, 5]);
+
+        // Metadata should show version 2
+        let meta = store.get_metadata("test-key").await.unwrap();
+        assert_eq!(meta.version, 2);
+        assert!(meta.rotated_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_in_memory_store_get_metadata() {
+        let store = InMemoryKeyStore::new();
+        let material = KeyMaterial::new("test-key", vec![1, 2, 3, 4]);
+        store.set_key("test-key", material);
+
+        let meta = store.get_metadata("test-key").await.unwrap();
+        assert_eq!(meta.id, "test-key");
+        assert_eq!(meta.state, KeyState::Active);
+        assert!(meta.created_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_in_memory_store_list_keys() {
+        let store = InMemoryKeyStore::new();
+        store.set_key("key-1", KeyMaterial::new("key-1", vec![1]));
+        store.set_key("key-2", KeyMaterial::new("key-2", vec![2]));
+
+        let keys = store.list_keys().await.unwrap();
+        assert_eq!(keys.len(), 2);
+        assert!(keys.contains(&"key-1".to_string()));
+        assert!(keys.contains(&"key-2".to_string()));
+    }
+
+    #[test]
+    fn test_in_memory_store_remove_key() {
+        let store = InMemoryKeyStore::new();
+        store.set_key("key-1", KeyMaterial::new("key-1", vec![1]));
+        assert_eq!(store.len(), 1);
+
+        store.remove_key("key-1");
+        assert_eq!(store.len(), 0);
+    }
+
+    // ========================================================================
+    // SC-12 Extension Tests
+    // ========================================================================
+
+    #[test]
+    fn test_key_store_extension_in_memory() {
+        let ext = KeyStoreExtension::in_memory();
+        assert!(!ext.needs_rotation("any-key")); // No tracker configured
+    }
+
+    #[test]
+    fn test_key_store_extension_from_env() {
+        let ext = KeyStoreExtension::from_env("TEST_KEYS");
+        // Just verify it can be created
+        let debug_output = format!("{:?}", ext);
+        assert!(debug_output.contains("KeyStoreExtension"));
+    }
+
+    #[test]
+    fn test_key_store_extension_with_tracker() {
+        let store = InMemoryKeyStore::new();
+        let mut tracker = RotationTracker::new();
+        tracker.register("signing-key", RotationPolicy::days(90));
+
+        let ext = KeyStoreExtension::with_tracker(store, tracker);
+
+        // Should have tracker and not need rotation (just registered)
+        assert!(!ext.needs_rotation("signing-key"));
+
+        // Should have rotation status
+        let status = ext.rotation_status();
+        assert!(status.is_some());
+        assert_eq!(status.unwrap().total_tracked, 1);
+    }
+
+    #[tokio::test]
+    async fn test_key_store_extension_get_key() {
+        let store = InMemoryKeyStore::new();
+        store.set_key("test-key", KeyMaterial::new("test-key", vec![1, 2, 3]));
+
+        let ext = KeyStoreExtension::new(store);
+
+        let key = ext.get_key("test-key").await.unwrap();
+        assert_eq!(key.as_bytes(), &[1, 2, 3]);
+    }
+
+    #[tokio::test]
+    async fn test_key_store_extension_rotate_key() {
+        let store = InMemoryKeyStore::new();
+        store.set_key("test-key", KeyMaterial::new("test-key", vec![1, 2, 3]));
+
+        let mut tracker = RotationTracker::new();
+        tracker.register("test-key", RotationPolicy::days(90));
+
+        let ext = KeyStoreExtension::with_tracker(store, tracker);
+
+        let rotated = ext.rotate_key("test-key").await.unwrap();
+        assert_eq!(rotated.as_bytes(), &[1, 2, 4]); // Last byte incremented
+    }
+
+    #[tokio::test]
+    async fn test_key_store_extension_list_keys() {
+        let store = InMemoryKeyStore::new();
+        store.set_key("key-1", KeyMaterial::new("key-1", vec![1]));
+        store.set_key("key-2", KeyMaterial::new("key-2", vec![2]));
+
+        let ext = KeyStoreExtension::new(store);
+
+        let keys = ext.list_keys().await.unwrap();
+        assert_eq!(keys.len(), 2);
+    }
+
+    #[test]
+    fn test_key_store_extension_register_for_rotation() {
+        let store = InMemoryKeyStore::new();
+        let tracker = RotationTracker::new();
+        let ext = KeyStoreExtension::with_tracker(store, tracker);
+
+        ext.register_for_rotation("new-key", RotationPolicy::days(30));
+
+        let status = ext.rotation_status().unwrap();
+        assert_eq!(status.total_tracked, 1);
+    }
+
+    #[test]
+    fn test_key_store_extension_debug() {
+        let ext = KeyStoreExtension::in_memory();
+        let debug_output = format!("{:?}", ext);
+        assert!(debug_output.contains("KeyStoreExtension"));
+        assert!(debug_output.contains("has_tracker"));
     }
 }
