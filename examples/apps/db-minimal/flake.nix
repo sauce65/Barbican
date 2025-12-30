@@ -3,9 +3,10 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    barbican.url = "github:sauce65/Barbican";
-    # For local development, use:
-    # barbican.url = "path:../../..";
+    # Use local path for development
+    barbican.url = "path:../../..";
+    # For published usage:
+    # barbican.url = "github:sauce65/Barbican";
   };
 
   outputs = { self, nixpkgs, barbican }: let

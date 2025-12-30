@@ -726,17 +726,17 @@ fn build_router(state: AppState) -> Router {
         // User CRUD
         .route("/users", get(list_users_handler).post(create_user_handler))
         .route(
-            "/users/{id}",
+            "/users/:id",
             get(get_user_handler)
                 .put(update_user_handler)
                 .delete(delete_user_handler),
         )
         // Document CRUD
         .route(
-            "/users/{user_id}/documents",
+            "/users/:user_id/documents",
             get(list_documents_handler).post(create_document_handler),
         )
-        .route("/documents/{id}", get(get_document_handler))
+        .route("/documents/:id", get(get_document_handler))
         .with_state(state)
 }
 
