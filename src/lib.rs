@@ -438,6 +438,9 @@ pub use audit::{audit_middleware, extract_client_ip, AuditRecord, AuditOutcome};
 pub use audit::integrity::{
     AuditChain, AuditIntegrityConfig, AuditIntegrityError, AuditLogDestination,
     ChainVerificationResult, SignatureAlgorithm, SignedAuditRecord,
+    verify_record, verify_records_from_json,
+    // AU-9 Enforcement: Axum Integration
+    AuditChainExtension,
 };
 
 // TLS enforcement re-exports (SC-8, SC-8(1))

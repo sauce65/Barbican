@@ -610,6 +610,177 @@ pub fn verify_records_from_json(
     chain.verify_integrity()
 }
 
+// ============================================================================
+// Axum Integration (AU-9)
+// ============================================================================
+
+use std::sync::{Arc, RwLock};
+
+/// Axum extension for accessing the audit chain in handlers (AU-9).
+///
+/// This extension provides thread-safe access to the signed audit chain,
+/// enabling handlers to append cryptographically signed audit records.
+///
+/// # Example
+///
+/// ```ignore
+/// use axum::{Extension, response::IntoResponse};
+/// use barbican::audit::integrity::AuditChainExtension;
+///
+/// async fn protected_handler(
+///     audit: Extension<AuditChainExtension>,
+/// ) -> impl IntoResponse {
+///     // Log security event with cryptographic signature
+///     audit.append_event(
+///         "data.access",
+///         "user@example.com",
+///         "/api/sensitive",
+///         "GET",
+///         "success",
+///         "192.168.1.1",
+///         Some("Accessed sensitive data".to_string()),
+///     );
+///
+///     "OK"
+/// }
+/// ```
+#[derive(Clone)]
+pub struct AuditChainExtension {
+    chain: Arc<RwLock<AuditChain>>,
+}
+
+impl AuditChainExtension {
+    /// Create a new extension wrapping an audit chain.
+    pub fn new(chain: AuditChain) -> Self {
+        Self {
+            chain: Arc::new(RwLock::new(chain)),
+        }
+    }
+
+    /// Create from signing key with default configuration.
+    pub fn from_key(signing_key: &[u8]) -> Self {
+        let config = AuditIntegrityConfig::new(signing_key);
+        Self::new(AuditChain::new(config))
+    }
+
+    /// Create from signing key with compliance profile.
+    pub fn from_compliance(
+        signing_key: &[u8],
+        config: &crate::compliance::ComplianceConfig,
+    ) -> Self {
+        Self::new(AuditChain::from_compliance(signing_key, config))
+    }
+
+    /// Append a signed audit event to the chain.
+    ///
+    /// Returns the signed record, or None if the lock could not be acquired.
+    #[allow(clippy::too_many_arguments)]
+    pub fn append_event(
+        &self,
+        event_type: &str,
+        actor: &str,
+        resource: &str,
+        action: &str,
+        outcome: &str,
+        source_ip: &str,
+        details: Option<String>,
+    ) -> Option<SignedAuditRecord> {
+        self.chain
+            .write()
+            .ok()
+            .map(|mut chain| chain.append(event_type, actor, resource, action, outcome, source_ip, details))
+    }
+
+    /// Log an authentication event (login, logout, token refresh).
+    pub fn log_auth_event(
+        &self,
+        actor: &str,
+        action: &str,
+        outcome: &str,
+        source_ip: &str,
+        details: Option<String>,
+    ) -> Option<SignedAuditRecord> {
+        self.append_event("auth", actor, "/auth", action, outcome, source_ip, details)
+    }
+
+    /// Log a data access event.
+    pub fn log_data_access(
+        &self,
+        actor: &str,
+        resource: &str,
+        action: &str,
+        source_ip: &str,
+        details: Option<String>,
+    ) -> Option<SignedAuditRecord> {
+        self.append_event("data.access", actor, resource, action, "success", source_ip, details)
+    }
+
+    /// Log a security violation (failed auth, permission denied, etc).
+    pub fn log_security_violation(
+        &self,
+        actor: &str,
+        resource: &str,
+        violation_type: &str,
+        source_ip: &str,
+        details: Option<String>,
+    ) -> Option<SignedAuditRecord> {
+        self.append_event("security.violation", actor, resource, violation_type, "denied", source_ip, details)
+    }
+
+    /// Log a configuration change event.
+    pub fn log_config_change(
+        &self,
+        actor: &str,
+        resource: &str,
+        action: &str,
+        source_ip: &str,
+        details: Option<String>,
+    ) -> Option<SignedAuditRecord> {
+        self.append_event("config.change", actor, resource, action, "success", source_ip, details)
+    }
+
+    /// Verify the integrity of the audit chain.
+    ///
+    /// Returns None if the lock could not be acquired.
+    pub fn verify_integrity(&self) -> Option<ChainVerificationResult> {
+        self.chain
+            .read()
+            .ok()
+            .and_then(|chain| chain.verify_integrity().ok())
+    }
+
+    /// Get the number of records in the chain.
+    pub fn len(&self) -> usize {
+        self.chain.read().map(|c| c.len()).unwrap_or(0)
+    }
+
+    /// Check if the chain is empty.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Export the chain to JSON.
+    pub fn to_json(&self) -> Result<String, AuditIntegrityError> {
+        self.chain
+            .read()
+            .map_err(|_| AuditIntegrityError::Serialization("Lock poisoned".to_string()))
+            .and_then(|chain| chain.to_json())
+    }
+
+    /// Get the underlying Arc for sharing.
+    pub fn inner(&self) -> Arc<RwLock<AuditChain>> {
+        self.chain.clone()
+    }
+}
+
+impl std::fmt::Debug for AuditChainExtension {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AuditChainExtension")
+            .field("chain_len", &self.len())
+            .finish()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -852,5 +1023,160 @@ mod tests {
             errors: vec!["Test error".to_string()],
         };
         assert!(!result.is_valid());
+    }
+
+    // ========================================================================
+    // AuditChainExtension Tests
+    // ========================================================================
+
+    #[test]
+    fn test_extension_creation() {
+        let ext = AuditChainExtension::from_key(&test_key());
+        assert!(ext.is_empty());
+        assert_eq!(ext.len(), 0);
+    }
+
+    #[test]
+    fn test_extension_append_event() {
+        let ext = AuditChainExtension::from_key(&test_key());
+
+        let record = ext.append_event(
+            "test.event",
+            "user@example.com",
+            "/api/test",
+            "GET",
+            "success",
+            "192.168.1.1",
+            None,
+        );
+
+        assert!(record.is_some());
+        let record = record.unwrap();
+        assert_eq!(record.event_type, "test.event");
+        assert_eq!(record.actor, "user@example.com");
+        assert!(!record.signature.is_empty());
+        assert_eq!(ext.len(), 1);
+    }
+
+    #[test]
+    fn test_extension_log_auth_event() {
+        let ext = AuditChainExtension::from_key(&test_key());
+
+        let record = ext.log_auth_event(
+            "user@example.com",
+            "login",
+            "success",
+            "192.168.1.1",
+            Some("2FA verified".to_string()),
+        );
+
+        assert!(record.is_some());
+        let record = record.unwrap();
+        assert_eq!(record.event_type, "auth");
+        assert_eq!(record.action, "login");
+    }
+
+    #[test]
+    fn test_extension_log_data_access() {
+        let ext = AuditChainExtension::from_key(&test_key());
+
+        let record = ext.log_data_access(
+            "user@example.com",
+            "/api/users/123",
+            "read",
+            "192.168.1.1",
+            None,
+        );
+
+        assert!(record.is_some());
+        let record = record.unwrap();
+        assert_eq!(record.event_type, "data.access");
+        assert_eq!(record.resource, "/api/users/123");
+    }
+
+    #[test]
+    fn test_extension_log_security_violation() {
+        let ext = AuditChainExtension::from_key(&test_key());
+
+        let record = ext.log_security_violation(
+            "attacker@evil.com",
+            "/api/admin",
+            "unauthorized_access",
+            "10.0.0.1",
+            Some("Attempted admin access without permission".to_string()),
+        );
+
+        assert!(record.is_some());
+        let record = record.unwrap();
+        assert_eq!(record.event_type, "security.violation");
+        assert_eq!(record.outcome, "denied");
+    }
+
+    #[test]
+    fn test_extension_log_config_change() {
+        let ext = AuditChainExtension::from_key(&test_key());
+
+        let record = ext.log_config_change(
+            "admin@example.com",
+            "/config/security",
+            "update",
+            "192.168.1.100",
+            Some("Enabled MFA requirement".to_string()),
+        );
+
+        assert!(record.is_some());
+        let record = record.unwrap();
+        assert_eq!(record.event_type, "config.change");
+        assert_eq!(record.action, "update");
+    }
+
+    #[test]
+    fn test_extension_verify_integrity() {
+        let ext = AuditChainExtension::from_key(&test_key());
+
+        // Add some events
+        ext.log_auth_event("user1", "login", "success", "1.1.1.1", None);
+        ext.log_auth_event("user2", "login", "success", "2.2.2.2", None);
+        ext.log_auth_event("user1", "logout", "success", "1.1.1.1", None);
+
+        let result = ext.verify_integrity();
+        assert!(result.is_some());
+        let result = result.unwrap();
+        assert!(result.is_valid());
+        assert_eq!(result.records_verified, 3);
+    }
+
+    #[test]
+    fn test_extension_to_json() {
+        let ext = AuditChainExtension::from_key(&test_key());
+
+        ext.log_auth_event("user", "login", "success", "127.0.0.1", None);
+
+        let json = ext.to_json();
+        assert!(json.is_ok());
+        let json = json.unwrap();
+        assert!(json.contains("auth"));
+        assert!(json.contains("login"));
+    }
+
+    #[test]
+    fn test_extension_debug() {
+        let ext = AuditChainExtension::from_key(&test_key());
+        ext.log_auth_event("user", "login", "success", "127.0.0.1", None);
+
+        let debug_output = format!("{:?}", ext);
+        assert!(debug_output.contains("AuditChainExtension"));
+        assert!(debug_output.contains("chain_len"));
+    }
+
+    #[test]
+    fn test_extension_inner_clone() {
+        let ext = AuditChainExtension::from_key(&test_key());
+
+        ext.log_auth_event("user", "login", "success", "127.0.0.1", None);
+
+        let inner = ext.inner();
+        let chain = inner.read().unwrap();
+        assert_eq!(chain.len(), 1);
     }
 }
