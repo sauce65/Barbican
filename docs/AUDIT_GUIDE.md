@@ -10,10 +10,11 @@ A step-by-step guide for auditors assessing NIST SP 800-53 Rev 5 compliance of s
 4. [Phase 2: Automated Testing](#phase-2-automated-testing)
 5. [Phase 3: Configuration Verification](#phase-3-configuration-verification)
 6. [Phase 4: Control Family Audits](#phase-4-control-family-audits)
-7. [Phase 5: Evidence Collection](#phase-5-evidence-collection)
-8. [Phase 6: Report Generation](#phase-6-report-generation)
-9. [Control Reference](#control-reference)
-10. [Appendix](#appendix)
+7. [Phase 5: Production Runtime Verification](#phase-5-production-runtime-verification)
+8. [Phase 6: Evidence Collection](#phase-6-evidence-collection)
+9. [Phase 7: Report Generation](#phase-7-report-generation)
+10. [Control Reference](#control-reference)
+11. [Appendix](#appendix)
 
 ---
 
@@ -91,15 +92,25 @@ Phase 4: Control Family Audits
     └── Supply Chain Risk Management (SR)
           │
           ▼
-Phase 5: Evidence Collection
+Phase 5: Production Runtime Verification
+    │
+    ├── Verify FIPS cryptography active
+    ├── Test mTLS connections
+    ├── Verify firewall/egress filtering
+    ├── Test session timeouts
+    ├── Verify audit logging active
+    └── Check intrusion detection running
+          │
+          ▼
+Phase 6: Evidence Collection
     │
     ├── Export compliance artifacts
     ├── Export configuration files
-    ├── Collect log samples
-    └── Document production verification
+    ├── Collect production logs
+    └── Capture runtime state
           │
           ▼
-Phase 6: Report Generation
+Phase 7: Report Generation
     │
     ├── Complete control matrix
     ├── Document findings
@@ -168,48 +179,66 @@ cargo build --features "postgres,compliance-artifacts"
 - [ ] Build completed successfully
 - [ ] No compilation errors
 
-### Step 2.2: Run Control Tests
+### Step 2.2: Run Control Validation Tests
 
 ```bash
-# Run ALL control tests to generate artifacts
+# Run control validation tests
 cargo test --features compliance-artifacts control_test
 
 # Expected: All tests pass
 ```
 
+These tests validate that control implementations exist and function correctly.
+
+**Important:** This step validates the control code but does NOT write artifacts to disk.
+
 **Checklist:**
 - [ ] All control tests passed
 - [ ] Note any failures: ___________________
 
-### Step 2.3: Generate Compliance Report
+### Step 2.3: Generate Fresh Compliance Artifacts
+
+**Important:** You must generate fresh artifacts for each audit session. Do not rely on
+artifacts from previous runs.
 
 ```bash
-# Run full compliance test suite
-cargo test --features compliance-artifacts compliance_
+# Create artifacts directory if needed
+mkdir -p compliance-artifacts
 
-# View generated artifacts
-ls -la compliance-artifacts/
+# Generate fresh compliance report using the provided example
+cargo run --features compliance-artifacts --example generate_compliance_report -- --profile high
+
+# Alternative: Generate via Rust code
+# use barbican::compliance::control_tests::generate_compliance_report;
+# let report = generate_compliance_report();
+# report.write_to_file(Path::new("./compliance-artifacts"))?;
 ```
 
 **Checklist:**
-- [ ] Compliance report generated
+- [ ] New artifact file created (check timestamp matches current time)
 - [ ] Artifacts directory contains JSON files
 
-### Step 2.4: Review Compliance Artifact
+### Step 2.4: Verify Artifact Freshness and Review
 
 ```bash
-# Find the most recent compliance report
-ls -t compliance-artifacts/*.json | head -1
+# Verify the artifact was generated during THIS audit session
+ls -la compliance-artifacts/*.json
 
-# Review the report (replace with actual filename)
+# Check the generated_at timestamp inside the report
+cat compliance-artifacts/compliance_report_*.json | jq '.generated_at'
+
+# Review the summary
 cat compliance-artifacts/compliance_report_*.json | jq '.summary'
 ```
+
+**CRITICAL:** If the artifact timestamp predates this audit session, return to Step 2.3
+and regenerate. Stale artifacts are not valid audit evidence.
 
 **Expected output structure:**
 ```json
 {
-  "total_controls": 13,
-  "passed": 13,
+  "total_controls": 29,
+  "passed": 29,
   "failed": 0,
   "skipped": 0,
   "pass_rate": 100.0,
@@ -218,9 +247,9 @@ cat compliance-artifacts/compliance_report_*.json | jq '.summary'
 ```
 
 **Checklist:**
+- [ ] Artifact timestamp matches current audit session
 - [ ] Pass rate is 100% (or document failures)
-- [ ] All control families represented
-- [ ] Report timestamp is current
+- [ ] All control families represented (AC, AU, CM, IA, SC, SI)
 
 ### Step 2.5: Run Vulnerability Scan (SR-3)
 
@@ -746,9 +775,297 @@ ls -la Cargo.lock
 
 ---
 
-## Phase 5: Evidence Collection
+## Phase 5: Production Runtime Verification
 
-### Step 5.1: Export Compliance Artifacts
+This phase verifies that security controls are active on the **running production system**.
+Skip this phase only for development/staging audits; it is **mandatory for FedRAMP authorization**.
+
+### Prerequisites
+
+- [ ] SSH access to production system (or console access)
+- [ ] Application deployed via NixOS with barbican modules
+- [ ] Application binary built with production features (`--features fips` for FedRAMP High)
+- [ ] TLS certificates provisioned
+- [ ] Database running with client certificates (for FedRAMP High)
+
+### Step 5.1: Verify Build Configuration
+
+```bash
+# On the production system, verify the binary was built with FIPS support
+# Check for AWS-LC FIPS symbols
+nm /run/current-system/sw/bin/<app-name> 2>/dev/null | grep -i fips || \
+  ldd /run/current-system/sw/bin/<app-name> | grep -i aws-lc
+
+# Check the NixOS system configuration
+nixos-option barbican.securePostgres.enable
+nixos-option barbican.vmFirewall.enable
+nixos-option barbican.kernelHardening.enable
+```
+
+**For FedRAMP High, verify FIPS feature was enabled at build time:**
+```bash
+# The binary should link against aws-lc-fips, not standard crypto
+ldd /run/current-system/sw/bin/<app-name> | grep -E "(aws-lc|crypto)"
+```
+
+**Checklist:**
+- [ ] Binary contains FIPS crypto symbols (FedRAMP High)
+- [ ] All barbican NixOS modules enabled
+- [ ] Build matches `barbican.toml` profile
+
+### Step 5.2: Verify Services Running
+
+```bash
+# Check application service status
+systemctl status <app-name>.service
+
+# Check PostgreSQL with pgaudit
+systemctl status postgresql.service
+sudo -u postgres psql -c "SHOW shared_preload_libraries;" | grep pgaudit
+
+# Check intrusion detection services
+systemctl status aide-check.timer
+systemctl status auditd.service
+
+# Check all barbican-related services
+systemctl list-units --type=service | grep -E "(postgres|aide|audit|<app-name>)"
+```
+
+**Checklist:**
+- [ ] Application service running
+- [ ] PostgreSQL running with pgaudit loaded
+- [ ] AIDE timer active
+- [ ] auditd service running
+
+### Step 5.3: Verify TLS/mTLS Configuration (SC-8)
+
+```bash
+# Test TLS connection to the application
+openssl s_client -connect <host>:443 -servername <host> </dev/null 2>/dev/null | \
+  openssl x509 -noout -subject -issuer -dates
+
+# Verify TLS version (must be 1.2 or 1.3)
+openssl s_client -connect <host>:443 -tls1_2 </dev/null 2>&1 | grep -i "protocol"
+
+# For FedRAMP High: Test mTLS with client certificate
+openssl s_client -connect <host>:443 \
+  -cert /path/to/client.crt \
+  -key /path/to/client.key \
+  -CAfile /path/to/ca.crt \
+  </dev/null 2>&1 | grep -E "(Verify return|SSL-Session)"
+
+# Test that connections WITHOUT client cert are rejected (mTLS enforcement)
+openssl s_client -connect <host>:443 </dev/null 2>&1 | grep -i "error\|alert"
+```
+
+**Checklist:**
+- [ ] TLS 1.2 or 1.3 in use
+- [ ] Valid certificate chain
+- [ ] mTLS enforced (FedRAMP High) - connections without client cert rejected
+- [ ] Certificate not expired
+
+### Step 5.4: Verify Firewall and Egress Filtering (SC-7)
+
+```bash
+# View current firewall rules
+sudo iptables -L -n -v
+
+# Verify default DROP policy
+sudo iptables -L INPUT -n | head -1
+sudo iptables -L OUTPUT -n | head -1
+
+# Check egress filtering is active (FedRAMP High)
+sudo iptables -L OUTPUT -n -v | grep -E "(DROP|REJECT)"
+
+# Test egress filtering - this should FAIL on a properly configured system
+curl -s --connect-timeout 5 http://example.com && echo "FAIL: Egress not filtered" || echo "PASS: Egress filtered"
+
+# Verify only allowed ports are open
+sudo ss -tlnp | grep LISTEN
+```
+
+**Checklist:**
+- [ ] Default INPUT policy is DROP
+- [ ] Default OUTPUT policy is DROP (FedRAMP High)
+- [ ] Only expected ports listening
+- [ ] Egress filtering blocks unauthorized outbound (FedRAMP High)
+- [ ] Dropped packets are logged
+
+### Step 5.5: Verify Session Controls (AC-11, AC-12)
+
+```bash
+# Test idle timeout by creating a session and waiting
+# This requires an authenticated session - adjust for your auth mechanism
+
+# Example: Create session, wait for idle timeout, verify session invalid
+TOKEN=$(curl -s -X POST https://<host>/auth/login -d '{"user":"test","pass":"test"}' | jq -r '.token')
+echo "Session created, waiting for idle timeout (5 min for FedRAMP High)..."
+sleep 310  # 5 min + 10 sec buffer
+
+# Attempt to use the session - should fail
+curl -s -H "Authorization: Bearer $TOKEN" https://<host>/api/protected
+# Expected: 401 Unauthorized
+
+# Test max session lifetime similarly (10 min for FedRAMP High)
+```
+
+**Checklist:**
+- [ ] Idle timeout enforced (5 min for High, 10 min for Moderate)
+- [ ] Max session lifetime enforced (10 min for High, 15 min for Moderate)
+- [ ] Session invalidated after timeout
+
+### Step 5.6: Verify Login Lockout (AC-7)
+
+```bash
+# Test account lockout after failed attempts
+# WARNING: This will lock the test account
+
+for i in {1..4}; do
+  echo "Attempt $i:"
+  curl -s -X POST https://<host>/auth/login \
+    -H "Content-Type: application/json" \
+    -d '{"username":"testuser","password":"wrongpassword"}' | jq '.error'
+done
+
+# After 3 failures (FedRAMP Moderate/High), account should be locked
+# Verify the lockout duration (30 min for Moderate/High)
+
+# Check audit logs for lockout event
+sudo journalctl -u <app-name> --since "5 minutes ago" | grep -i "lockout\|locked"
+```
+
+**Checklist:**
+- [ ] Account locked after 3 failed attempts (Moderate/High) or 5 (Low)
+- [ ] Lockout event logged
+- [ ] Lockout duration correct (30 min for Moderate/High)
+
+### Step 5.7: Verify Audit Logging (AU-2, AU-3, AU-9)
+
+```bash
+# Check application audit logs are being generated
+sudo journalctl -u <app-name> --since "1 hour ago" -o json | head -5 | jq '.MESSAGE'
+
+# Verify PostgreSQL audit logs (pgaudit)
+sudo cat /var/log/postgresql/postgresql-*.log | grep -i "AUDIT" | tail -10
+
+# Check auditd is capturing system events
+sudo ausearch -ts recent -m USER_AUTH,USER_LOGIN | head -20
+
+# Verify log file permissions (AU-9)
+ls -la /var/log/postgresql/
+ls -la /var/log/audit/
+
+# Check audit log integrity (if HMAC chain is used)
+# This requires application-specific verification
+```
+
+**Checklist:**
+- [ ] Application audit logs being generated
+- [ ] PostgreSQL pgaudit logs present
+- [ ] auditd capturing authentication events
+- [ ] Log files have restrictive permissions (0600)
+- [ ] Logs contain required fields (timestamp, user, action, outcome)
+
+### Step 5.8: Verify Intrusion Detection (SI-4, SI-7)
+
+```bash
+# Check AIDE database exists and is current
+sudo ls -la /var/lib/aide/aide.db
+
+# Run AIDE check (may take several minutes)
+sudo aide --check 2>&1 | head -50
+
+# Verify auditd rules are loaded
+sudo auditctl -l | head -20
+
+# Check for recent auditd alerts
+sudo ausearch -ts today -m ANOM_PROMISCUOUS,ANOM_ABEND -i 2>/dev/null | head -10
+```
+
+**Checklist:**
+- [ ] AIDE database initialized
+- [ ] AIDE check runs without unexpected changes
+- [ ] auditd rules loaded
+- [ ] No anomalous events detected (or documented if present)
+
+### Step 5.9: Verify Resource Limits (SC-5, SC-6)
+
+```bash
+# Check systemd resource limits on the application
+systemctl show <app-name> | grep -E "(MemoryMax|CPUQuota|LimitNOFILE|LimitNPROC)"
+
+# Verify cgroup limits are enforced
+cat /sys/fs/cgroup/system.slice/<app-name>.service/memory.max
+cat /sys/fs/cgroup/system.slice/<app-name>.service/cpu.max
+
+# Check rate limiting is active (application level)
+# Attempt rapid requests - should be rate limited
+for i in {1..20}; do
+  curl -s -o /dev/null -w "%{http_code}\n" https://<host>/api/endpoint
+done | sort | uniq -c
+# Should see 429 (Too Many Requests) responses
+```
+
+**Checklist:**
+- [ ] Memory limits configured
+- [ ] CPU quota configured
+- [ ] Rate limiting active (429 responses under load)
+- [ ] Core dumps disabled
+
+### Step 5.10: Verify Cryptographic Protection (SC-13, SC-28)
+
+```bash
+# For FedRAMP High: Verify FIPS mode is active
+# This checks if the crypto library is running in FIPS mode
+
+# If using AWS-LC:
+# The application should log FIPS mode status at startup
+sudo journalctl -u <app-name> | grep -i "fips"
+
+# Verify database encryption at rest
+sudo -u postgres psql -c "SHOW ssl;"  # Should be 'on'
+sudo -u postgres psql -c "SELECT pg_read_file('/var/lib/postgresql/*/server.crt', 0, 100);" 2>/dev/null && \
+  echo "Certificate accessible"
+
+# Check disk encryption (if applicable)
+lsblk -o NAME,FSTYPE,MOUNTPOINT,ENCRYPTED
+```
+
+**Checklist:**
+- [ ] FIPS mode active (FedRAMP High) - verified in application logs
+- [ ] PostgreSQL SSL enabled
+- [ ] Field-level encryption active (if applicable)
+- [ ] Disk encryption enabled (if required by deployment)
+
+### Step 5.11: Kernel Hardening Verification (SI-16)
+
+```bash
+# Verify kernel hardening sysctls
+sysctl kernel.kptr_restrict          # Should be 1 or 2
+sysctl kernel.dmesg_restrict         # Should be 1
+sysctl kernel.perf_event_paranoid    # Should be 2 or 3
+sysctl net.ipv4.conf.all.rp_filter   # Should be 1
+sysctl net.ipv4.tcp_syncookies       # Should be 1
+
+# Check ASLR is enabled
+cat /proc/sys/kernel/randomize_va_space  # Should be 2
+
+# Verify no unnecessary kernel modules
+lsmod | wc -l  # Document count for baseline
+```
+
+**Checklist:**
+- [ ] Kernel pointer restriction enabled
+- [ ] dmesg restricted
+- [ ] ASLR fully enabled (value: 2)
+- [ ] SYN cookies enabled
+- [ ] Reverse path filtering enabled
+
+---
+
+## Phase 6: Evidence Collection
+
+### Step 6.1: Export Compliance Artifacts
 
 ```bash
 # Create evidence directory
@@ -761,7 +1078,7 @@ cp -r compliance-artifacts/ audit-evidence/$(date +%Y-%m-%d)/
 cargo audit --json > audit-evidence/$(date +%Y-%m-%d)/cargo-audit.json
 ```
 
-### Step 5.2: Export Configuration Evidence
+### Step 6.2: Export Configuration Evidence
 
 ```bash
 # Create configuration archive
@@ -775,26 +1092,66 @@ tar czf audit-evidence/$(date +%Y-%m-%d)/config-evidence.tar.gz \
     nix/generated/
 ```
 
-### Step 5.3: Collect Production Evidence (if applicable)
+### Step 6.3: Collect Production Runtime Evidence
+
+Run these commands on the production system to collect evidence from Phase 5 verification:
 
 ```bash
-# Export audit logs (on production system)
-journalctl -u <service-name>.service --since "7 days ago" -o json > audit_logs.json
+# Create evidence directory on production system
+mkdir -p /tmp/audit-evidence
 
-# Export PostgreSQL logs
-cat /var/log/postgresql/*.log > postgres_audit.log
+# === Service Status ===
+systemctl status <app-name>.service > /tmp/audit-evidence/service_status.txt
+systemctl status postgresql.service >> /tmp/audit-evidence/service_status.txt
+systemctl status auditd.service >> /tmp/audit-evidence/service_status.txt
 
-# Export firewall state
-iptables -L -n -v > firewall_rules.txt
+# === Application Audit Logs ===
+journalctl -u <app-name>.service --since "7 days ago" -o json > /tmp/audit-evidence/app_audit_logs.json
 
-# Export AIDE report
-aide --check > aide_report.txt
+# === PostgreSQL Audit Logs (pgaudit) ===
+cp /var/log/postgresql/*.log /tmp/audit-evidence/ 2>/dev/null || \
+  sudo -u postgres psql -c "SELECT * FROM pg_catalog.pg_stat_activity;" > /tmp/audit-evidence/pg_activity.txt
 
-# Collect systemd hardening evidence
-systemctl show <service-name> | grep -E "(Capability|Private|NoNew|Protect)" > systemd_hardening.txt
+# === Firewall Configuration ===
+sudo iptables -L -n -v > /tmp/audit-evidence/firewall_rules.txt
+sudo iptables-save > /tmp/audit-evidence/firewall_rules_full.txt
+
+# === AIDE Integrity Report ===
+sudo aide --check > /tmp/audit-evidence/aide_report.txt 2>&1
+
+# === Kernel Hardening State ===
+sysctl -a 2>/dev/null | grep -E "^(kernel\.|net\.ipv4\.)" > /tmp/audit-evidence/sysctl_settings.txt
+
+# === Systemd Hardening ===
+systemctl show <app-name> | grep -E "(Capability|Private|NoNew|Protect|Memory|CPU)" > /tmp/audit-evidence/systemd_hardening.txt
+
+# === TLS Certificate Info ===
+openssl s_client -connect localhost:443 </dev/null 2>/dev/null | \
+  openssl x509 -noout -text > /tmp/audit-evidence/tls_certificate.txt
+
+# === auditd Rules and Recent Events ===
+sudo auditctl -l > /tmp/audit-evidence/auditd_rules.txt
+sudo ausearch -ts recent -m USER_AUTH,USER_LOGIN > /tmp/audit-evidence/auditd_auth_events.txt 2>&1
+
+# === FIPS Mode Verification (FedRAMP High) ===
+journalctl -u <app-name> | grep -i fips > /tmp/audit-evidence/fips_verification.txt
+ldd /run/current-system/sw/bin/<app-name> > /tmp/audit-evidence/binary_libraries.txt
+
+# === Resource Limits ===
+cat /sys/fs/cgroup/system.slice/<app-name>.service/memory.max > /tmp/audit-evidence/cgroup_memory.txt 2>/dev/null
+cat /sys/fs/cgroup/system.slice/<app-name>.service/cpu.max > /tmp/audit-evidence/cgroup_cpu.txt 2>/dev/null
+
+# === Create Archive ===
+tar czf /tmp/production-evidence.tar.gz -C /tmp audit-evidence/
+echo "Evidence collected: /tmp/production-evidence.tar.gz"
 ```
 
-### Step 5.4: Evidence Manifest
+**Transfer evidence to audit workstation:**
+```bash
+scp production-host:/tmp/production-evidence.tar.gz audit-evidence/$(date +%Y-%m-%d)/
+```
+
+### Step 6.4: Evidence Manifest
 
 Create `audit-evidence/$(date +%Y-%m-%d)/MANIFEST.md`:
 
@@ -805,22 +1162,44 @@ Create `audit-evidence/$(date +%Y-%m-%d)/MANIFEST.md`:
 **Auditor:** Name
 **Target Profile:** FedRAMP [Low/Moderate/High]
 **Application:** [name from barbican.toml]
+**Production Host:** [hostname]
 
-## Artifacts Collected
+## Code/Configuration Evidence
 
 | File | Description | Hash (SHA256) |
 |------|-------------|---------------|
-| compliance-artifacts/*.json | Automated test results | |
+| compliance-artifacts/*.json | Automated control test results | |
 | cargo-audit.json | Dependency vulnerability scan | |
-| config-evidence.tar.gz | Configuration files | |
-| audit_logs.json | Application audit logs | |
-| firewall_rules.txt | Firewall configuration | |
-| aide_report.txt | File integrity report | |
+| config-evidence.tar.gz | barbican.toml, generated configs | |
+
+## Production Runtime Evidence
+
+| File | Description | Hash (SHA256) |
+|------|-------------|---------------|
+| service_status.txt | systemd service states | |
+| app_audit_logs.json | Application audit events | |
+| firewall_rules.txt | iptables configuration | |
+| aide_report.txt | File integrity verification | |
+| sysctl_settings.txt | Kernel hardening parameters | |
+| systemd_hardening.txt | Process isolation settings | |
+| tls_certificate.txt | TLS certificate details | |
+| auditd_rules.txt | System audit rules | |
+| auditd_auth_events.txt | Authentication audit events | |
+| fips_verification.txt | FIPS mode confirmation (High only) | |
+| binary_libraries.txt | Linked crypto libraries | |
+| cgroup_memory.txt | Memory limit configuration | |
+| cgroup_cpu.txt | CPU quota configuration | |
+
+## Verification Summary
+
+- [ ] All Phase 5 production verification steps completed
+- [ ] Evidence files integrity verified (SHA256 hashes recorded)
+- [ ] Evidence transferred securely from production
 ```
 
 ---
 
-## Phase 6: Report Generation
+## Phase 7: Report Generation
 
 ### Audit Summary Template
 
@@ -857,6 +1236,39 @@ Create `audit-evidence/$(date +%Y-%m-%d)/MANIFEST.md`:
 - [ ] barbican.toml matches profile requirements
 - [ ] Generated Rust config matches barbican.toml
 - [ ] Generated NixOS config matches barbican.toml
+
+## Production Runtime Verification
+
+**Production Host:** [hostname]
+**Verification Date:** YYYY-MM-DD
+
+### Build Verification
+- [ ] Binary built with correct features (fips for High)
+- [ ] All barbican NixOS modules enabled
+
+### Service Status
+- [ ] Application service running
+- [ ] PostgreSQL with pgaudit running
+- [ ] AIDE timer active
+- [ ] auditd service running
+
+### Network Security
+- [ ] TLS 1.2+ verified
+- [ ] mTLS enforced (High only)
+- [ ] Firewall default DROP policy
+- [ ] Egress filtering active (High only)
+
+### Runtime Controls
+- [ ] Session idle timeout verified
+- [ ] Login lockout verified
+- [ ] Rate limiting active
+- [ ] Audit logs being generated
+
+### System Hardening
+- [ ] Kernel hardening sysctls applied
+- [ ] ASLR enabled
+- [ ] Resource limits enforced
+- [ ] FIPS mode active (High only)
 
 ## Findings
 
@@ -943,8 +1355,12 @@ Reviewer: ______________________ Date: _________
 # Full audit command sequence
 cargo build --features "postgres,compliance-artifacts"
 cargo test --features compliance-artifacts control_test
-cargo test --features compliance-artifacts compliance_
+cargo run --features compliance-artifacts --example generate_compliance_report -- --profile high
 cargo audit
+
+# Verify artifact freshness (must match audit session time)
+ls -la compliance-artifacts/*.json
+cat compliance-artifacts/*.json | jq '.generated_at'
 
 # View latest compliance report summary
 cat compliance-artifacts/*.json | jq '.summary'
