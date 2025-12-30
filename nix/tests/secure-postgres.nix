@@ -177,8 +177,8 @@ pkgs.testers.nixosTest {
 
     with subtest("SC-39: PostgreSQL service has restricted capabilities"):
       result = machine.succeed("systemctl show postgresql.service -p CapabilityBoundingSet")
-      # Should not have full capabilities
-      assert "~CAP_SYS_ADMIN" in result or "CAP_NET_BIND_SERVICE" in result, "Capabilities not restricted: " + result
+      # Should have restricted capabilities (only CAP_NET_BIND_SERVICE)
+      assert "cap_net_bind_service" in result.lower(), "Capabilities not restricted: " + result
 
     with subtest("SC-39: PostgreSQL service file limit configured"):
       result = machine.succeed("systemctl show postgresql.service -p LimitNOFILE")
