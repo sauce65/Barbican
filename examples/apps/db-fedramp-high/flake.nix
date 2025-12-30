@@ -36,9 +36,11 @@
 
       shellHook = ''
         export PGDATA="$PWD/.pgdata"
-        export PGHOST="$PWD/.pgdata"
-        export PGSSLMODE="require"
-        export DATABASE_URL="postgres:///fedramp_high?host=$PGDATA&sslmode=require"
+        export PGHOST="localhost"
+        export PGPORT="5433"
+        export PGSSLMODE="verify-full"
+        export PGSSLROOTCERT="$PGDATA/certs/fedramp-high-ca.pem"
+        export DATABASE_URL="postgres://localhost:5433/fedramp_high?sslmode=verify-full&sslrootcert=$PGDATA/certs/fedramp-high-ca.pem"
         export ENCRYPTION_KEY=$(openssl rand -hex 32)
         export AUDIT_SIGNING_KEY=$(openssl rand -hex 32)
 
@@ -59,10 +61,11 @@
           cp "$PGDATA/certs/fedramp-high-ca.pem" "$PGDATA/root.crt"
           chmod 600 "$PGDATA/server.key"
 
-          # Configure PostgreSQL for TLS with strict settings (SC-8)
+          # Configure PostgreSQL for TLS with strict settings (SC-8) - TCP with TLS
           cat >> "$PGDATA/postgresql.conf" << EOF
+listen_addresses = 'localhost'
+port = 5433
 unix_socket_directories = '$PGDATA'
-listen_addresses = '''
 ssl = on
 ssl_cert_file = 'server.crt'
 ssl_key_file = 'server.key'
@@ -70,22 +73,29 @@ ssl_ca_file = 'root.crt'
 ssl_min_protocol_version = 'TLSv1.3'
 ssl_ciphers = 'HIGH:!aNULL:!MD5:!3DES:!DES:!RC4:!SHA1'
 EOF
+          # Configure pg_hba.conf to require SSL for TCP connections
+          cat > "$PGDATA/pg_hba.conf" << EOF
+# TYPE  DATABASE        USER            ADDRESS                 METHOD
+local   all             all                                     trust
+hostssl all             all             127.0.0.1/32            trust
+hostssl all             all             ::1/128                 trust
+EOF
         fi
 
         if ! pg_ctl status -D "$PGDATA" > /dev/null 2>&1; then
-          pg_ctl start -D "$PGDATA" -l "$PGDATA/postgresql.log" -o "-k $PGDATA"
+          pg_ctl start -D "$PGDATA" -l "$PGDATA/postgresql.log"
           sleep 1
         fi
 
-        if ! psql -lqt | cut -d \| -f 1 | grep -qw fedramp_high; then
-          createdb fedramp_high
+        if ! psql -h localhost -p 5433 -lqt | cut -d \| -f 1 | grep -qw fedramp_high; then
+          createdb -h localhost -p 5433 fedramp_high
         fi
 
-        psql fedramp_high -f schema.sql 2>/dev/null || true
+        psql -h localhost -p 5433 fedramp_high -f schema.sql 2>/dev/null || true
 
         # Verify TLS is working
-        SSL_STATUS=$(psql -c "SHOW ssl" -t fedramp_high 2>/dev/null | tr -d ' ')
-        TLS_VERSION=$(psql -c "SHOW ssl_min_protocol_version" -t fedramp_high 2>/dev/null | tr -d ' ')
+        SSL_STATUS=$(psql -h localhost -p 5433 -c "SHOW ssl" -t fedramp_high 2>/dev/null | tr -d ' ')
+        TLS_VERSION=$(psql -h localhost -p 5433 -c "SHOW ssl_min_protocol_version" -t fedramp_high 2>/dev/null | tr -d ' ')
 
         echo ""
         echo "FedRAMP HIGH Baseline Example"
