@@ -4,7 +4,7 @@
 
 with lib;
 
-{
+rec {
   # Generate OpenSSL commands for a CA
   mkCAScript = { name, days ? 3650, keySize ? 4096, algorithm ? "secp384r1" }:
     if algorithm == "rsa" then ''

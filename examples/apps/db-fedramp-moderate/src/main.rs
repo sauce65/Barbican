@@ -43,7 +43,7 @@ use uuid::Uuid;
 fn create_database_config(database_url: &str) -> barbican::DatabaseConfig {
     barbican::DatabaseConfig::builder(database_url)
         .application_name("fedramp-moderate-example")
-        // TLS required at Moderate baseline
+        // TLS required at Moderate baseline (SC-8)
         .ssl_mode(barbican::SslMode::Require)
         // Reasonable pool size
         .max_connections(20)
@@ -191,7 +191,7 @@ async fn log_audit(pool: &PgPool, record: AuditRecord) {
 
 /// Check if a session is valid according to policy
 fn check_session(policy: &SessionPolicy, session: &SessionState) -> bool {
-    !policy.should_terminate(session)
+    !policy.should_terminate(session).should_terminate()
 }
 
 /// Update session activity timestamp

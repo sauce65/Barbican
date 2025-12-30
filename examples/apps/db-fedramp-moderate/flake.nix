@@ -9,6 +9,20 @@
   outputs = { self, nixpkgs, barbican }: let
     system = "x86_64-linux";
     pkgs = nixpkgs.legacyPackages.${system};
+
+    # Use Barbican's PKI library for certificate generation
+    pkiLib = barbican.lib.pki;
+
+    # Generate PKI setup script using Barbican's helpers
+    pkiSetupScript = pkiLib.mkPKISetupScript {
+      name = "fedramp-moderate";
+      servers = [{
+        name = "postgres";
+        commonName = "localhost";
+        sans = [ "localhost" "127.0.0.1" ];
+      }];
+      outputDir = ".";
+    };
   in {
     devShells.${system}.default = pkgs.mkShell {
       buildInputs = with pkgs; [
@@ -18,14 +32,36 @@
       shellHook = ''
         export PGDATA="$PWD/.pgdata"
         export PGHOST="$PWD/.pgdata"
-        export DATABASE_URL="postgres:///fedramp_moderate?host=$PGDATA"
+        export PGSSLMODE="require"
+        export DATABASE_URL="postgres:///fedramp_moderate?host=$PGDATA&sslmode=require"
         export ENCRYPTION_KEY=$(openssl rand -hex 32)
 
         if [ ! -d "$PGDATA" ]; then
           echo "Initializing PostgreSQL..."
           initdb -D "$PGDATA" --no-locale --encoding=UTF8
-          echo "unix_socket_directories = '$PGDATA'" >> "$PGDATA/postgresql.conf"
-          echo "listen_addresses = '''" >> "$PGDATA/postgresql.conf"
+
+          # Generate PKI using Barbican's PKI library (SC-8, SC-17)
+          echo "Generating PKI using Barbican..."
+          mkdir -p "$PGDATA/certs"
+          pushd "$PGDATA/certs" > /dev/null
+          ${pkiSetupScript}
+          popd > /dev/null
+
+          # Copy certs to PostgreSQL data directory
+          cp "$PGDATA/certs/postgres.pem" "$PGDATA/server.crt"
+          cp "$PGDATA/certs/postgres-key.pem" "$PGDATA/server.key"
+          chmod 600 "$PGDATA/server.key"
+
+          # Configure PostgreSQL for TLS (SC-8)
+          cat >> "$PGDATA/postgresql.conf" << EOF
+unix_socket_directories = '$PGDATA'
+listen_addresses = '''
+ssl = on
+ssl_cert_file = 'server.crt'
+ssl_key_file = 'server.key'
+ssl_min_protocol_version = 'TLSv1.2'
+ssl_ciphers = 'HIGH:!aNULL:!MD5:!3DES:!DES:!RC4'
+EOF
         fi
 
         if ! pg_ctl status -D "$PGDATA" > /dev/null 2>&1; then
@@ -39,13 +75,18 @@
 
         psql fedramp_moderate -f schema.sql 2>/dev/null || true
 
+        # Verify TLS is working
+        SSL_STATUS=$(psql -c "SHOW ssl" -t fedramp_moderate 2>/dev/null | tr -d ' ')
+
         echo ""
         echo "FedRAMP MODERATE Baseline Example"
         echo "=================================="
-        echo "Controls: SC-8, SC-28, AU-2/3/9, AC-3/6/11/12"
+        echo "Controls: SC-8 (TLS), SC-17 (PKI), SC-28, AU-2/3/9, AC-3/6/11/12"
         echo ""
         echo "DATABASE_URL=$DATABASE_URL"
         echo "ENCRYPTION_KEY=[generated]"
+        echo "PostgreSQL TLS: $SSL_STATUS"
+        echo "PKI: Barbican-generated EC certificates (secp384r1)"
         echo ""
         echo "Commands:"
         echo "  cargo run    # Start server on :3000"
