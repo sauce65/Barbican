@@ -1,79 +1,82 @@
 # db-minimal: Secure PostgreSQL with Barbican
 
-A minimal example demonstrating how to build a secure application with Barbican's PostgreSQL and field-level encryption features.
+A minimal example demonstrating how to build a secure application using Barbican's NixOS modules and field-level encryption.
 
-## What This Example Shows
+## What This Demonstrates
 
-- **Secure Database Connections**: TLS/mTLS with connection pooling and timeouts
-- **Field-Level Encryption**: Transparent encryption of sensitive data (PII) before storage
-- **Sensitive vs Non-Sensitive Data**: Clear separation of encrypted and plaintext fields
-- **CRUD Operations**: Complete API for users and documents
-- **Audit Logging**: Compliance-ready audit trail (AU-2, AU-3)
+- **Nix-first workflow**: Database spun up via flake, compile-time SQL checking
+- **Barbican integration**: `securePostgres` module for hardened PostgreSQL
+- **Field-level encryption**: AES-256-GCM encryption for PII fields
+- **NIST 800-53 controls**: SC-8, SC-28, AU-2, AU-3, SC-39
+
+## Quick Start
+
+```bash
+# Enter development shell (starts PostgreSQL automatically)
+nix develop
+
+# Set encryption key (or let it auto-generate for dev)
+export ENCRYPTION_KEY=$(openssl rand -hex 32)
+
+# Build and run
+cargo build   # Compile-time SQL validation
+cargo run     # Start server on :3000
+```
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                        Application                               │
-├─────────────────────────────────────────────────────────────────┤
-│  ┌─────────────┐    ┌─────────────────┐    ┌─────────────────┐ │
-│  │   Axum      │    │  FieldEncryptor │    │  DatabaseConfig │ │
-│  │   Router    │    │  (AES-256-GCM)  │    │  (TLS/mTLS)     │ │
-│  └──────┬──────┘    └────────┬────────┘    └────────┬────────┘ │
-│         │                    │                      │           │
-│         ▼                    ▼                      ▼           │
-│  ┌─────────────────────────────────────────────────────────────┐│
-│  │                    Repository Layer                          ││
-│  │  - Encrypt sensitive fields before INSERT                   ││
-│  │  - Decrypt sensitive fields after SELECT                    ││
-│  │  - Non-sensitive fields stored as plaintext                 ││
-│  └─────────────────────────────────────────────────────────────┘│
+│  nix develop                                                     │
+│  ├── Starts PostgreSQL with schema                              │
+│  ├── Sets DATABASE_URL                                          │
+│  └── Enables compile-time sqlx::query! checking                 │
 └─────────────────────────────────────────────────────────────────┘
                               │
-                              ▼ (TLS encrypted connection)
 ┌─────────────────────────────────────────────────────────────────┐
-│                       PostgreSQL                                 │
-│  ┌─────────────────────────────────────────────────────────────┐│
-│  │  users table                                                 ││
-│  │  ├── id, username, display_name (plaintext)                 ││
-│  │  └── email_encrypted, phone_encrypted, ssn_encrypted        ││
-│  └─────────────────────────────────────────────────────────────┘│
+│  Application (src/main.rs)                                       │
+│  ├── DatabaseConfig::builder() → secure connection              │
+│  ├── FieldEncryptor → AES-256-GCM for PII                       │
+│  └── sqlx::query!() → compile-time checked SQL                  │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+┌─────────────────────────────────────────────────────────────────┐
+│  PostgreSQL (via nix develop or barbican.securePostgres)        │
+│  ├── users (email_encrypted, phone_encrypted, ssn_encrypted)    │
+│  ├── documents (content_encrypted)                              │
+│  └── audit_log                                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-## Prerequisites
+## Development Workflow
 
-- PostgreSQL 14+ with SSL enabled
-- Rust 1.75+
-- Barbican library
-
-## Quick Start
-
-### 1. Create the Database
+### 1. Enter the dev shell
 
 ```bash
-createdb dbminimal
+nix develop
 ```
 
-### 2. Set Environment Variables
+This automatically:
+- Starts a local PostgreSQL instance
+- Creates the `dbminimal` database
+- Applies the schema from `schema.sql`
+- Sets `DATABASE_URL` for sqlx compile-time checking
+
+### 2. Build with compile-time SQL validation
 
 ```bash
-# Required: Database connection
-export DATABASE_URL="postgres://localhost/dbminimal"
-
-# Required for production: 256-bit encryption key (hex-encoded)
-# Generate with: openssl rand -hex 32
-export ENCRYPTION_KEY="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-
-# Optional: For production, use SSL
-# export DATABASE_URL="postgres://user:pass@host/db?sslmode=verify-full"
-# export DB_SSL_ROOT_CERT="/path/to/ca.crt"
+cargo build
 ```
 
-### 3. Run the Application
+The `sqlx::query!` macros connect to the database at compile time to:
+- Validate SQL syntax
+- Check column names and types
+- Generate type-safe Rust bindings
+
+### 3. Run the application
 
 ```bash
-cd examples/apps/db-minimal
+export ENCRYPTION_KEY=$(openssl rand -hex 32)
 cargo run
 ```
 
@@ -83,172 +86,137 @@ cargo run
 # Health check
 curl http://localhost:3000/health
 
-# Create a user (sensitive data will be encrypted)
+# Create user (email/phone/ssn encrypted before storage)
 curl -X POST http://localhost:3000/users \
   -H "Content-Type: application/json" \
   -d '{
-    "username": "johndoe",
-    "display_name": "John Doe",
-    "email": "john@example.com",
-    "phone": "+1-555-0123",
+    "username": "alice",
+    "email": "alice@example.com",
+    "phone": "+1-555-0100",
     "ssn": "123-45-6789"
   }'
 
-# List users (sensitive data decrypted for response)
+# List users (decrypted in response, SSN never returned)
 curl http://localhost:3000/users
 
-# Get a specific user
-curl http://localhost:3000/users/<user-id>
-
-# Update a user
-curl -X PUT http://localhost:3000/users/<user-id> \
+# Create encrypted document
+curl -X POST http://localhost:3000/users/<id>/documents \
   -H "Content-Type: application/json" \
-  -d '{"email": "newemail@example.com"}'
-
-# Create a document (content encrypted)
-curl -X POST http://localhost:3000/users/<user-id>/documents \
-  -H "Content-Type: application/json" \
-  -d '{
-    "title": "Medical Record",
-    "content": "Patient shows signs of improvement..."
-  }'
-
-# List user documents
-curl http://localhost:3000/users/<user-id>/documents
+  -d '{"title": "Medical Record", "content": "Patient data..."}'
 ```
 
-## Key Concepts
+## Production Deployment
 
-### Sensitive vs Non-Sensitive Data
+### NixOS Module
 
-| Field Type | Storage | Example Fields |
-|------------|---------|----------------|
-| Non-sensitive | Plaintext | username, display_name, created_at |
-| Sensitive (PII) | Encrypted | email, phone, SSN |
-| Highly Sensitive | Encrypted, never returned | SSN (in API responses) |
+Add to your `flake.nix`:
 
-### Field-Level Encryption
+```nix
+{
+  inputs.db-minimal.url = "github:sauce65/Barbican?dir=examples/apps/db-minimal";
 
-```rust
-// Encrypt before storage
-let email_encrypted = encryptor.encrypt_string(&email)?;
-sqlx::query!("INSERT INTO users (email_encrypted) VALUES ($1)", email_encrypted);
-
-// Decrypt after retrieval
-let row = sqlx::query!("SELECT email_encrypted FROM users WHERE id = $1", id);
-let email = encryptor.decrypt_string(&row.email_encrypted)?;
-```
-
-Each encryption produces unique ciphertext (random nonces), preventing pattern analysis.
-
-### Database Security
-
-```rust
-let db_config = DatabaseConfig::builder(&database_url)
-    .application_name("db-minimal")
-    .ssl_mode(SslMode::VerifyFull)      // TLS with cert verification
-    .max_connections(5)                  // Connection pool limits
-    .statement_timeout(Duration::from_secs(30))  // Query timeout
-    .build();
-```
-
-## NIST 800-53 Controls Demonstrated
-
-| Control | Description | Implementation |
-|---------|-------------|----------------|
-| SC-8 | Transmission Confidentiality | TLS database connections |
-| SC-28 | Protection at Rest | Field-level AES-256-GCM encryption |
-| SC-13 | Cryptographic Protection | NIST-approved algorithms |
-| AU-2 | Audit Events | Audit log table |
-| AU-3 | Content of Audit Records | Actor, action, resource, timestamp |
-
-## Production Considerations
-
-### Encryption Key Management
-
-```bash
-# Generate a secure key
-openssl rand -hex 32
-
-# Store in a secrets manager (AWS Secrets Manager, Vault, etc.)
-# Never commit keys to version control!
-```
-
-### Database SSL
-
-```bash
-# For production, use verify-full mode
-export DATABASE_URL="postgres://user:pass@host/db?sslmode=verify-full"
-export DB_SSL_ROOT_CERT="/etc/ssl/certs/ca.crt"
-
-# For mTLS (client certificate authentication)
-export DB_SSL_CERT="/etc/ssl/certs/client.crt"
-export DB_SSL_KEY="/etc/ssl/private/client.key"
-```
-
-### Key Rotation
-
-When rotating encryption keys:
-
-1. Add new key to configuration
-2. Re-encrypt all sensitive fields with new key
-3. Remove old key after migration
-
-```rust
-// Re-encryption pseudocode
-let old_encryptor = FieldEncryptor::new(&old_key)?;
-let new_encryptor = FieldEncryptor::new(&new_key)?;
-
-for user in users {
-    let email = old_encryptor.decrypt_string(&user.email_encrypted)?;
-    let new_encrypted = new_encryptor.encrypt_string(&email)?;
-    update_user(user.id, new_encrypted).await?;
+  outputs = { self, nixpkgs, db-minimal, ... }: {
+    nixosConfigurations.myserver = nixpkgs.lib.nixosSystem {
+      modules = [
+        db-minimal.nixosModules.default
+        # Your other modules...
+      ];
+    };
+  };
 }
+```
+
+This enables:
+- `barbican.securePostgres` - Hardened PostgreSQL with:
+  - TLS encryption (SC-8)
+  - scram-sha-256 authentication
+  - pgaudit logging (AU-2)
+  - Process isolation (SC-39)
+- `barbican.databaseBackup` - Encrypted backups with:
+  - age encryption (SC-28)
+  - S3/rclone offsite transport (MP-5)
+
+### Environment Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `DATABASE_URL` | Yes | PostgreSQL connection string |
+| `ENCRYPTION_KEY` | Yes (prod) | 64 hex chars (256-bit key) |
+
+Generate a production key:
+```bash
+openssl rand -hex 32
+```
+
+## Security Controls
+
+| Control | Implementation |
+|---------|----------------|
+| SC-8 | TLS database connections via `DatabaseConfig` |
+| SC-28 | Field-level AES-256-GCM encryption |
+| SC-13 | NIST-approved cryptography (FIPS optional) |
+| SC-39 | systemd process isolation |
+| AU-2 | pgaudit + application audit_log table |
+| AU-3 | Actor, action, resource, timestamp in audit records |
+
+## Schema
+
+```sql
+-- Sensitive fields stored encrypted
+CREATE TABLE users (
+    id UUID PRIMARY KEY,
+    username VARCHAR(255) NOT NULL UNIQUE,
+    display_name VARCHAR(255),
+    email_encrypted TEXT NOT NULL,     -- PII: encrypted
+    phone_encrypted TEXT,              -- PII: encrypted
+    ssn_encrypted TEXT,                -- Highly sensitive: encrypted, never returned
+    created_at TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ
+);
+
+-- Document content encrypted
+CREATE TABLE documents (
+    id UUID PRIMARY KEY,
+    user_id UUID REFERENCES users(id),
+    title VARCHAR(255) NOT NULL,
+    content_encrypted TEXT NOT NULL,   -- Encrypted
+    ...
+);
+
+-- Audit trail (plaintext metadata)
+CREATE TABLE audit_log (
+    id UUID PRIMARY KEY,
+    timestamp TIMESTAMPTZ,
+    actor VARCHAR(255),
+    action VARCHAR(50),
+    resource_type VARCHAR(50),
+    resource_id UUID,
+    details JSONB
+);
 ```
 
 ## API Reference
 
-### Endpoints
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/health` | Health check |
+| GET | `/users` | List users |
+| POST | `/users` | Create user |
+| GET | `/users/{id}` | Get user |
+| PUT | `/users/{id}` | Update user |
+| DELETE | `/users/{id}` | Delete user |
+| GET | `/users/{id}/documents` | List user's documents |
+| POST | `/users/{id}/documents` | Create document |
+| GET | `/documents/{id}` | Get document |
 
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | /health | Health check with DB and encryption status |
-| GET | /users | List all users |
-| POST | /users | Create a user |
-| GET | /users/:id | Get a user by ID |
-| PUT | /users/:id | Update a user |
-| DELETE | /users/:id | Delete a user |
-| GET | /users/:id/documents | List user's documents |
-| POST | /users/:id/documents | Create a document |
-| GET | /documents/:id | Get a document by ID |
+## Files
 
-### Health Response
-
-```json
-{
-  "status": "healthy",
-  "database_connected": true,
-  "database_ssl": true,
-  "encryption_available": true
-}
 ```
-
-### User Object
-
-```json
-{
-  "id": "550e8400-e29b-41d4-a716-446655440000",
-  "username": "johndoe",
-  "display_name": "John Doe",
-  "email": "john@example.com",
-  "phone": "+1-555-0123",
-  "created_at": "2024-01-15T10:30:00Z",
-  "updated_at": "2024-01-15T10:30:00Z"
-}
+db-minimal/
+├── flake.nix      # Nix flake with devShell and NixOS module
+├── Cargo.toml     # Rust dependencies
+├── schema.sql     # Database schema
+├── src/
+│   └── main.rs    # Application code with sqlx::query!
+└── README.md
 ```
-
-Note: SSN is never returned in API responses even though it's stored encrypted.
-
-## License
-
-MIT - See Barbican license for details.

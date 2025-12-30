@@ -1,22 +1,29 @@
 //! Barbican db-minimal Example
 //!
-//! This example demonstrates how to build a secure application with Barbican's
-//! PostgreSQL and encryption features. It shows:
+//! Demonstrates secure PostgreSQL with Barbican's NixOS modules and field-level
+//! encryption. Uses compile-time checked SQL queries via sqlx.
 //!
-//! - Secure database connection with TLS/mTLS
-//! - Field-level encryption for sensitive data (PII)
-//! - CRUD operations with proper security practices
-//! - Audit logging for compliance
-//!
-//! # Running
+//! # Development Setup
 //!
 //! ```bash
-//! # Set required environment variables
-//! export DATABASE_URL="postgres://user:pass@localhost/dbminimal"
+//! # Enter development shell (starts PostgreSQL automatically)
+//! nix develop
+//!
+//! # Set encryption key
 //! export ENCRYPTION_KEY=$(openssl rand -hex 32)
 //!
 //! # Run the application
 //! cargo run
+//! ```
+//!
+//! # Production Deployment
+//!
+//! Import the flake module in your NixOS configuration:
+//!
+//! ```nix
+//! {
+//!   imports = [ db-minimal.nixosModules.default ];
+//! }
 //! ```
 
 use std::sync::Arc;
@@ -31,7 +38,7 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::{FromRow, PgPool};
+use sqlx::PgPool;
 use tracing::{error, info, instrument, warn};
 use uuid::Uuid;
 
@@ -51,18 +58,6 @@ struct AppState {
 // ============================================================================
 // Domain Models
 // ============================================================================
-
-/// Database row for users (with encrypted fields as stored)
-#[derive(Debug, FromRow)]
-struct UserRow {
-    id: Uuid,
-    username: String,
-    display_name: Option<String>,
-    email_encrypted: String,
-    phone_encrypted: Option<String>,
-    created_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
-}
 
 /// User with sensitive fields decrypted (for API responses)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -94,17 +89,6 @@ pub struct UpdateUserRequest {
     pub phone: Option<String>,
 }
 
-/// Database row for documents
-#[derive(Debug, FromRow)]
-struct DocumentRow {
-    id: Uuid,
-    user_id: Uuid,
-    title: String,
-    content_type: String,
-    content_encrypted: String,
-    created_at: DateTime<Utc>,
-}
-
 /// Document with decrypted content (for API responses)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Document {
@@ -131,54 +115,6 @@ pub struct HealthResponse {
     pub database_connected: bool,
     pub database_ssl: bool,
     pub encryption_available: bool,
-}
-
-// ============================================================================
-// Encryption Helpers
-// ============================================================================
-
-impl UserRow {
-    /// Decrypt sensitive fields to create a User
-    fn decrypt(self, encryptor: &FieldEncryptor) -> Result<User> {
-        let email = encryptor
-            .decrypt_string(&self.email_encrypted)
-            .context("Failed to decrypt email")?;
-
-        let phone = self
-            .phone_encrypted
-            .as_ref()
-            .map(|p| encryptor.decrypt_string(p))
-            .transpose()
-            .context("Failed to decrypt phone")?;
-
-        Ok(User {
-            id: self.id,
-            username: self.username,
-            display_name: self.display_name,
-            email,
-            phone,
-            created_at: self.created_at,
-            updated_at: self.updated_at,
-        })
-    }
-}
-
-impl DocumentRow {
-    /// Decrypt content to create a Document
-    fn decrypt(self, encryptor: &FieldEncryptor) -> Result<Document> {
-        let content = encryptor
-            .decrypt_string(&self.content_encrypted)
-            .context("Failed to decrypt document content")?;
-
-        Ok(Document {
-            id: self.id,
-            user_id: self.user_id,
-            title: self.title,
-            content_type: self.content_type,
-            content,
-            created_at: self.created_at,
-        })
-    }
 }
 
 // ============================================================================
@@ -217,26 +153,47 @@ impl UserRepository {
             .transpose()
             .context("Failed to encrypt SSN")?;
 
-        // Insert with encrypted values
-        let row: UserRow = sqlx::query_as(
+        // Insert with encrypted values - compile-time checked query
+        let row = sqlx::query!(
             r#"
             INSERT INTO users (id, username, display_name, email_encrypted, phone_encrypted, ssn_encrypted)
             VALUES ($1, $2, $3, $4, $5, $6)
             RETURNING id, username, display_name, email_encrypted, phone_encrypted, created_at, updated_at
             "#,
+            id,
+            req.username,
+            req.display_name,
+            email_encrypted,
+            phone_encrypted,
+            ssn_encrypted,
         )
-        .bind(id)
-        .bind(&req.username)
-        .bind(&req.display_name)
-        .bind(&email_encrypted)
-        .bind(&phone_encrypted)
-        .bind(&ssn_encrypted)
         .fetch_one(pool)
         .await
         .context("Failed to insert user")?;
 
+        // Decrypt for response
+        let email = encryptor
+            .decrypt_string(&row.email_encrypted)
+            .context("Failed to decrypt email")?;
+
+        let phone = row
+            .phone_encrypted
+            .as_ref()
+            .map(|p| encryptor.decrypt_string(p))
+            .transpose()
+            .context("Failed to decrypt phone")?;
+
         info!(user_id = %id, "User created successfully");
-        row.decrypt(encryptor)
+
+        Ok(User {
+            id: row.id,
+            username: row.username,
+            display_name: row.display_name,
+            email,
+            phone,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+        })
     }
 
     /// Get a user by ID, decrypting sensitive fields
@@ -246,34 +203,82 @@ impl UserRepository {
         encryptor: &FieldEncryptor,
         id: Uuid,
     ) -> Result<Option<User>> {
-        let row: Option<UserRow> = sqlx::query_as(
+        let row = sqlx::query!(
             r#"
             SELECT id, username, display_name, email_encrypted, phone_encrypted, created_at, updated_at
             FROM users WHERE id = $1
             "#,
+            id
         )
-        .bind(id)
         .fetch_optional(pool)
         .await
         .context("Failed to fetch user")?;
 
-        row.map(|r| r.decrypt(encryptor)).transpose()
+        match row {
+            Some(row) => {
+                let email = encryptor
+                    .decrypt_string(&row.email_encrypted)
+                    .context("Failed to decrypt email")?;
+
+                let phone = row
+                    .phone_encrypted
+                    .as_ref()
+                    .map(|p| encryptor.decrypt_string(p))
+                    .transpose()
+                    .context("Failed to decrypt phone")?;
+
+                Ok(Some(User {
+                    id: row.id,
+                    username: row.username,
+                    display_name: row.display_name,
+                    email,
+                    phone,
+                    created_at: row.created_at,
+                    updated_at: row.updated_at,
+                }))
+            }
+            None => Ok(None),
+        }
     }
 
     /// List all users (with decrypted fields)
     #[instrument(skip(pool, encryptor))]
     async fn list(pool: &PgPool, encryptor: &FieldEncryptor) -> Result<Vec<User>> {
-        let rows: Vec<UserRow> = sqlx::query_as(
+        let rows = sqlx::query!(
             r#"
             SELECT id, username, display_name, email_encrypted, phone_encrypted, created_at, updated_at
             FROM users ORDER BY created_at DESC LIMIT 100
-            "#,
+            "#
         )
         .fetch_all(pool)
         .await
         .context("Failed to list users")?;
 
-        rows.into_iter().map(|r| r.decrypt(encryptor)).collect()
+        let mut users = Vec::with_capacity(rows.len());
+        for row in rows {
+            let email = encryptor
+                .decrypt_string(&row.email_encrypted)
+                .context("Failed to decrypt email")?;
+
+            let phone = row
+                .phone_encrypted
+                .as_ref()
+                .map(|p| encryptor.decrypt_string(p))
+                .transpose()
+                .context("Failed to decrypt phone")?;
+
+            users.push(User {
+                id: row.id,
+                username: row.username,
+                display_name: row.display_name,
+                email,
+                phone,
+                created_at: row.created_at,
+                updated_at: row.updated_at,
+            });
+        }
+
+        Ok(users)
     }
 
     /// Update a user's fields (re-encrypting any changed sensitive data)
@@ -299,7 +304,7 @@ impl UserRepository {
             .transpose()
             .context("Failed to encrypt phone")?;
 
-        let row: Option<UserRow> = sqlx::query_as(
+        let row = sqlx::query!(
             r#"
             UPDATE users SET
                 display_name = COALESCE($2, display_name),
@@ -309,27 +314,48 @@ impl UserRepository {
             WHERE id = $1
             RETURNING id, username, display_name, email_encrypted, phone_encrypted, created_at, updated_at
             "#,
+            id,
+            req.display_name,
+            email_encrypted,
+            phone_encrypted,
         )
-        .bind(id)
-        .bind(&req.display_name)
-        .bind(&email_encrypted)
-        .bind(&phone_encrypted)
         .fetch_optional(pool)
         .await
         .context("Failed to update user")?;
 
-        if row.is_some() {
-            info!(user_id = %id, "User updated successfully");
-        }
+        match row {
+            Some(row) => {
+                let email = encryptor
+                    .decrypt_string(&row.email_encrypted)
+                    .context("Failed to decrypt email")?;
 
-        row.map(|r| r.decrypt(encryptor)).transpose()
+                let phone = row
+                    .phone_encrypted
+                    .as_ref()
+                    .map(|p| encryptor.decrypt_string(p))
+                    .transpose()
+                    .context("Failed to decrypt phone")?;
+
+                info!(user_id = %id, "User updated successfully");
+
+                Ok(Some(User {
+                    id: row.id,
+                    username: row.username,
+                    display_name: row.display_name,
+                    email,
+                    phone,
+                    created_at: row.created_at,
+                    updated_at: row.updated_at,
+                }))
+            }
+            None => Ok(None),
+        }
     }
 
     /// Delete a user by ID
     #[instrument(skip(pool))]
     async fn delete(pool: &PgPool, id: Uuid) -> Result<bool> {
-        let result = sqlx::query("DELETE FROM users WHERE id = $1")
-            .bind(id)
+        let result = sqlx::query!("DELETE FROM users WHERE id = $1", id)
             .execute(pool)
             .await
             .context("Failed to delete user")?;
@@ -366,24 +392,36 @@ impl DocumentRepository {
             .encrypt_string(&req.content)
             .context("Failed to encrypt document content")?;
 
-        let row: DocumentRow = sqlx::query_as(
+        let row = sqlx::query!(
             r#"
             INSERT INTO documents (id, user_id, title, content_type, content_encrypted)
             VALUES ($1, $2, $3, $4, $5)
             RETURNING id, user_id, title, content_type, content_encrypted, created_at
             "#,
+            id,
+            user_id,
+            req.title,
+            content_type,
+            content_encrypted,
         )
-        .bind(id)
-        .bind(user_id)
-        .bind(&req.title)
-        .bind(&content_type)
-        .bind(&content_encrypted)
         .fetch_one(pool)
         .await
         .context("Failed to insert document")?;
 
+        let content = encryptor
+            .decrypt_string(&row.content_encrypted)
+            .context("Failed to decrypt content")?;
+
         info!(document_id = %id, "Document created");
-        row.decrypt(encryptor)
+
+        Ok(Document {
+            id: row.id,
+            user_id: row.user_id,
+            title: row.title,
+            content_type: row.content_type,
+            content,
+            created_at: row.created_at,
+        })
     }
 
     /// Get a document by ID
@@ -393,18 +431,34 @@ impl DocumentRepository {
         encryptor: &FieldEncryptor,
         id: Uuid,
     ) -> Result<Option<Document>> {
-        let row: Option<DocumentRow> = sqlx::query_as(
+        let row = sqlx::query!(
             r#"
             SELECT id, user_id, title, content_type, content_encrypted, created_at
             FROM documents WHERE id = $1
             "#,
+            id
         )
-        .bind(id)
         .fetch_optional(pool)
         .await
         .context("Failed to fetch document")?;
 
-        row.map(|r| r.decrypt(encryptor)).transpose()
+        match row {
+            Some(row) => {
+                let content = encryptor
+                    .decrypt_string(&row.content_encrypted)
+                    .context("Failed to decrypt content")?;
+
+                Ok(Some(Document {
+                    id: row.id,
+                    user_id: row.user_id,
+                    title: row.title,
+                    content_type: row.content_type,
+                    content,
+                    created_at: row.created_at,
+                }))
+            }
+            None => Ok(None),
+        }
     }
 
     /// List documents for a user
@@ -414,18 +468,34 @@ impl DocumentRepository {
         encryptor: &FieldEncryptor,
         user_id: Uuid,
     ) -> Result<Vec<Document>> {
-        let rows: Vec<DocumentRow> = sqlx::query_as(
+        let rows = sqlx::query!(
             r#"
             SELECT id, user_id, title, content_type, content_encrypted, created_at
             FROM documents WHERE user_id = $1 ORDER BY created_at DESC
             "#,
+            user_id
         )
-        .bind(user_id)
         .fetch_all(pool)
         .await
         .context("Failed to list documents")?;
 
-        rows.into_iter().map(|r| r.decrypt(encryptor)).collect()
+        let mut docs = Vec::with_capacity(rows.len());
+        for row in rows {
+            let content = encryptor
+                .decrypt_string(&row.content_encrypted)
+                .context("Failed to decrypt content")?;
+
+            docs.push(Document {
+                id: row.id,
+                user_id: row.user_id,
+                title: row.title,
+                content_type: row.content_type,
+                content,
+                created_at: row.created_at,
+            });
+        }
+
+        Ok(docs)
     }
 }
 
@@ -443,18 +513,18 @@ async fn log_audit_event(
     resource_id: Option<Uuid>,
     details: Option<serde_json::Value>,
 ) -> Result<()> {
-    sqlx::query(
+    sqlx::query!(
         r#"
         INSERT INTO audit_log (id, actor, action, resource_type, resource_id, details)
         VALUES ($1, $2, $3, $4, $5, $6)
         "#,
+        Uuid::new_v4(),
+        actor,
+        action,
+        resource_type,
+        resource_id,
+        details,
     )
-    .bind(Uuid::new_v4())
-    .bind(actor)
-    .bind(action)
-    .bind(resource_type)
-    .bind(resource_id)
-    .bind(details)
     .execute(pool)
     .await
     .context("Failed to log audit event")?;
@@ -499,16 +569,7 @@ async fn create_user_handler(
             (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
         })?;
 
-    // Audit log
-    let _ = log_audit_event(
-        &state.pool,
-        "system",
-        "create",
-        "user",
-        Some(user.id),
-        None,
-    )
-    .await;
+    let _ = log_audit_event(&state.pool, "system", "create", "user", Some(user.id), None).await;
 
     Ok((StatusCode::CREATED, Json(user)))
 }
@@ -663,10 +724,7 @@ fn build_router(state: AppState) -> Router {
         // Health check
         .route("/health", get(health_handler))
         // User CRUD
-        .route(
-            "/users",
-            get(list_users_handler).post(create_user_handler),
-        )
+        .route("/users", get(list_users_handler).post(create_user_handler))
         .route(
             "/users/{id}",
             get(get_user_handler)
@@ -717,28 +775,26 @@ async fn main() -> Result<()> {
     // Step 2: Create secure database configuration
     // =========================================================================
     //
-    // Barbican's DatabaseConfig enforces security best practices:
-    // - TLS/mTLS for connection encryption (SC-8)
-    // - Connection pooling with limits (SC-5)
-    // - Statement timeouts (DoS protection)
-    // - Channel binding for authentication security
+    // When using Barbican's securePostgres NixOS module, the database is already
+    // configured with:
+    // - TLS encryption (SC-8)
+    // - scram-sha-256 authentication
+    // - Connection limits and timeouts (SC-5)
+    // - Audit logging (AU-2)
+    //
+    // This config connects to that secure database.
 
     let db_config = DatabaseConfig::builder(&database_url)
         .application_name("db-minimal")
-        // For local development, we use Prefer; production should use VerifyFull
+        // Use Prefer for local dev, VerifyFull for production
         .ssl_mode(SslMode::Prefer)
-        // Connection pool settings
         .max_connections(5)
         .min_connections(1)
-        // Timeouts for security (prevent long-running queries)
         .statement_timeout(std::time::Duration::from_secs(30))
         .lock_timeout(std::time::Duration::from_secs(10))
         .build();
 
-    info!(
-        "Database configuration created with SSL mode: {:?}",
-        db_config.ssl_mode
-    );
+    info!("Database config: SSL mode {:?}", db_config.ssl_mode);
 
     // =========================================================================
     // Step 3: Create database connection pool
@@ -748,10 +804,9 @@ async fn main() -> Result<()> {
         .await
         .context("Failed to create database pool")?;
 
-    // Verify connection and SSL status
     let health = health_check(&pool).await?;
     info!(
-        "Database connected: {}, SSL enabled: {}, latency: {:?}",
+        "Database: connected={}, ssl={}, latency={:?}",
         health.connected, health.ssl_enabled, health.latency
     );
 
@@ -759,28 +814,19 @@ async fn main() -> Result<()> {
     // Step 4: Initialize field encryptor for sensitive data
     // =========================================================================
     //
-    // Barbican's FieldEncryptor provides:
-    // - AES-256-GCM encryption (NIST-approved, SC-13)
-    // - Unique nonces for each encryption (prevents pattern analysis)
-    // - FIPS 140-3 validated crypto when compiled with `fips` feature
+    // FieldEncryptor provides AES-256-GCM encryption for PII fields.
+    // Each encryption uses a unique nonce to prevent pattern analysis.
 
     let encryptor = FieldEncryptor::new(&encryption_key)
-        .context("Failed to create field encryptor - check ENCRYPTION_KEY format")?;
+        .context("Invalid ENCRYPTION_KEY format")?;
 
-    info!(
-        "Field encryptor initialized with algorithm: {:?}",
-        encryptor.algorithm()
-    );
+    info!("Encryption: algorithm={:?}", encryptor.algorithm());
 
     // =========================================================================
-    // Step 5: Initialize database schema
+    // Step 5: Initialize schema and start server
     // =========================================================================
 
     init_schema(&pool).await?;
-
-    // =========================================================================
-    // Step 6: Build application state and router
-    // =========================================================================
 
     let state = AppState {
         pool,
@@ -789,13 +835,8 @@ async fn main() -> Result<()> {
 
     let app = build_router(state);
 
-    // =========================================================================
-    // Step 7: Start the server
-    // =========================================================================
-
     let addr = "0.0.0.0:3000";
-    info!("Server listening on http://{}", addr);
-    info!("Try: curl http://localhost:3000/health");
+    info!("Listening on http://{}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;
@@ -821,11 +862,11 @@ mod tests {
         let decrypted = encryptor.decrypt_string(&encrypted).unwrap();
 
         assert_eq!(plaintext, decrypted);
-        assert_ne!(plaintext, encrypted); // Encrypted value should differ
+        assert_ne!(plaintext, encrypted);
     }
 
     #[test]
-    fn test_encryption_different_each_time() {
+    fn test_encryption_unique_nonces() {
         let key = generate_key();
         let encryptor = FieldEncryptor::new(&key).unwrap();
 
@@ -833,10 +874,10 @@ mod tests {
         let encrypted1 = encryptor.encrypt_string(plaintext).unwrap();
         let encrypted2 = encryptor.encrypt_string(plaintext).unwrap();
 
-        // Each encryption should produce different ciphertext (unique nonces)
+        // Each encryption produces different ciphertext
         assert_ne!(encrypted1, encrypted2);
 
-        // But both should decrypt to the same value
+        // Both decrypt to the same value
         assert_eq!(
             encryptor.decrypt_string(&encrypted1).unwrap(),
             encryptor.decrypt_string(&encrypted2).unwrap()
