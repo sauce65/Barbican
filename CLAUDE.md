@@ -332,6 +332,16 @@ Empty lists with inline comments break Nix syntax:
 
 Rust binaries use snake_case (`hello_fedramp_high`), but Cargo package names often use hyphens (`hello-fedramp-high`). The CLI generates both correctly.
 
+### Example Flake Path Dependencies
+
+The example apps use `barbican = { path = "../.." }` in their Cargo.toml, which doesn't work in Nix's isolated build sandbox. The flakes work around this by:
+
+1. Using the full barbican repo as source: `src = final.runCommand "barbican-src" {} ''cp -r ${barbican} $out; chmod -R u+w $out''`
+2. Setting `sourceRoot` in `postUnpack` to navigate to the example subdirectory
+3. Using `rustPlatformLatest` from rust-overlay for edition2024 support
+
+**Future simplification:** When barbican is published to crates.io, change the dependency to `barbican = { version = "0.1" }` and simplify to `src = ./.` in the flakes.
+
 ## NIST Control Reference
 
 See `NIST_800_53_CONTROL_RESEARCH.md` for complete mapping of:
