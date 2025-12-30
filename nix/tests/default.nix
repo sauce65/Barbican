@@ -16,6 +16,7 @@ let
     hardened-nginx = import ./hardened-nginx.nix { inherit pkgs lib; };
     kernel-hardening = import ./kernel-hardening.nix { inherit pkgs lib; };
     secure-postgres = import ./secure-postgres.nix { inherit pkgs lib; };
+    database-backup = import ./database-backup.nix { inherit pkgs lib; };
     time-sync = import ./time-sync.nix { inherit pkgs lib; };
     intrusion-detection = import ./intrusion-detection.nix { inherit pkgs lib; };
     vm-firewall = import ./vm-firewall.nix { inherit pkgs lib; };
@@ -41,6 +42,7 @@ let
           ../modules/intrusion-detection.nix
           ../modules/vm-firewall.nix
           ../modules/secure-postgres.nix
+          ../modules/database-backup.nix
         ];
 
         barbican = {
@@ -75,6 +77,11 @@ let
             enable = true;
             database = "testdb";
             username = "testuser";
+          };
+          databaseBackup = {
+            enable = true;
+            retentionDays = 7;
+            enableEncryption = true;
           };
         };
 

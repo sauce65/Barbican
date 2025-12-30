@@ -158,6 +158,32 @@ pkgs.testers.nixosTest {
       # Should use scram-sha-256 for network connections
       assert "scram-sha-256" in hba, "scram-sha-256 not found in pg_hba.conf"
 
+    # SC-39: Process Isolation
+    with subtest("SC-39: PostgreSQL service has ProtectSystem"):
+      result = machine.succeed("systemctl show postgresql.service -p ProtectSystem")
+      assert "strict" in result.lower(), "ProtectSystem not strict: " + result
+
+    with subtest("SC-39: PostgreSQL service has ProtectHome"):
+      result = machine.succeed("systemctl show postgresql.service -p ProtectHome")
+      assert "yes" in result.lower(), "ProtectHome not enabled: " + result
+
+    with subtest("SC-39: PostgreSQL service has NoNewPrivileges"):
+      result = machine.succeed("systemctl show postgresql.service -p NoNewPrivileges")
+      assert "yes" in result.lower(), "NoNewPrivileges not enabled: " + result
+
+    with subtest("SC-39: PostgreSQL service has PrivateTmp"):
+      result = machine.succeed("systemctl show postgresql.service -p PrivateTmp")
+      assert "yes" in result.lower(), "PrivateTmp not enabled: " + result
+
+    with subtest("SC-39: PostgreSQL service has restricted capabilities"):
+      result = machine.succeed("systemctl show postgresql.service -p CapabilityBoundingSet")
+      # Should not have full capabilities
+      assert "~CAP_SYS_ADMIN" in result or "CAP_NET_BIND_SERVICE" in result, "Capabilities not restricted: " + result
+
+    with subtest("SC-39: PostgreSQL service file limit configured"):
+      result = machine.succeed("systemctl show postgresql.service -p LimitNOFILE")
+      assert "65535" in result, "LimitNOFILE not set: " + result
+
     print("All secure-postgres tests passed!")
   '';
 }

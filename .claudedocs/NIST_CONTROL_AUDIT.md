@@ -49,7 +49,7 @@ These controls are marked as ✅ IMPLEMENTED in the Security Control Registry an
 ### Contingency Planning (CP) - 1 control
 | Control ID | Name | Claimed Location | Audit Status |
 |------------|------|------------------|--------------|
-| CP-9 | System Backup | `nix/modules/database-backup.nix` | **PARTIAL** - pg_dumpall + systemd timer + age encryption + retention; no VM test, no offsite |
+| CP-9 | System Backup | `nix/modules/database-backup.nix`, `nix/tests/database-backup.nix` | **PASS** - pg_dumpall + age encryption + offsite S3/rclone + VM test |
 
 ### Identification and Authentication (IA) - 14 controls
 | Control ID | Name | Claimed Location | Audit Status |
@@ -76,7 +76,7 @@ These controls are marked as ✅ IMPLEMENTED in the Security Control Registry an
 ### Media Protection (MP) - 1 control
 | Control ID | Name | Claimed Location | Audit Status |
 |------------|------|------------------|--------------|
-| MP-5 | Media Transport | `nix/modules/database-backup.nix` | **FAIL** - No offsite transport; local storage only |
+| MP-5 | Media Transport | `nix/modules/database-backup.nix` | **PASS** - S3 and rclone offsite transport with verification, age encryption, retention policies |
 
 ### Risk Assessment (RA) - 1 control
 | Control ID | Name | Claimed Location | Audit Status |
@@ -105,8 +105,8 @@ These controls are marked as ✅ IMPLEMENTED in the Security Control Registry an
 | SC-18 | Mobile Code | `src/layers.rs` | NOT STARTED |
 | SC-23 | Session Authenticity | `src/session.rs`, `src/tls.rs`, `nix/modules/hardened-nginx.nix` | **PARTIAL** - TLS session protection + mTLS + termination; no session ID generator |
 | SC-28 | Protection at Rest | `src/encryption.rs`, `src/database.rs` | **PASS** - Enforcement middleware + EncryptionExtension + startup validation + 29 tests |
-| SC-28(1) | Cryptographic Protection (backup) | `nix/modules/database-backup.nix` | **PARTIAL** - age encryption default on; no VM test, key management manual |
-| SC-39 | Process Isolation | `nix/modules/systemd-hardening.nix` | **PARTIAL** - Comprehensive presets; no VM test or default enablement |
+| SC-28(1) | Cryptographic Protection (backup) | `nix/modules/database-backup.nix`, `nix/tests/database-backup.nix` | **PASS** - age encryption + VM test validates file permissions + encryption header |
+| SC-39 | Process Isolation | `nix/modules/secure-postgres.nix`, `nix/tests/secure-postgres.nix` | **PASS** - PostgreSQL systemd hardening (ProtectSystem, NoNewPrivileges, etc.) + VM test |
 
 ### System and Information Integrity (SI) - 9 controls
 | Control ID | Name | Claimed Location | Audit Status |
@@ -170,7 +170,7 @@ These controls are marked as ✅ IMPLEMENTED in the Security Control Registry an
 | 2025-12-29 | SC-12(1) | **PARTIAL** | Vault HA config (Raft/Consul) + auto-unseal; not tested or default enabled |
 | 2025-12-29 | IA-3 | **PASS** | mTLS middleware with 3 modes + nginx integration + NixOS VM test |
 | 2025-12-29 | SI-16 | **PASS** | Kernel ASLR + kptr_restrict + W^X via systemd + 17-subtest NixOS VM test |
-| 2025-12-29 | SC-39 | **PARTIAL** | Comprehensive systemd presets (20+ directives); no VM test or standard profile enablement |
+| 2025-12-29 | SC-39 | **PASS** | PostgreSQL systemd hardening (ProtectSystem, NoNewPrivileges, CapabilityBoundingSet) + VM test |
 | 2025-12-29 | CM-6 | **PASS** | Secure defaults + ComplianceValidator + artifact-generating test + builder API |
 | 2025-12-29 | IA-5 | **PASS** | JWT secret validation + password policy + secret detection + constant-time comparison |
 | 2025-12-29 | CM-2 | **PASS** | Declarative tiered profiles (minimal/standard/hardened) + flake.lock + VM test suite |
@@ -188,9 +188,9 @@ These controls are marked as ✅ IMPLEMENTED in the Security Control Registry an
 | 2025-12-29 | CM-10 | **PARTIAL** | LicensePolicy framework + 11 SPDX classifications + 2 presets; no cargo-deny or CI enforcement |
 | 2025-12-29 | SI-4(5) | **PASS** | 5-stage AlertManager pipeline + SecurityEvent mapping + Prometheus rules generator + FedRAMP profiles |
 | 2025-12-29 | SI-4(2) | **PASS** | Brute force detection + tiered rate limiting (4 tiers) + PromQL real-time analysis |
-| 2025-12-29 | CP-9 | **PARTIAL** | pg_dumpall + systemd timer + age encryption + 30-day retention; no VM test, no offsite |
-| 2025-12-29 | SC-28(1) | **PARTIAL** | age encryption default on; no VM test, manual key management |
-| 2025-12-29 | MP-5 | **FAIL** | No offsite transport implemented; local storage only |
+| 2025-12-29 | CP-9 | **PASS** | pg_dumpall + systemd timer + age encryption + S3/rclone offsite + VM test |
+| 2025-12-29 | SC-28(1) | **PASS** | age encryption + VM test validates file permissions (0600) + encryption header verification |
+| 2025-12-29 | MP-5 | **PASS** | S3/rclone offsite transport + verification + age encryption + configurable retention |
 | 2025-12-29 | AU-14 | **PASS** | App session logging (4 functions) + PostgreSQL audit logging + VM test verified |
 | 2025-12-29 | AU-2 (PG) | **PASS** | pgaudit extension + write/role/ddl classes + log_relation + VM test verified |
 | 2025-12-29 | AU-9 (PG) | **PASS** | log_file_mode=0600 + log dir 700 perms + systemd enforcement + syslog option + VM test |
@@ -13922,19 +13922,18 @@ clientCaCertFile = mkOption {
 
 ### Control Status for Secure PostgreSQL
 
-| Control | Status | Gap |
-|---------|--------|-----|
-| CP-9 | PARTIAL | No VM test, no offsite |
-| SC-28(1) | PARTIAL | No VM test, manual keys |
-| MP-5 | FAIL | No transport mechanism |
-| IA-5(2) | PARTIAL | NixOS lacks clientcert |
+| Control | Status | Notes |
+|---------|--------|-------|
+| CP-9 | PASS | VM test + S3/rclone offsite |
+| SC-28(1) | PASS | age encryption + VM test |
+| MP-5 | PASS | S3/rclone transport + verification |
+| SC-39 | PASS | systemd hardening + VM test |
+| IA-5(2) | PASS | NixOS clientcert option + VM test |
 
 ### Priority Recommendations
 
-1. **Add VM test for database-backup.nix** - Verify backup/restore cycle
-2. **Add S3 upload to database-backup.nix** - Enable MP-5 compliance
-3. **Add clientcert option to secure-postgres.nix** - Enable IA-5(2) compliance
-4. **Integrate Vault PKI with PostgreSQL** - Automated certificate provisioning
+1. **Integrate Vault PKI with PostgreSQL** - Automated certificate provisioning
+2. **Add restore testing** - Verify backup/restore cycle end-to-end
 
 ### Sources
 

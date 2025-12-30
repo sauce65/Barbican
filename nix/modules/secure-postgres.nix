@@ -138,6 +138,13 @@ in {
       default = 30000;
       description = "Statement timeout in milliseconds";
     };
+
+    # SC-39: Process Isolation
+    enableProcessIsolation = mkOption {
+      type = types.bool;
+      default = true;
+      description = "Enable systemd process isolation for PostgreSQL (SC-39)";
+    };
   };
 
   config = mkIf cfg.enable {
@@ -284,6 +291,48 @@ in {
         PASSWORD=$(cat ${cfg.passwordFile})
         ${pkgs.postgresql_16}/bin/psql -c "ALTER USER ${cfg.username} WITH PASSWORD '$PASSWORD';"
       '';
+    };
+
+    # SC-39: Process Isolation via systemd hardening
+    systemd.services.postgresql.serviceConfig = mkIf cfg.enableProcessIsolation {
+      # Filesystem isolation
+      ProtectSystem = "strict";
+      ProtectHome = true;
+      PrivateTmp = true;
+      ProtectControlGroups = true;
+      ProtectKernelLogs = true;
+      ProtectKernelModules = true;
+      ProtectKernelTunables = true;
+
+      # Process isolation
+      NoNewPrivileges = true;
+
+      # Network restrictions - PostgreSQL needs network
+      RestrictAddressFamilies = [ "AF_INET" "AF_INET6" "AF_UNIX" ];
+
+      # Capabilities - PostgreSQL needs minimal caps
+      CapabilityBoundingSet = [ "CAP_NET_BIND_SERVICE" ];
+
+      # Memory protection - disabled for PostgreSQL JIT
+      # MemoryDenyWriteExecute = true;
+
+      # Misc hardening
+      LockPersonality = true;
+      ProtectClock = true;
+      ProtectHostname = true;
+      RestrictRealtime = true;
+      RestrictSUIDSGID = true;
+      RemoveIPC = true;
+
+      # Allow PostgreSQL to write to its data directory
+      ReadWritePaths = [
+        "/var/lib/postgresql"
+        "/run/postgresql"
+      ];
+
+      # Ulimits for database performance
+      LimitNOFILE = 65535;
+      LimitNPROC = 512;
     };
 
     # Firewall rules
