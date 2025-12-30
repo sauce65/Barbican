@@ -295,6 +295,9 @@ mod layers;
 mod parse;
 pub mod tls;
 
+// Prelude for convenient imports
+pub mod prelude;
+
 // Rate limiting with tiered support (SC-5, AC-7)
 pub mod rate_limit;
 

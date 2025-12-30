@@ -1,0 +1,51 @@
+[package]
+name = "barbican-cli"
+version = "0.1.0"
+edition = "2021"
+description = "CLI tool for Barbican configuration management and code generation"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Sauce65/barbican"
+keywords = ["barbican", "nist", "fedramp", "compliance", "cli"]
+categories = ["command-line-utilities", "development-tools"]
+
+[[bin]]
+name = "barbican"
+path = "src/main.rs"
+
+[dependencies]
+# CLI framework
+clap = { version = "4", features = ["derive", "env", "wrap_help"] }
+
+# Configuration parsing
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+
+# Output formatting
+colored = "2"
+console = "0.15"
+indicatif = "0.17"
+
+# File handling
+walkdir = "2"
+
+# Error handling
+anyhow = "1"
+thiserror = "2"
+
+# Templating for code generation
+minijinja = "2"
+
+# Hashing for drift detection
+sha2 = "0.10"
+hex = "0.4"
+
+# JSON output for reports
+serde_json = "1"
+
+# Time handling
+chrono = { version = "0.4", features = ["serde"] }
+
+[dev-dependencies]
+tempfile = "3"
+assert_cmd = "2"
+predicates = "3"

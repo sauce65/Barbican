@@ -1,0 +1,38 @@
+# FedRAMP Low Example
+# Suitable for systems with LOW impact to confidentiality, integrity, and availability
+
+[app]
+name = "hello-fedramp-low"
+profile = "fedramp-low"
+version = "0.1.0"
+description = "Hello World - FedRAMP Low baseline"
+
+[deployment]
+platform = "nixos"
+output_dir = "."
+
+# Database Configuration
+[database]
+type = "postgres"
+url = "${DATABASE_URL}"
+pool_size = 10
+
+# Observability Configuration
+[observability]
+tracing = true
+retention_days = 30
+
+# Network Configuration
+[network]
+listen = "0.0.0.0:3000"
+
+[[network.allowed_ingress]]
+port = 3000
+from = "any"
+proto = "tcp"
+
+# Session Configuration (uses profile defaults)
+[session]
+
+# Auth Configuration (uses profile defaults)
+[auth]

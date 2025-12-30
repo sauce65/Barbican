@@ -1,10 +1,15 @@
+[workspace]
+members = [".", "crates/barbican-cli"]
+exclude = ["examples/fedramp-low", "examples/fedramp-moderate", "examples/fedramp-high"]
+resolver = "2"
+
 [package]
 name = "barbican"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 description = "NIST 800-53 compliant security infrastructure for Axum applications"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/pauljickling/barbican"
+repository = "https://github.com/Sauce65/barbican"
 keywords = ["axum", "security", "nist", "postgres", "web"]
 categories = ["web-programming", "authentication"]
 

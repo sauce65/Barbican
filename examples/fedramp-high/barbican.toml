@@ -1,0 +1,39 @@
+# FedRAMP High Example
+# Suitable for systems with HIGH impact to confidentiality, integrity, and availability
+# This is the strictest baseline - use for critical government systems
+
+[app]
+name = "hello-fedramp-high"
+profile = "fedramp-high"
+version = "0.1.0"
+description = "Hello World - FedRAMP High baseline"
+
+[deployment]
+platform = "nixos"
+output_dir = "."
+
+# Database Configuration
+[database]
+type = "postgres"
+url = "${DATABASE_URL}"
+pool_size = 10
+
+# Observability Configuration
+[observability]
+tracing = true
+retention_days = 365
+
+# Network Configuration
+[network]
+listen = "0.0.0.0:3000"
+
+[[network.allowed_ingress]]
+port = 3000
+from = "10.0.0.0/8"
+proto = "tcp"
+
+# Session Configuration (uses profile defaults - strictest)
+[session]
+
+# Auth Configuration (uses profile defaults - strictest)
+[auth]

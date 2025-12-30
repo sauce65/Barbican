@@ -1,0 +1,38 @@
+# FedRAMP Moderate Example
+# Suitable for systems with MODERATE impact to confidentiality, integrity, and availability
+
+[app]
+name = "hello-fedramp-moderate"
+profile = "fedramp-moderate"
+version = "0.1.0"
+description = "Hello World - FedRAMP Moderate baseline"
+
+[deployment]
+platform = "nixos"
+output_dir = "."
+
+# Database Configuration
+[database]
+type = "postgres"
+url = "${DATABASE_URL}"
+pool_size = 20
+
+# Observability Configuration
+[observability]
+tracing = true
+retention_days = 90
+
+# Network Configuration
+[network]
+listen = "0.0.0.0:3000"
+
+[[network.allowed_ingress]]
+port = 3000
+from = "any"
+proto = "tcp"
+
+# Session Configuration (uses profile defaults)
+[session]
+
+# Auth Configuration (uses profile defaults)
+[auth]
