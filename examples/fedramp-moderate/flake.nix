@@ -25,15 +25,54 @@
           self.overlays.default
         ];
       };
+
+      # =======================================================================
+      # WORKAROUND: Local Path Dependency in Nix Sandbox
+      # =======================================================================
+      # This example uses `barbican = { path = "../.." }` in Cargo.toml to
+      # reference the parent barbican crate. However, Nix builds packages in
+      # an isolated sandbox where only the declared `src` is available.
+      #
+      # Solution: Use the full barbican repo as source, with sourceRoot pointing
+      # to this example. The relative path "../.." then resolves correctly.
+      #
+      # FUTURE: When barbican is published to crates.io, change Cargo.toml to:
+      #   barbican = { version = "0.1", features = ["postgres"] }
+      # Then simplify this to just use `src = ./.` directly.
+      # =======================================================================
+
     in
     {
-      overlays.default = final: prev: {
-        hello-fedramp-moderate = final.rustPlatform.buildRustPackage {
+      overlays.default = final: prev:
+        let
+          # Use latest stable Rust from rust-overlay for edition2024 support
+          rustPlatformLatest = prev.makeRustPlatform {
+            cargo = final.rust-bin.stable.latest.default;
+            rustc = final.rust-bin.stable.latest.default;
+          };
+        in {
+        hello-fedramp-moderate = rustPlatformLatest.buildRustPackage {
           pname = "hello-fedramp-moderate";
           version = "0.1.0";
-          src = ./.;
-          cargoLock.lockFile = ./Cargo.lock;
-          buildFeatures = [ "postgres" ];
+
+          # Use full barbican repo as source (see WORKAROUND comment above)
+          src = final.runCommand "barbican-src" {} ''
+            cp -r ${barbican} $out
+            chmod -R u+w $out
+          '';
+
+          postUnpack = ''
+            sourceRoot="$sourceRoot/examples/fedramp-moderate"
+          '';
+
+          cargoLock = {
+            # Use the example's own Cargo.lock since it has [workspace] in Cargo.toml
+            lockFile = ./Cargo.lock;
+          };
+
+          # Note: postgres feature is specified in Cargo.toml on the barbican dependency
+          # No need for buildFeatures here
+
           nativeBuildInputs = with final; [ pkg-config ];
           buildInputs = with final; [ openssl ];
         };
