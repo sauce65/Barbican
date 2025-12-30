@@ -31,26 +31,55 @@
 
       # Rust toolchain for building the application
       rustToolchain = pkgs.rust-bin.stable.latest.default;
+
+      # =======================================================================
+      # WORKAROUND: Local Path Dependency in Nix Sandbox
+      # =======================================================================
+      # This example uses `barbican = { path = "../.." }` in Cargo.toml to
+      # reference the parent barbican crate. However, Nix builds packages in
+      # an isolated sandbox where only the declared `src` is available.
+      #
+      # Solution: Use the full barbican repo as source, with sourceRoot pointing
+      # to this example. The relative path "../.." then resolves correctly.
+      #
+      # FUTURE: When barbican is published to crates.io, change Cargo.toml to:
+      #   barbican = { version = "0.1", features = ["postgres"] }
+      # Then simplify this to just use `src = ./.` directly.
+      # =======================================================================
+
     in
     {
       # Overlay that provides the hello-fedramp-high package
-      overlays.default = final: prev: {
-        hello-fedramp-high = final.rustPlatform.buildRustPackage {
+      overlays.default = final: prev:
+        let
+          # Use latest stable Rust from rust-overlay for edition2024 support
+          rustPlatformLatest = prev.makeRustPlatform {
+            cargo = final.rust-bin.stable.latest.default;
+            rustc = final.rust-bin.stable.latest.default;
+          };
+        in {
+        hello-fedramp-high = rustPlatformLatest.buildRustPackage {
           pname = "hello-fedramp-high";
           version = "0.1.0";
 
-          src = ./.;
+          # Use full barbican repo as source (see WORKAROUND comment above)
+          # We copy to a new derivation to avoid flake input source handling issues
+          src = final.runCommand "barbican-src" {} ''
+            cp -r ${barbican} $out
+            chmod -R u+w $out
+          '';
+
+          postUnpack = ''
+            sourceRoot="$sourceRoot/examples/fedramp-high"
+          '';
 
           cargoLock = {
+            # Use the example's own Cargo.lock since it has [workspace] in Cargo.toml
             lockFile = ./Cargo.lock;
-            # If barbican isn't published, you may need:
-            # outputHashes = {
-            #   "barbican-0.1.0" = "sha256-...";
-            # };
           };
 
-          # Build with postgres feature for database support
-          buildFeatures = [ "postgres" ];
+          # Note: postgres feature is specified in Cargo.toml on the barbican dependency
+          # No need for buildFeatures here
 
           nativeBuildInputs = with final; [ pkg-config ];
           buildInputs = with final; [ openssl ];
