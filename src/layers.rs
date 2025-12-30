@@ -14,6 +14,7 @@ use tower_http::{
 };
 use tower_governor::{governor::GovernorConfigBuilder, GovernorLayer};
 
+use crate::audit::audit_middleware;
 use crate::config::SecurityConfig;
 use crate::login::login_tracking_middleware;
 use crate::tls::{tls_enforcement_middleware, TlsMode};
@@ -41,13 +42,14 @@ pub trait SecureRouter {
     ///
     /// Layers are applied in the correct order for proper security:
     /// 1. TraceLayer (outermost - logs all requests)
-    /// 2. TLS Enforcement (SC-8 - rejects HTTP if required)
-    /// 3. CorsLayer (handles preflight)
-    /// 4. Security Headers
-    /// 5. Rate Limiting
-    /// 6. Login Tracking (AC-7 - enforces login attempt limits)
-    /// 7. Request Body Limit
-    /// 8. Timeout (innermost)
+    /// 2. Audit Middleware (AU-2/AU-3/AU-12 - security event logging)
+    /// 3. TLS Enforcement (SC-8 - rejects HTTP if required)
+    /// 4. CorsLayer (handles preflight)
+    /// 5. Security Headers
+    /// 6. Rate Limiting
+    /// 7. Login Tracking (AC-7 - enforces login attempt limits)
+    /// 8. Request Body Limit
+    /// 9. Timeout (innermost)
     fn with_security(self, config: SecurityConfig) -> Self;
 }
 
@@ -148,8 +150,14 @@ where
             }));
         }
 
-        // AU-2, AU-3, AU-12: Audit Logging - Basic HTTP request tracing
-        // For security event logging, use observability::SecurityEvent
+        // AU-2, AU-3, AU-12: Audit Logging - Security-aware HTTP audit
+        // Captures security events (401, 403, 429, 5xx) with structured logging
+        if config.audit_enabled {
+            router = router.layer(middleware::from_fn(audit_middleware));
+        }
+
+        // Basic HTTP request tracing via tower-http
+        // For detailed security event logging, audit_middleware is preferred
         if config.tracing_enabled {
             router = router.layer(TraceLayer::new_for_http());
         }

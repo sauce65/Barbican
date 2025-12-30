@@ -79,6 +79,10 @@ pub struct SecurityConfig {
     /// Login tracking configuration (AC-7)
     /// Configures which paths to track and enforcement behavior
     pub login_tracking_config: LoginTrackingConfig,
+
+    /// Enable audit logging middleware (AU-2, AU-3, AU-12)
+    /// Logs all HTTP requests with security event classification
+    pub audit_enabled: bool,
 }
 
 impl Default for SecurityConfig {
@@ -97,6 +101,8 @@ impl Default for SecurityConfig {
             login_tracking_enabled: true,
             login_tracker: Some(LoginTracker::with_default_policy()),
             login_tracking_config: LoginTrackingConfig::default(),
+            // AU-2: Audit logging enabled by default
+            audit_enabled: true,
         }
     }
 }
@@ -121,6 +127,8 @@ impl SecurityConfig {
             login_tracking_enabled: true,
             login_tracker: Some(LoginTracker::new(LockoutPolicy::relaxed())),
             login_tracking_config: LoginTrackingConfig::default(),
+            // AU-2: Audit logging enabled in development for debugging
+            audit_enabled: true,
         }
     }
 }
@@ -143,6 +151,7 @@ impl SecurityConfig {
     /// - `LOGIN_MAX_ATTEMPTS`: max failed attempts before lockout (default: 5)
     /// - `LOGIN_LOCKOUT_DURATION`: e.g., "15m", "1h" (default: "15m")
     /// - `LOGIN_AUTH_PATHS`: comma-separated auth paths (default: "/login,/auth/token,/oauth/token")
+    /// - `AUDIT_ENABLED`: "true"/"false" (default: "true")
     pub fn from_env() -> Self {
         let max_request_size = std::env::var("MAX_REQUEST_SIZE")
             .map(|s| parse_size(&s))
@@ -229,6 +238,11 @@ impl SecurityConfig {
             ..Default::default()
         };
 
+        // AU-2: Audit logging configuration
+        let audit_enabled = std::env::var("AUDIT_ENABLED")
+            .map(|s| s.to_lowercase() != "false")
+            .unwrap_or(true);
+
         Self {
             max_request_size,
             request_timeout,
@@ -246,6 +260,7 @@ impl SecurityConfig {
                 None
             },
             login_tracking_config,
+            audit_enabled,
         }
     }
 
@@ -351,6 +366,18 @@ impl SecurityConfigBuilder {
     pub fn login_auth_paths(mut self, paths: Vec<&str>) -> Self {
         self.config.login_tracking_config.auth_paths =
             paths.into_iter().map(String::from).collect();
+        self
+    }
+
+    /// Enable audit logging (AU-2, AU-3, AU-12).
+    pub fn audit(mut self, enabled: bool) -> Self {
+        self.config.audit_enabled = enabled;
+        self
+    }
+
+    /// Disable audit logging (for testing only!).
+    pub fn disable_audit(mut self) -> Self {
+        self.config.audit_enabled = false;
         self
     }
 

@@ -23,7 +23,7 @@ These controls are marked as ✅ IMPLEMENTED in the Security Control Registry an
 ### Audit and Accountability (AU) - 6 controls
 | Control ID | Name | Claimed Location | Audit Status |
 |------------|------|------------------|--------------|
-| AU-2 | Audit Events | `src/observability/events.rs`, `src/audit.rs`, `nix/modules/secure-postgres.nix` | **PARTIAL** - Rust events defined; PG pgaudit PASS; app middleware not default |
+| AU-2 | Audit Events | `src/observability/events.rs`, `src/audit/mod.rs`, `nix/modules/secure-postgres.nix` | **PASS** - audit_middleware in with_security() + 22 events + pgaudit |
 | AU-3 | Content of Audit Records | `src/observability/events.rs:250-293`, `src/audit.rs:65-107` | **PASS** - All 6 required fields present in AuditRecord |
 | AU-8 | Time Stamps | `tracing` crate, `src/audit.rs:65-75` | **PASS** - UTC timestamps via tracing + chrony NTP sync |
 | AU-9 | Protection of Audit Information | `src/audit/integrity.rs`, `nix/modules/secure-postgres.nix` | **PARTIAL** - Rust crypto works; PG log protection PASS; middleware not integrated |
@@ -202,6 +202,7 @@ These controls are marked as ✅ IMPLEMENTED in the Security Control Registry an
 | 2025-12-29 | SI-10 | **PASS** | ValidatedJson/Query/Path extractors + ValidationConfig + ValidationRejection + 21 tests |
 | 2025-12-29 | CA-7 | **PASS** | health_routes() + HealthEndpointConfig + /health, /live, /ready endpoints + 21 tests |
 | 2025-12-29 | IR-4 | **PASS** | AlertingExtension + alerting_middleware + alerting_layer + 5 convenience methods + 19 tests |
+| 2025-12-29 | AU-2 | **PASS** | audit_middleware in with_security() + audit_enabled config + AUDIT_ENABLED env var |
 
 ---
 
