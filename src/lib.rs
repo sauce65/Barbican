@@ -384,6 +384,10 @@ pub use alerting::{
     alert_suspicious_activity, alert_database_disconnected,
     // IR-4 Enforcement: Axum Integration
     AlertingExtension, alerting_middleware, alerting_layer,
+    // IR-5 Enforcement: Incident Tracking
+    Incident, IncidentStatus, IncidentError, IncidentStore,
+    InMemoryIncidentStore, IncidentTracker, IncidentTrackerConfig,
+    IncidentTrackerExtension, incident_tracking_middleware,
 };
 
 // Health check re-exports (CA-7)

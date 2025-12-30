@@ -71,7 +71,7 @@ These controls are marked as ✅ IMPLEMENTED in the Security Control Registry an
 | Control ID | Name | Claimed Location | Audit Status |
 |------------|------|------------------|--------------|
 | IR-4 | Incident Handling | `src/alerting.rs` | **PASS** - AlertingExtension + alerting_middleware + alerting_layer + 19 tests |
-| IR-5 | Incident Monitoring | `src/alerting.rs` | **PARTIAL** - Dashboards/logs exist; no persistent tracking |
+| IR-5 | Incident Monitoring | `src/alerting.rs` | **PASS** - IncidentTracker + IncidentStore trait + lifecycle mgmt + 15 tests |
 
 ### Media Protection (MP) - 1 control
 | Control ID | Name | Claimed Location | Audit Status |
@@ -205,6 +205,7 @@ These controls are marked as ✅ IMPLEMENTED in the Security Control Registry an
 | 2025-12-29 | AU-2 | **PASS** | audit_middleware in with_security() + audit_enabled config + AUDIT_ENABLED env var |
 | 2025-12-29 | AU-9 | **PASS** | AuditChainExtension + log_auth_event/data_access/security_violation + verify_integrity + 23 tests |
 | 2025-12-29 | SC-10 | **PASS** | session_enforcement_middleware (from AC-11/AC-12) handles network disconnect on timeout |
+| 2025-12-29 | IR-5 | **PASS** | IncidentTracker + IncidentStore trait + lifecycle (Open→Investigating→Resolved) + 15 tests |
 
 ---
 
