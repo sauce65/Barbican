@@ -7,14 +7,15 @@ A step-by-step guide for auditors assessing NIST SP 800-53 Rev 5 compliance of s
 1. [Overview](#overview)
 2. [Audit Workflow](#audit-workflow)
 3. [Phase 1: Preparation](#phase-1-preparation)
-4. [Phase 2: Automated Testing](#phase-2-automated-testing)
-5. [Phase 3: Configuration Verification](#phase-3-configuration-verification)
-6. [Phase 4: Control Family Audits](#phase-4-control-family-audits)
-7. [Phase 5: Production Runtime Verification](#phase-5-production-runtime-verification)
-8. [Phase 6: Evidence Collection](#phase-6-evidence-collection)
-9. [Phase 7: Report Generation](#phase-7-report-generation)
-10. [Control Reference](#control-reference)
-11. [Appendix](#appendix)
+4. [Phase 1b: Deploy Audit Target (If Needed)](#phase-1b-deploy-audit-target-if-needed)
+5. [Phase 2: Automated Testing](#phase-2-automated-testing)
+6. [Phase 3: Configuration Verification](#phase-3-configuration-verification)
+7. [Phase 4: Control Family Audits](#phase-4-control-family-audits)
+8. [Phase 5: Production Runtime Verification](#phase-5-production-runtime-verification)
+9. [Phase 6: Evidence Collection](#phase-6-evidence-collection)
+10. [Phase 7: Report Generation](#phase-7-report-generation)
+11. [Control Reference](#control-reference)
+12. [Appendix](#appendix)
 
 ---
 
@@ -63,9 +64,26 @@ Phase 1: Preparation
     │
     ├── Gather prerequisites
     ├── Identify target profile
-    └── Clone/access repository
+    ├── Clone/access repository
+    └── Check for existing production system
           │
-          ▼
+          ├─► [YES: Production system exists]
+          │         │
+          │         └── Record system details, proceed to Phase 2
+          │
+          └─► [NO: No production system]
+                    │
+                    ▼
+          Phase 1b: Deploy Audit Target
+                    │
+                    ├── Generate age keys for secrets
+                    ├── Encrypt secrets with agenix
+                    ├── Build NixOS VM from flake
+                    ├── Start VM and verify boot
+                    ├── Verify services running
+                    └── Record VM access details
+                          │
+                          ▼
 Phase 2: Automated Testing
     │
     ├── Build application
@@ -159,6 +177,224 @@ Record the profile for use in subsequent phases:
 - **Target Profile:** ___________________
 - **Date:** ___________________
 - **Auditor:** ___________________
+
+### Check for Existing Production System
+
+Determine whether a production system is already deployed and available for audit:
+
+```bash
+# If you have SSH access to a production host, verify it's running barbican
+ssh <production-host> "systemctl list-units | grep -E '(postgres|aide|auditd)'"
+
+# Or check if the NixOS VM can be accessed
+ping <production-host>
+```
+
+**Decision Point:**
+
+| Situation | Action |
+|-----------|--------|
+| Production system exists and is accessible | Record hostname/IP, proceed to Phase 2 |
+| No production system available | Proceed to Phase 1b to deploy an audit target |
+| Development/staging audit only | Skip Phase 1b, but note that Phase 5 will be limited |
+
+Record your decision:
+- **Production System Available:** [ ] Yes / [ ] No
+- **Production Host:** ___________________
+- **If No, deploying audit target:** [ ] Yes / [ ] Skipping (dev audit only)
+
+---
+
+## Phase 1b: Deploy Audit Target (If Needed)
+
+If no production system exists, deploy a NixOS VM as the audit target. This ensures a complete
+end-to-end audit including runtime verification (Phase 5).
+
+**When to use this phase:**
+- No existing production deployment to audit
+- Need to verify the full infrastructure stack
+- FedRAMP authorization audit (Phase 5 is mandatory)
+
+**When to skip this phase:**
+- Production system already exists and is accessible
+- Development/staging-only audit (document this limitation in the report)
+
+### Prerequisites for VM Deployment
+
+- [ ] Nix installed with flakes enabled
+- [ ] At least 4GB RAM available for VM
+- [ ] QEMU/KVM available (`nix-shell -p qemu`)
+- [ ] `age` installed for secret encryption (`nix-shell -p age`)
+- [ ] `agenix` CLI available (`nix run github:ryantm/agenix`)
+
+### Step 1b.1: Generate Age Keys for Secrets
+
+Barbican examples use agenix for secret management. Generate keys for the audit VM:
+
+```bash
+# Navigate to the example directory
+cd examples/fedramp-high  # or fedramp-moderate, fedramp-low
+
+# Create a secrets directory if it doesn't exist
+mkdir -p secrets
+
+# Generate an age key for the VM (this simulates the VM's SSH host key)
+age-keygen -o secrets/audit-vm-key.txt
+
+# Extract the public key
+AGE_PUBLIC_KEY=$(age-keygen -y secrets/audit-vm-key.txt)
+echo "VM Public Key: $AGE_PUBLIC_KEY"
+```
+
+### Step 1b.2: Configure Secrets
+
+Create the secrets configuration for agenix:
+
+```bash
+# Create secrets.nix with the VM's public key
+cat > secrets/secrets.nix << 'EOF'
+let
+  # The audit VM's age public key (from step 1b.1)
+  auditVM = "age1...";  # Replace with your $AGE_PUBLIC_KEY
+in
+{
+  "db-password.age".publicKeys = [ auditVM ];
+  "app-env.age".publicKeys = [ auditVM ];
+}
+EOF
+
+# Edit secrets.nix to add your actual public key
+# Replace "age1..." with the output from age-keygen -y
+```
+
+### Step 1b.3: Create and Encrypt Secrets
+
+```bash
+# Create the database password secret
+echo "audit-db-password-$(date +%s)" | age -r "$AGE_PUBLIC_KEY" -o secrets/db-password.age
+
+# Create the application environment file
+cat << 'ENVEOF' | age -r "$AGE_PUBLIC_KEY" -o secrets/app-env.age
+DATABASE_URL=postgresql://hello_fedramp_high:audit-db-password@localhost/hello_fedramp_high?sslmode=verify-full
+ENVEOF
+
+# Verify secrets were created
+ls -la secrets/*.age
+```
+
+### Step 1b.4: Build the NixOS VM
+
+```bash
+# Build the VM (this may take several minutes on first run)
+nix build .#nixosConfigurations.fedramp-high-vm.config.system.build.vm
+
+# Verify the build succeeded
+ls -la result/bin/run-*-vm
+```
+
+**Expected output:** A symlink to the VM runner script.
+
+**Troubleshooting:**
+- If build fails with secret errors, verify `secrets/*.age` files exist
+- If build fails with missing module errors, ensure barbican flake input is correct
+- Run `nix flake check` to diagnose configuration issues
+
+### Step 1b.5: Start the VM
+
+```bash
+# Start the VM with port forwarding for SSH and the application
+QEMU_NET_OPTS="hostfwd=tcp::2222-:22,hostfwd=tcp::3000-:3000" ./result/bin/run-*-vm
+
+# The VM will boot and display a console
+# Wait for the login prompt (indicates boot complete)
+```
+
+**Note:** The VM runs in the foreground. Open a new terminal for subsequent steps.
+
+### Step 1b.6: Configure VM SSH Access
+
+The default VM has a root user with password "changeme". Set up SSH access:
+
+```bash
+# In a new terminal, wait for SSH to be available
+for i in {1..30}; do
+  ssh -o ConnectTimeout=2 -o StrictHostKeyChecking=no -p 2222 root@localhost echo "SSH ready" && break
+  echo "Waiting for SSH... ($i/30)"
+  sleep 2
+done
+
+# Copy your SSH key for passwordless access (optional but recommended)
+ssh-copy-id -p 2222 root@localhost
+```
+
+### Step 1b.7: Inject Age Key into VM
+
+The VM needs the age private key to decrypt secrets at runtime:
+
+```bash
+# Copy the age key to the VM (simulating SSH host key derivation)
+scp -P 2222 secrets/audit-vm-key.txt root@localhost:/etc/ssh/audit-age-key
+
+# On the VM, set up the age identity
+ssh -p 2222 root@localhost << 'VMEOF'
+mkdir -p /etc/ssh
+cp /etc/ssh/audit-age-key /etc/ssh/ssh_host_ed25519_key.age
+chmod 600 /etc/ssh/ssh_host_ed25519_key.age
+VMEOF
+```
+
+**Note:** In production, agenix uses the SSH host key. For audit VMs, we inject a key directly.
+
+### Step 1b.8: Verify Services Running
+
+```bash
+# Check all barbican-related services
+ssh -p 2222 root@localhost << 'VMEOF'
+echo "=== Service Status ==="
+systemctl status postgresql --no-pager || echo "PostgreSQL not running"
+systemctl status auditd --no-pager || echo "auditd not running"
+systemctl status aide-check.timer --no-pager || echo "AIDE timer not running"
+
+echo ""
+echo "=== Firewall Status ==="
+iptables -L -n | head -20
+
+echo ""
+echo "=== Kernel Hardening ==="
+sysctl kernel.kptr_restrict kernel.dmesg_restrict
+VMEOF
+```
+
+**Expected:** PostgreSQL, auditd, and AIDE services should be running (or starting).
+
+### Step 1b.9: Verify Application (If Applicable)
+
+```bash
+# Check if the application service is running
+ssh -p 2222 root@localhost "systemctl status hello_fedramp_high --no-pager" || echo "App may need manual start"
+
+# Test the application endpoint (via port forward)
+curl -s http://localhost:3000/health || echo "App not responding yet"
+curl -s http://localhost:3000/ | jq .
+```
+
+### Step 1b.10: Record Audit Target Details
+
+Document the deployed audit target for use in subsequent phases:
+
+- **Audit Target Type:** NixOS VM (deployed via Phase 1b)
+- **SSH Access:** `ssh -p 2222 root@localhost`
+- **Application URL:** `http://localhost:3000`
+- **VM Build Date:** ___________________
+- **Secrets Provisioned:** [ ] Yes
+
+**Checklist:**
+- [ ] VM boots successfully
+- [ ] SSH access working
+- [ ] PostgreSQL service running
+- [ ] auditd service running
+- [ ] Firewall rules active
+- [ ] Application responding (if applicable)
 
 ---
 
@@ -1392,4 +1628,5 @@ cat compliance-artifacts/*.json | jq '.artifacts[] | select(.passed == false) | 
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.1 | 2025-12-30 | Added Phase 1b for deploying audit targets when no production system exists |
 | 1.0 | 2025-12-30 | Initial workflow-based guide |
