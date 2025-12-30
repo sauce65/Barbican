@@ -35,7 +35,9 @@
 
 use std::path::PathBuf;
 
-use barbican::compliance::{generate_compliance_report, ComplianceTestReport};
+use barbican::compliance::{
+    generate_compliance_report_for_profile, ComplianceProfile, ComplianceTestReport,
+};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
@@ -45,6 +47,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("./compliance-artifacts"));
 
+    let profile = parse_profile(&args)?;
     let should_sign = args.iter().any(|a| a == "--sign");
     let key_id = parse_arg(&args, "--key-id").unwrap_or_else(|| "default-key".to_string());
     let show_help = args.iter().any(|a| a == "--help" || a == "-h");
@@ -60,7 +63,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Generate the compliance test report
     println!("Running compliance tests...\n");
-    let mut report = generate_compliance_report();
+    let mut report = generate_compliance_report_for_profile(profile);
 
     // Print summary
     print_summary(&report, verbose);
@@ -103,26 +106,34 @@ USAGE:
     cargo run --example generate_compliance_report --features compliance-artifacts [OPTIONS]
 
 OPTIONS:
+    --profile <PROFILE>   Compliance profile: low, moderate, high, soc2 (default: moderate)
     --output-dir <DIR>    Output directory for the report (default: ./compliance-artifacts)
     --sign                Sign the report with HMAC-SHA256
     --key-id <ID>         Key identifier to include in signature (default: default-key)
     --verbose, -v         Show detailed test results
     --help, -h            Show this help message
 
+PROFILES:
+    low, fedramp-low      FedRAMP Low impact baseline
+    moderate, fedramp-moderate   FedRAMP Moderate impact baseline (default)
+    high, fedramp-high    FedRAMP High impact baseline
+    soc2                  SOC 2 Type II baseline
+
 ENVIRONMENT:
     COMPLIANCE_SIGNING_KEY    Secret key for signing (default: generates a warning)
 
 EXAMPLES:
-    # Basic report generation
-    cargo run --example generate_compliance_report --features compliance-artifacts
+    # Generate FedRAMP High report
+    cargo run --example generate_compliance_report --features compliance-artifacts \
+        -- --profile high
 
-    # Generate signed report
+    # Generate signed FedRAMP Moderate report
     COMPLIANCE_SIGNING_KEY=my-secret cargo run --example generate_compliance_report \
         --features compliance-artifacts -- --sign --key-id prod-2025
 
     # Custom output directory with verbose output
     cargo run --example generate_compliance_report --features compliance-artifacts \
-        -- --output-dir ./reports --verbose
+        -- --output-dir ./reports --verbose --profile high
 "#
     );
 }
@@ -218,5 +229,22 @@ fn get_signing_key() -> Result<Vec<u8>, Box<dyn std::error::Error>> {
             eprintln!("         Using default development key. DO NOT use in production!\n");
             Ok(b"barbican-default-development-signing-key-not-for-production".to_vec())
         }
+    }
+}
+
+fn parse_profile(args: &[String]) -> Result<ComplianceProfile, Box<dyn std::error::Error>> {
+    let profile_str = parse_arg(args, "--profile").unwrap_or_else(|| "moderate".to_string());
+
+    match profile_str.to_lowercase().as_str() {
+        "low" | "fedramp-low" => Ok(ComplianceProfile::FedRampLow),
+        "moderate" | "fedramp-moderate" => Ok(ComplianceProfile::FedRampModerate),
+        "high" | "fedramp-high" => Ok(ComplianceProfile::FedRampHigh),
+        "soc2" | "soc-2" => Ok(ComplianceProfile::Soc2),
+        "custom" => Ok(ComplianceProfile::Custom),
+        other => Err(format!(
+            "Unknown profile '{}'. Valid profiles: low, moderate, high, soc2",
+            other
+        )
+        .into()),
     }
 }

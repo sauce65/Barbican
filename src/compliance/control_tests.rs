@@ -25,6 +25,7 @@
 use crate::audit::integrity::{AuditChain, AuditIntegrityConfig, SignatureAlgorithm};
 use crate::auth::{Claims, MfaPolicy};
 use crate::compliance::artifacts::{ArtifactBuilder, ComplianceTestReport, ControlTestArtifact};
+use crate::compliance::profile::ComplianceProfile;
 use crate::config::SecurityConfig;
 use crate::crypto::constant_time_eq;
 use crate::encryption::{EncryptedField, EncryptionAlgorithm, EncryptionConfig, FieldEncryptor};
@@ -2405,7 +2406,37 @@ pub fn test_sc12_key_management() -> ControlTestArtifact {
 /// println!("Report written to: {}", path.display());
 /// ```
 pub fn generate_compliance_report() -> ComplianceTestReport {
-    let mut report = ComplianceTestReport::new("FedRAMP Moderate");
+    generate_compliance_report_for_profile(ComplianceProfile::default())
+}
+
+/// Generate a compliance test report for a specific profile
+///
+/// This function runs all artifact-generating tests and collects them
+/// into a single report labeled with the specified compliance profile.
+///
+/// # Arguments
+///
+/// * `profile` - The compliance profile (FedRAMP Low/Moderate/High, SOC 2, etc.)
+///
+/// # Example
+///
+/// ```ignore
+/// use barbican::compliance::control_tests::generate_compliance_report_for_profile;
+/// use barbican::compliance::ComplianceProfile;
+///
+/// // Generate a FedRAMP High report
+/// let mut report = generate_compliance_report_for_profile(ComplianceProfile::FedRampHigh);
+///
+/// // Optionally sign the report
+/// report.sign(b"my-signing-key", "key-2025")?;
+///
+/// // Write to file
+/// std::fs::create_dir_all("./compliance-artifacts")?;
+/// let path = report.write_to_file(Path::new("./compliance-artifacts"))?;
+/// println!("Report written to: {}", path.display());
+/// ```
+pub fn generate_compliance_report_for_profile(profile: ComplianceProfile) -> ComplianceTestReport {
+    let mut report = ComplianceTestReport::new(profile.name());
 
     // Run all control tests and add artifacts
     // Access Control (AC)

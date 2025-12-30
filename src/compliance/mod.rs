@@ -56,4 +56,6 @@ pub use artifacts::{
 };
 
 #[cfg(feature = "compliance-artifacts")]
-pub use control_tests::{all_control_tests, generate_compliance_report};
+pub use control_tests::{
+    all_control_tests, generate_compliance_report, generate_compliance_report_for_profile,
+};
