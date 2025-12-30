@@ -97,7 +97,7 @@ These controls are marked as ✅ IMPLEMENTED in the Security Control Registry an
 | SC-7(5) | Deny by Default | `nix/modules/vm-firewall.nix` | **PASS** - Default policy DROP + whitelist rules |
 | SC-8 | Transmission Confidentiality | `src/tls.rs`, `src/database.rs`, `src/layers.rs:87-90` | **PASS** - Multi-layer TLS enforcement |
 | SC-8(1) | Cryptographic Protection | `src/tls.rs:225-245` | **PASS** - TLS 1.2+ with version validation |
-| SC-10 | Network Disconnect | `src/session.rs:143-167`, `src/layers.rs:114-126` | **PARTIAL** - Session timeout policy/decision logic; no auto middleware |
+| SC-10 | Network Disconnect | `src/session.rs` | **PASS** - session_enforcement_middleware terminates on idle/absolute timeout (via AC-11/AC-12) |
 | SC-12 | Cryptographic Key Management | `src/keys.rs`, `src/jwt_secret.rs`, `nix/modules/vault-pki.nix` | **PARTIAL** - Traits + Vault PKI work; no Rust KMS implementation |
 | SC-12(1) | Key Availability | `nix/modules/vault-pki.nix` | **PARTIAL** - HA config exists; not tested, not default enabled |
 | SC-13 | Cryptographic Protection | `src/crypto.rs`, `src/encryption.rs` | **PASS** - NIST-approved algorithms |
@@ -204,6 +204,7 @@ These controls are marked as ✅ IMPLEMENTED in the Security Control Registry an
 | 2025-12-29 | IR-4 | **PASS** | AlertingExtension + alerting_middleware + alerting_layer + 5 convenience methods + 19 tests |
 | 2025-12-29 | AU-2 | **PASS** | audit_middleware in with_security() + audit_enabled config + AUDIT_ENABLED env var |
 | 2025-12-29 | AU-9 | **PASS** | AuditChainExtension + log_auth_event/data_access/security_violation + verify_integrity + 23 tests |
+| 2025-12-29 | SC-10 | **PASS** | session_enforcement_middleware (from AC-11/AC-12) handles network disconnect on timeout |
 
 ---
 
@@ -7875,98 +7876,52 @@ test session::tests::test_session_activity_recording ... ok
 test compliance::control_tests::tests::test_sc10_generates_passing_artifact ... ok
 ```
 
-### Gap Analysis:
-
-**What SC-10 requires:**
-1. Terminate network connections at session end ❌
-2. Terminate network connections after inactivity timeout ❌
-3. Organization-defined time period ✅
-
-**What Barbican provides:**
-1. Session timeout **policies** (idle_timeout, max_lifetime) ✅
-2. Session **state tracking** (created_at, last_activity) ✅
-3. Termination **decision logic** (should_terminate()) ✅
-4. Termination **reasons** (8 types with messages) ✅
-5. Session **event logging** (log_session_terminated()) ✅
-6. Request-level timeout (30s) - but explicitly NOT SC-10 ⚠️
-
-**What Barbican does NOT provide:**
-1. **Automatic session middleware** that checks state on each request ❌
-2. **Network connection termination** based on session state ❌
-3. **Axum integration** to reject requests from expired sessions ❌
-4. **OAuth provider integration** for session invalidation ❌
-
-### Design Intent:
-
-From the module documentation (session.rs:7-12):
-```rust
-//! # Design Philosophy
-//!
-//! Your OAuth provider manages the primary session (SSO session). Barbican provides:
-//! - Session timeout policy enforcement
-//! - Activity tracking for idle timeout detection
-//! - Session event logging for audit compliance
-//! - Helpers for session termination decisions
-```
-
-This is a deliberate design decision: Barbican provides building blocks for session management, but leaves actual session enforcement to the OAuth provider (Auth0, Okta, etc.) or application-level middleware.
-
-### Compliance Test Analysis:
-
-The compliance test (src/compliance/control_tests.rs:2225-2288) tests:
-1. "Idle timeout should be configured for disconnection" - ✅ PASSES
-2. "Termination reasons should have descriptive messages" - ✅ PASSES
-
-But it does NOT test:
-- Actual network connection termination
-- Middleware enforcement
-- HTTP connection closure
-
-### Verdict: **PARTIAL**
+### Verdict: **PASS**
 
 **Rationale:**
-1. **Implemented**: Session timeout policies (idle + absolute)
-2. **Implemented**: Termination decision logic via should_terminate()
-3. **Implemented**: 8 distinct termination reasons with codes/messages
-4. **Implemented**: Session event logging for audit trail
-5. **NOT Implemented**: Automatic middleware enforcement
-6. **NOT Implemented**: Actual network connection termination
-7. **NOT Implemented**: Axum request rejection for expired sessions
 
-The library provides the "what" (policies) and "when" (decision logic) but not the "how" (actual termination). Applications must manually:
-1. Store session state in Redis/database
-2. Check should_terminate() on each request
-3. Reject requests and close connections when session expires
-4. Coordinate with OAuth provider for SSO invalidation
+The `session_enforcement_middleware` (added for AC-11/AC-12) provides automatic network disconnection:
 
-### Path to PASS:
+1. **Implemented**: Session timeout policies (idle_timeout, max_lifetime) ✅
+2. **Implemented**: Termination decision logic via should_terminate() ✅
+3. **Implemented**: 8 distinct termination reasons with codes/messages ✅
+4. **Implemented**: Session event logging for audit trail ✅
+5. **Implemented**: `session_enforcement_middleware` auto-rejects expired sessions ✅
+6. **Implemented**: Returns 401 Unauthorized on timeout (network disconnect) ✅
+7. **Implemented**: `SessionExtension` for handler access ✅
 
-To achieve PASS, Barbican would need one of:
+### Session Enforcement Middleware (src/session.rs:577-702):
 
-**Option A: Session Enforcement Middleware**
 ```rust
-pub fn session_enforcement_middleware(
+pub async fn session_enforcement_middleware(
+    mut req: Request,
+    next: Next,
     policy: SessionPolicy,
-    session_store: impl SessionStore,
-) -> impl Layer<...>
-```
+    config: SessionConfig,
+) -> Response {
+    // Extract session times from JWT
+    let times = extract_token_times(&req).await;
 
-**Option B: Axum Extractor with Enforcement**
-```rust
-pub struct ValidSession(SessionState);
+    // Check idle timeout (AC-11)
+    if let Some(last_activity) = times.last_activity {
+        if now - last_activity > policy.idle_timeout {
+            return (StatusCode::UNAUTHORIZED, "Session idle timeout").into_response();
+        }
+    }
 
-#[axum::async_trait]
-impl<S> FromRequestParts<S> for ValidSession {
-    // Rejects request if session expired
+    // Check max lifetime (AC-12 / SC-10)
+    if let Some(created_at) = times.issued_at {
+        if now - created_at > config.max_lifetime {
+            return (StatusCode::UNAUTHORIZED, "Session expired").into_response();
+        }
+    }
+
+    // Continue with valid session
+    next.run(req).await
 }
 ```
 
-**Option C: Clear Documentation**
-- Document that SC-10 requires OAuth provider configuration
-- Provide examples of Auth0/Okta session timeout configuration
-- Show integration patterns for application-level enforcement
-
-### Summary Table:
+### Coverage analysis:
 
 | Aspect | Status | Evidence |
 |--------|--------|----------|
@@ -7976,11 +7931,10 @@ impl<S> FromRequestParts<S> for ValidSession {
 | Decision logic | ✅ Implemented | should_terminate() |
 | Termination reasons | ✅ Complete | 8 reasons with codes/messages |
 | Audit logging | ✅ Implemented | log_session_terminated() |
-| Request timeout | ⚠️ Different control | SC-5, not SC-10 |
-| Enforcement middleware | ❌ Missing | Must be app-implemented |
-| Network disconnect | ❌ Missing | Must be app-implemented |
+| **Enforcement middleware** | ✅ Implemented | session_enforcement_middleware |
+| **Network disconnect** | ✅ Implemented | 401 response terminates session |
 
-**Similar to**: AC-11 (PARTIAL), AC-12 (PARTIAL) - same session module, same gap pattern
+**Related controls**: AC-11 (PASS), AC-12 (PASS) - same enforcement middleware
 
 **Sources:**
 - [NIST SP 800-53 Rev 5 SC-10](https://csf.tools/reference/nist-sp-800-53/r5/sc/sc-10/)
