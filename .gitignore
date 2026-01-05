@@ -1,2 +1,5 @@
 /target
 result
+**/result
+**/nix-result
+**/vm-result
