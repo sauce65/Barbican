@@ -263,7 +263,8 @@ login_maximum_inactive_lifetime_duration = {idle_timeout}m
 login_maximum_lifetime_duration = {session_timeout}m
 
 [alerting]
-enabled = {alerting}
+# Legacy alerting disabled - using unified_alerting (Grafana 10+)
+enabled = false
 
 [unified_alerting]
 enabled = {alerting}
