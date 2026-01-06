@@ -17,15 +17,17 @@ pub fn generate(
     let mut files = Vec::new();
     let scripts_dir = output_dir.join("scripts");
 
-    // Certificate generation script
-    let gen_certs = generate_cert_script(fedramp, app_name);
-    let certs_path = scripts_dir.join("gen-certs.sh");
-    fs::write(&certs_path, gen_certs)?;
-    make_executable(&certs_path)?;
-    files.push(
-        GeneratedFile::new(&certs_path, "TLS certificate generation script")
-            .with_controls(vec!["SC-8", "SC-12"])
-    );
+    // Certificate generation script (only for non-development profiles)
+    if fedramp.tls_enabled() {
+        let gen_certs = generate_cert_script(fedramp, app_name);
+        let certs_path = scripts_dir.join("gen-certs.sh");
+        fs::write(&certs_path, gen_certs)?;
+        make_executable(&certs_path)?;
+        files.push(
+            GeneratedFile::new(&certs_path, "TLS certificate generation script")
+                .with_controls(vec!["SC-8", "SC-12"])
+        );
+    }
 
     // Backup script
     if fedramp.backup_encryption {
@@ -60,7 +62,7 @@ pub fn generate(
     );
 
     // Startup script
-    let startup = generate_startup_script(app_name);
+    let startup = generate_startup_script(fedramp, app_name);
     let startup_path = scripts_dir.join("start-stack.sh");
     fs::write(&startup_path, startup)?;
     make_executable(&startup_path)?;
@@ -543,10 +545,55 @@ fi
     )
 }
 
-fn generate_startup_script(app_name: &str) -> String {
+fn generate_startup_script(fedramp: &ObservabilityComplianceConfig, app_name: &str) -> String {
+    let is_dev = fedramp.is_development();
+
+    let prerequisites = if is_dev {
+        // Development mode: no prerequisites, just start
+        r#"echo "Development mode - no TLS or secrets required"
+echo ""
+"#.to_string()
+    } else {
+        // Production mode: check for .env and certificates
+        r#"# Check prerequisites
+if [ ! -f ".env" ]; then
+    echo "WARNING: .env file not found!"
+    echo "  Copy .env.example to .env and configure it first."
+    echo ""
+    read -p "Create .env from template? (y/n): " CREATE_ENV
+    if [ "${CREATE_ENV}" = "y" ]; then
+        cp .env.example .env
+        echo "Created .env - please edit it with secure values before continuing."
+        exit 1
+    fi
+fi
+
+if [ ! -d "certs" ] || [ ! -f "certs/ca.crt" ]; then
+    echo "WARNING: TLS certificates not found!"
+    echo "  Use Vault PKI to generate certificates:"
+    echo "    nix run .#vault-dev  # Start Vault (Terminal 1)"
+    echo "    export VAULT_ADDR=http://127.0.0.1:8200"
+    echo "    export VAULT_TOKEN=barbican-dev"
+    echo "    nix run .#vault-cert-server prometheus ./certs/prometheus"
+    echo "    nix run .#vault-cert-server loki ./certs/loki"
+    echo "    nix run .#vault-cert-server grafana ./certs/grafana"
+    echo "    nix run .#vault-cert-server alertmanager ./certs/alertmanager"
+    echo "    nix run .#vault-ca-chain ./certs"
+    echo ""
+    exit 1
+fi
+
+# Ensure config files have correct permissions
+echo "Setting config file permissions..."
+find . -name "*.yml" -exec chmod 644 {} \;
+find . -name "*.ini" -exec chmod 644 {} \;
+"#.to_string()
+    };
+
     format!(
         r#"#!/bin/bash
 # Stack Startup Script - {app_name} Observability Stack
+# Profile: {profile}
 #
 # Usage: ./start-stack.sh
 
@@ -557,39 +604,10 @@ STACK_DIR="${{SCRIPT_DIR}}/.."
 
 cd "${{STACK_DIR}}"
 
-echo "Starting {app_name} observability stack..."
+echo "Starting {app_name} observability stack ({profile})..."
 echo ""
 
-# Check prerequisites
-if [ ! -f ".env" ]; then
-    echo "WARNING: .env file not found!"
-    echo "  Copy .env.example to .env and configure it first."
-    echo ""
-    read -p "Create .env from template? (y/n): " CREATE_ENV
-    if [ "${{CREATE_ENV}}" = "y" ]; then
-        cp .env.example .env
-        echo "Created .env - please edit it with secure values before continuing."
-        exit 1
-    fi
-fi
-
-if [ ! -d "certs" ] || [ ! -f "certs/ca.crt" ]; then
-    echo "WARNING: TLS certificates not found!"
-    echo "  Run ./scripts/gen-certs.sh first."
-    echo ""
-    read -p "Generate certificates now? (y/n): " GEN_CERTS
-    if [ "${{GEN_CERTS}}" = "y" ]; then
-        ./scripts/gen-certs.sh
-    else
-        exit 1
-    fi
-fi
-
-# Ensure config files have correct permissions
-echo "Setting config file permissions..."
-find . -name "*.yml" -exec chmod 644 {{}} \;
-find . -name "*.ini" -exec chmod 644 {{}} \;
-
+{prerequisites}
 # Start the stack
 echo "Starting Docker Compose..."
 docker-compose up -d
@@ -611,6 +629,8 @@ echo ""
 echo "To stop the stack: docker-compose down"
 "#,
         app_name = app_name,
+        profile = fedramp.profile().name(),
+        prerequisites = prerequisites,
     )
 }
 

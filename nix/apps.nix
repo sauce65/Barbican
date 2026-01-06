@@ -350,6 +350,7 @@ in
       # Get compliance profile
       echo ""
       echo "Compliance profiles:"
+      echo "  0) development      - Local dev (no TLS/auth required)"
       echo "  1) fedramp-low      - Basic security controls"
       echo "  2) fedramp-moderate - Standard FedRAMP (default)"
       echo "  3) fedramp-high     - Maximum security"
@@ -359,6 +360,7 @@ in
       PROFILE_NUM="''${PROFILE_NUM:-2}"
 
       case "$PROFILE_NUM" in
+        0) PROFILE="development" ;;
         1) PROFILE="fedramp-low" ;;
         3) PROFILE="fedramp-high" ;;
         4) PROFILE="soc2" ;;

@@ -74,6 +74,7 @@
 mod config;
 mod providers;
 mod events;
+pub mod metrics;
 pub mod stack;
 
 pub use config::{LogFormat, LogProvider, MetricsProvider, ObservabilityConfig, ObservabilityConfigBuilder};

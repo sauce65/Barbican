@@ -118,6 +118,9 @@ pub struct ObservabilityStack {
 
     /// Alert rules configuration
     pub alerts: AlertRules,
+
+    /// Optional directory containing custom Grafana dashboards to copy
+    pub dashboards_dir: Option<PathBuf>,
 }
 
 impl ObservabilityStack {
@@ -196,7 +199,17 @@ impl ObservabilityStack {
     }
 
     fn generate_grafana(&self) -> StackResult<Vec<GeneratedFile>> {
-        grafana::generate(&self.output_dir, &self.grafana, &self.fedramp, &self.app_name)
+        let mut files = grafana::generate(&self.output_dir, &self.grafana, &self.fedramp, &self.app_name)?;
+
+        // Copy custom dashboards if provided
+        if let Some(ref dashboards_dir) = self.dashboards_dir {
+            if dashboards_dir.exists() && dashboards_dir.is_dir() {
+                let dest_dir = self.output_dir.join("grafana/provisioning/dashboards/json");
+                files.extend(copy_dashboards(dashboards_dir, &dest_dir)?);
+            }
+        }
+
+        Ok(files)
     }
 
     fn generate_alerts(&self) -> StackResult<Vec<GeneratedFile>> {
@@ -216,6 +229,34 @@ impl ObservabilityStack {
     }
 }
 
+/// Copy dashboard JSON files from source directory to destination
+fn copy_dashboards(src_dir: &Path, dest_dir: &Path) -> StackResult<Vec<GeneratedFile>> {
+    let mut files = Vec::new();
+
+    // Ensure destination exists
+    fs::create_dir_all(dest_dir)?;
+
+    // Copy all .json files
+    for entry in fs::read_dir(src_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+
+        if path.is_file() && path.extension().map(|e| e == "json").unwrap_or(false) {
+            let file_name = path.file_name().unwrap();
+            let dest_path = dest_dir.join(file_name);
+
+            fs::copy(&path, &dest_path)?;
+
+            files.push(
+                GeneratedFile::new(&dest_path, format!("Custom dashboard: {}", file_name.to_string_lossy()))
+                    .with_controls(vec!["AU-6", "SI-4"])
+            );
+        }
+    }
+
+    Ok(files)
+}
+
 /// Builder for ObservabilityStack
 #[derive(Default)]
 pub struct ObservabilityStackBuilder {
@@ -228,6 +269,7 @@ pub struct ObservabilityStackBuilder {
     grafana: Option<GrafanaConfig>,
     compose: Option<ComposeConfig>,
     alerts: Option<AlertRules>,
+    dashboards_dir: Option<PathBuf>,
 }
 
 impl ObservabilityStackBuilder {
@@ -292,6 +334,26 @@ impl ObservabilityStackBuilder {
         self
     }
 
+    /// Set a directory containing custom Grafana dashboards to copy.
+    ///
+    /// All `.json` files in this directory will be copied to the generated
+    /// Grafana provisioning directory.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let stack = ObservabilityStack::builder()
+    ///     .app_name("my-app")
+    ///     .app_port(8080)
+    ///     .output_dir("./observability")
+    ///     .dashboards_dir("./config/grafana/dashboards")
+    ///     .build()?;
+    /// ```
+    pub fn dashboards_dir(mut self, path: impl Into<PathBuf>) -> Self {
+        self.dashboards_dir = Some(path.into());
+        self
+    }
+
     /// Build the ObservabilityStack
     pub fn build(self) -> StackResult<ObservabilityStack> {
         let app_name = self
@@ -333,6 +395,7 @@ impl ObservabilityStackBuilder {
             grafana,
             compose,
             alerts,
+            dashboards_dir: self.dashboards_dir,
         })
     }
 }

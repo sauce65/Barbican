@@ -287,6 +287,7 @@
 //! See `.claudedocs/SECURITY_CONTROL_REGISTRY.md` for the complete control matrix.
 //! See `.claudedocs/NIST_800_53_CROSSWALK.md` for auditor-friendly control-to-code mappings.
 
+mod app_config;
 mod config;
 mod crypto;
 #[cfg(feature = "postgres")]
@@ -332,6 +333,7 @@ pub mod testing;
 pub mod integration;
 
 // Re-exports for convenience
+pub use app_config::AppConfig;
 pub use config::{SecurityConfig, SecurityConfigBuilder};
 pub use crypto::{constant_time_eq, constant_time_str_eq};
 pub use layers::SecureRouter;
@@ -466,4 +468,19 @@ pub use rate_limit::{
     RateLimitTier, RateLimitTierConfig, RateLimitStatus, RateLimitError,
     TieredRateLimiter, TieredRateLimiterBuilder, TierResolver, DefaultTierResolver,
     tiered_rate_limit_middleware, tiered_rate_limit_middleware_with_proxy,
+};
+
+// Application metrics re-exports (AU-2, SI-4)
+pub use observability::metrics::{
+    // Core registry
+    MetricRegistry, MetricRegistryBuilder, MetricsHandle, MetricDef,
+    // Metric types
+    LabeledCounter, Histogram, HistogramData, Gauge,
+    // Bucket constants
+    HTTP_DURATION_BUCKETS, JOB_DURATION_BUCKETS, DB_DURATION_BUCKETS,
+    // Prometheus export
+    export_prometheus, PrometheusExport,
+    // Router trait and middleware
+    ObservableRouter, http_metrics_middleware, metrics_handler, normalize_path,
+    create_metrics,
 };

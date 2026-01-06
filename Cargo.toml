@@ -45,6 +45,9 @@ sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "uuid", "chro
 subtle = "2.5"
 regex = "1.11"
 
+# Thread-safe data structures (for metrics)
+parking_lot = "0.12"
+
 # Encryption at rest (SC-28)
 aes-gcm = "0.10"
 rand = "0.8"
@@ -98,3 +101,7 @@ path = "src/bin/generate_observability_stack.rs"
 [[example]]
 name = "generate_compliance_report"
 required-features = ["compliance-artifacts"]
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
