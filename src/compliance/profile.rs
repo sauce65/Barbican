@@ -52,6 +52,13 @@ pub enum ComplianceProfile {
     /// Use when compliance requirements don't fit standard profiles.
     /// Settings default to FedRAMP Moderate equivalents.
     Custom,
+
+    /// Development profile - no security hardening
+    ///
+    /// Use for local development only. Disables container user restrictions,
+    /// read-only filesystems, and capability dropping to avoid Docker volume
+    /// permission issues. Never use in production.
+    Development,
 }
 
 impl ComplianceProfile {
@@ -63,6 +70,7 @@ impl ComplianceProfile {
             Self::FedRampHigh => "FedRAMP High",
             Self::Soc2 => "SOC 2 Type II",
             Self::Custom => "Custom",
+            Self::Development => "Development",
         }
     }
 
@@ -72,6 +80,7 @@ impl ComplianceProfile {
             Self::FedRampLow | Self::FedRampModerate | Self::FedRampHigh => "FedRAMP",
             Self::Soc2 => "SOC 2",
             Self::Custom => "Custom",
+            Self::Development => "None",
         }
     }
 
@@ -81,6 +90,11 @@ impl ComplianceProfile {
             self,
             Self::FedRampLow | Self::FedRampModerate | Self::FedRampHigh
         )
+    }
+
+    /// Whether this is a development-only profile with no security hardening
+    pub fn is_development(&self) -> bool {
+        matches!(self, Self::Development)
     }
 
     // =========================================================================
@@ -95,7 +109,7 @@ impl ComplianceProfile {
     /// - High: 365 days minimum (1 year)
     pub fn min_retention_days(&self) -> u32 {
         match self {
-            Self::FedRampLow => 30,
+            Self::FedRampLow | Self::Development => 30,
             Self::FedRampModerate | Self::Soc2 | Self::Custom => 90,
             Self::FedRampHigh => 365,
         }
@@ -109,7 +123,7 @@ impl ComplianceProfile {
     ///
     /// All compliance profiles require TLS for data in transit.
     pub fn requires_tls(&self) -> bool {
-        true // All profiles require TLS
+        !matches!(self, Self::Development) // Development mode skips TLS
     }
 
     /// Whether mutual TLS (mTLS) is required for service-to-service (SC-8)
@@ -168,7 +182,7 @@ impl ComplianceProfile {
     /// - No arbitrary complexity requirements
     pub fn min_password_length(&self) -> usize {
         match self {
-            Self::FedRampLow => 8,
+            Self::FedRampLow | Self::Development => 8,
             Self::FedRampModerate | Self::Soc2 | Self::Custom => 12,
             Self::FedRampHigh => 14,
         }
@@ -194,6 +208,7 @@ impl ComplianceProfile {
             Self::FedRampLow => Duration::from_secs(30 * 60),  // 30 minutes
             Self::FedRampModerate | Self::Soc2 | Self::Custom => Duration::from_secs(15 * 60), // 15 minutes
             Self::FedRampHigh => Duration::from_secs(10 * 60), // 10 minutes
+            Self::Development => Duration::from_secs(24 * 60 * 60), // 24 hours for dev
         }
     }
 
@@ -205,6 +220,7 @@ impl ComplianceProfile {
             Self::FedRampLow => Duration::from_secs(15 * 60), // 15 minutes
             Self::FedRampModerate | Self::Soc2 | Self::Custom => Duration::from_secs(10 * 60), // 10 minutes
             Self::FedRampHigh => Duration::from_secs(5 * 60), // 5 minutes
+            Self::Development => Duration::from_secs(24 * 60 * 60), // 24 hours for dev
         }
     }
 

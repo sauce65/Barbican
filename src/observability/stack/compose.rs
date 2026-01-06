@@ -144,27 +144,31 @@ fn generate_compose(config: &ComposeConfig, fedramp: &ObservabilityComplianceCon
         config.volume_prefix.clone()
     };
 
-    let security_opts = r#"
-    security_opt:
-      - no-new-privileges:true"#;
+    // Development mode uses host networking for Prometheus and Grafana
+    // to allow them to scrape localhost services (app running on host)
+    let is_dev = fedramp.is_development();
 
-    let cap_drop = r#"
-    cap_drop:
-      - ALL"#;
+    // Pre-compute network strings to avoid temporary borrow issues
+    let prometheus_networks_str = format!("\n    networks:\n      - {}", network_name);
+    let grafana_networks_str = format!("\n    networks:\n      - {}", network_name);
 
-    let read_only = if !fedramp.is_low_security() {
-        "\n    read_only: true"
-    } else {
-        ""
-    };
-
-    let loki_tmpfs = if !fedramp.is_low_security() {
-        r#"
-    tmpfs:
-      - /tmp:size=100M,mode=1777"#
-    } else {
-        ""
-    };
+    // Skip all security hardening in Development mode
+    let (security_opts, cap_drop, read_only, loki_tmpfs, loki_user, prometheus_user, grafana_user, alertmanager_user) =
+        if is_dev {
+            // Development mode: no security hardening, containers run as default users
+            ("", "", "", "", "", "", "", "")
+        } else {
+            (
+                "\n    security_opt:\n      - no-new-privileges:true",
+                "\n    cap_drop:\n      - ALL",
+                if !fedramp.is_low_security() { "\n    read_only: true" } else { "" },
+                if !fedramp.is_low_security() { "\n    tmpfs:\n      - /tmp:size=100M,mode=1777" } else { "" },
+                "\n    user: \"10001:10001\"",
+                "\n    user: \"65534:65534\"",
+                "\n    user: \"472:472\"",
+                "\n    user: \"65534:65534\"",
+            )
+        };
 
     let network_config = if config.external_network {
         format!(
@@ -206,11 +210,48 @@ fn generate_compose(config: &ComposeConfig, fedramp: &ObservabilityComplianceCon
 #   3. Set secure passwords in .env
 
 services:
+  # Init containers to set up volume permissions
+  # These run once and exit, allowing main services to start with correct ownership
+  loki-init:
+    image: alpine:3.19
+    container_name: {app_name}-loki-init
+    command: sh -c "mkdir -p /data/chunks /data/rules /data/tsdb-index /data/tsdb-cache /data/compactor && chown -R 10001:10001 /data"
+    volumes:
+      - {volume_prefix}_loki_data:/data
+    user: root
+    restart: "no"
+
+  prometheus-init:
+    image: alpine:3.19
+    container_name: {app_name}-prometheus-init
+    command: sh -c "chown -R 65534:65534 /data"
+    volumes:
+      - {volume_prefix}_prometheus_data:/data
+    user: root
+    restart: "no"
+
+  grafana-init:
+    image: alpine:3.19
+    container_name: {app_name}-grafana-init
+    command: sh -c "chown -R 472:472 /data"
+    volumes:
+      - {volume_prefix}_grafana_data:/data
+    user: root
+    restart: "no"
+
+  alertmanager-init:
+    image: alpine:3.19
+    container_name: {app_name}-alertmanager-init
+    command: sh -c "chown -R 65534:65534 /data"
+    volumes:
+      - {volume_prefix}_alertmanager_data:/data
+    user: root
+    restart: "no"
+
   loki:
     image: grafana/loki:2.9.2
     container_name: {app_name}-loki
-    restart: {restart}{security_opts}{cap_drop}{read_only}
-    user: "10001:10001"
+    restart: {restart}{security_opts}{cap_drop}{read_only}{loki_user}
     command: -config.file=/etc/loki/loki-config.yml
     volumes:
       - ./loki/loki-config.yml:/etc/loki/loki-config.yml:ro
@@ -221,6 +262,9 @@ services:
       - "3100:3100"
     networks:
       - {network_name}
+    depends_on:
+      loki-init:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD-SHELL", "wget -q --spider http://localhost:3100/ready || exit 1"]
       interval: {healthcheck_interval}
@@ -235,8 +279,10 @@ services:
   prometheus:
     image: prom/prometheus:v2.47.2
     container_name: {app_name}-prometheus
-    restart: {restart}{security_opts}{cap_drop}{read_only}
-    user: "65534:65534"
+    restart: {restart}{prometheus_network_mode}{security_opts}{cap_drop}{read_only}{prometheus_user}
+    depends_on:
+      prometheus-init:
+        condition: service_completed_successfully
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
@@ -250,11 +296,7 @@ services:
       - ./prometheus/web.yml:/etc/prometheus/web.yml:ro
       - ./prometheus/rules:/etc/prometheus/rules:ro
       - {volume_prefix}_prometheus_data:/prometheus
-      - ./certs:/certs:ro
-    ports:
-      - "9090:9090"
-    networks:
-      - {network_name}
+      - ./certs:/certs:ro{prometheus_ports}{prometheus_networks}
     healthcheck:
       test: ["CMD-SHELL", "wget -q --spider http://localhost:9090/-/ready || exit 1"]
       interval: {healthcheck_interval}
@@ -269,8 +311,7 @@ services:
   grafana:
     image: grafana/grafana:10.2.2
     container_name: {app_name}-grafana
-    restart: {restart}{security_opts}{cap_drop}
-    user: "472:472"
+    restart: {restart}{grafana_network_mode}{security_opts}{cap_drop}{grafana_user}
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=${{GRAFANA_ADMIN_PASSWORD}}
       - GF_SECURITY_SECRET_KEY=${{GRAFANA_SECRET_KEY}}
@@ -281,16 +322,10 @@ services:
       - ./grafana/grafana.ini:/etc/grafana/grafana.ini:ro
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - {volume_prefix}_grafana_data:/var/lib/grafana
-      - ./certs:/certs:ro
-    ports:
-      - "3000:3000"
-    networks:
-      - {network_name}
+      - ./certs:/certs:ro{grafana_ports}{grafana_networks}
     depends_on:
-      loki:
-        condition: service_healthy
-      prometheus:
-        condition: service_healthy
+      grafana-init:
+        condition: service_completed_successfully{grafana_depends}
     healthcheck:
       test: ["CMD-SHELL", "wget -q --spider http://localhost:3000/api/health || exit 1"]
       interval: {healthcheck_interval}
@@ -305,8 +340,10 @@ services:
   alertmanager:
     image: prom/alertmanager:v0.26.0
     container_name: {app_name}-alertmanager
-    restart: {restart}{security_opts}{cap_drop}{read_only}
-    user: "65534:65534"
+    restart: {restart}{security_opts}{cap_drop}{read_only}{alertmanager_user}
+    depends_on:
+      alertmanager-init:
+        condition: service_completed_successfully
     command:
       - '--config.file=/etc/alertmanager/alertmanager.yml'
       - '--storage.path=/alertmanager'
@@ -346,12 +383,16 @@ volumes:
         cap_drop = cap_drop,
         read_only = read_only,
         loki_tmpfs = loki_tmpfs,
+        loki_user = loki_user,
+        prometheus_user = prometheus_user,
+        grafana_user = grafana_user,
+        alertmanager_user = alertmanager_user,
         volume_prefix = volume_prefix,
         network_name = network_name,
         healthcheck_interval = healthcheck_interval,
         retention = fedramp.retention_days(),
         retention_size = match fedramp.profile() {
-            ComplianceProfile::FedRampLow => 10,
+            ComplianceProfile::FedRampLow | ComplianceProfile::Development => 10,
             ComplianceProfile::FedRampHigh => 200,
             _ => 50,
         },
@@ -360,6 +401,14 @@ volumes:
         grafana_memory = config.resource_limits.grafana_memory,
         alertmanager_memory = config.resource_limits.alertmanager_memory,
         network_config = network_config,
+        // Development mode: use host networking for Prometheus and Grafana
+        prometheus_network_mode = if is_dev { "\n    network_mode: host" } else { "" },
+        prometheus_ports = if is_dev { "" } else { "\n    ports:\n      - \"9090:9090\"" },
+        prometheus_networks = if is_dev { "" } else { prometheus_networks_str.as_str() },
+        grafana_network_mode = if is_dev { "\n    network_mode: host" } else { "" },
+        grafana_ports = if is_dev { "" } else { "\n    ports:\n      - \"3000:3000\"" },
+        grafana_networks = if is_dev { "" } else { grafana_networks_str.as_str() },
+        grafana_depends = if is_dev { "" } else { "\n      loki:\n        condition: service_healthy\n      prometheus:\n        condition: service_healthy" },
     )
 }
 

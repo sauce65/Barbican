@@ -64,7 +64,7 @@ impl GrafanaConfig {
     /// Create default configuration for a compliance profile
     pub fn default_for_profile(profile: ComplianceProfile) -> Self {
         match profile {
-            ComplianceProfile::FedRampLow => Self {
+            ComplianceProfile::FedRampLow | ComplianceProfile::Development => Self {
                 http_port: 3000,
                 root_url: "http://localhost:3000".to_string(),
                 admin_user: "admin".to_string(),
@@ -306,6 +306,15 @@ check_for_updates = false
 
 fn generate_datasources(fedramp: &ObservabilityComplianceConfig, _app_name: &str) -> String {
     let scheme = if fedramp.tls_enabled() { "https" } else { "http" };
+    let is_dev = fedramp.is_development();
+
+    // In Development mode, Grafana uses host networking so use localhost
+    // for all datasource URLs. In production, use Docker service names.
+    let (prometheus_host, loki_host, alertmanager_host) = if is_dev {
+        ("localhost", "localhost", "localhost")
+    } else {
+        ("prometheus", "loki", "alertmanager")
+    };
 
     let tls_config = if fedramp.tls_enabled() {
         r#"
@@ -329,6 +338,17 @@ fn generate_datasources(fedramp: &ObservabilityComplianceConfig, _app_name: &str
         String::new()
     };
 
+    // In Development mode, skip basic auth for Prometheus (not configured)
+    let prometheus_auth = if is_dev {
+        ""
+    } else {
+        r#"
+    secureJsonData:
+      basicAuthPassword: ${PROMETHEUS_PASSWORD}
+    basicAuth: true
+    basicAuthUser: admin"#
+    };
+
     format!(
         r#"# Grafana Datasource Provisioning - FedRAMP {profile} Profile
 # Control: AU-6 (Audit Review, Analysis, Reporting)
@@ -338,22 +358,20 @@ apiVersion: 1
 datasources:
   - name: Prometheus
     type: prometheus
+    uid: prometheus
     access: proxy
-    url: {scheme}://prometheus:9090
+    url: {scheme}://{prometheus_host}:9090
     isDefault: true
     editable: false
     jsonData:
       timeInterval: "15s"
-      httpMethod: POST{tls_config}
-    secureJsonData:
-      basicAuthPassword: ${{PROMETHEUS_PASSWORD}}
-    basicAuth: true
-    basicAuthUser: admin
+      httpMethod: POST{tls_config}{prometheus_auth}
 
   - name: Loki
     type: loki
+    uid: loki
     access: proxy
-    url: {scheme}://loki:3100
+    url: {scheme}://{loki_host}:3100
     isDefault: false
     editable: false
     jsonData:
@@ -361,8 +379,9 @@ datasources:
 
   - name: Alertmanager
     type: alertmanager
+    uid: alertmanager
     access: proxy
-    url: {scheme}://alertmanager:9093
+    url: {scheme}://{alertmanager_host}:9093
     isDefault: false
     editable: false
     jsonData:
@@ -370,8 +389,12 @@ datasources:
 "#,
         profile = fedramp.profile().name(),
         scheme = scheme,
+        prometheus_host = prometheus_host,
+        loki_host = loki_host,
+        alertmanager_host = alertmanager_host,
         tls_config = tls_config,
         loki_header = loki_header,
+        prometheus_auth = prometheus_auth,
     )
 }
 
@@ -391,7 +414,7 @@ providers:
     updateIntervalSeconds: 30
     allowUiUpdates: false
     options:
-      path: /var/lib/grafana/dashboards
+      path: /etc/grafana/provisioning/dashboards/json
 "#.to_string()
 }
 

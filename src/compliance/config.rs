@@ -190,7 +190,7 @@ impl ComplianceConfig {
             session_max_lifetime: profile.session_timeout(),
             session_idle_timeout: profile.idle_timeout(),
             reauth_timeout: match profile {
-                ComplianceProfile::FedRampLow => Duration::from_secs(60 * 60), // 1 hour
+                ComplianceProfile::FedRampLow | ComplianceProfile::Development => Duration::from_secs(60 * 60), // 1 hour
                 ComplianceProfile::FedRampModerate | ComplianceProfile::Soc2 => {
                     Duration::from_secs(15 * 60) // 15 minutes
                 }

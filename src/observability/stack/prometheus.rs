@@ -55,7 +55,7 @@ impl PrometheusConfig {
     /// Create default configuration for a compliance profile
     pub fn default_for_profile(profile: ComplianceProfile) -> Self {
         match profile {
-            ComplianceProfile::FedRampLow => Self {
+            ComplianceProfile::FedRampLow | ComplianceProfile::Development => Self {
                 http_port: 9090,
                 scrape_interval_secs: 30,
                 evaluation_interval_secs: 30,
@@ -155,6 +155,7 @@ fn generate_prometheus_config(
     app_port: u16,
 ) -> String {
     let scheme = if fedramp.tls_enabled() { "https" } else { "http" };
+    let is_dev = fedramp.is_development();
 
     let tls_config = if fedramp.tls_enabled() {
         format!(
@@ -169,11 +170,27 @@ fn generate_prometheus_config(
         String::new()
     };
 
+    // In Development mode, Prometheus uses host networking so use localhost
+    // for all targets. In production, use Docker service names.
+    let (app_target, loki_target, grafana_target) = if is_dev {
+        (
+            format!("localhost:{}", app_port),
+            "localhost:3100".to_string(),
+            "localhost:3000".to_string(),
+        )
+    } else {
+        (
+            format!("{}:{}", app_name, app_port),
+            "loki:3100".to_string(),
+            "grafana:3000".to_string(),
+        )
+    };
+
     let mut scrape_configs = format!(
-        r#"  # Application metrics
+        r#"  # Application metrics{dev_comment}
   - job_name: '{app_name}'
     static_configs:
-      - targets: ['{app_name}:{app_port}']
+      - targets: ['{app_target}']
     scheme: {scheme}{tls_config}
     scrape_interval: {interval}s
     metrics_path: /metrics
@@ -184,28 +201,31 @@ fn generate_prometheus_config(
       - targets: ['localhost:{prom_port}']
     scrape_interval: {interval}s
 
-  # Loki metrics
+  # Loki metrics{dev_comment}
   - job_name: 'loki'
     static_configs:
-      - targets: ['loki:3100']
+      - targets: ['{loki_target}']
     scheme: {scheme}{tls_config}
     scrape_interval: {interval}s
     metrics_path: /metrics
 
-  # Grafana metrics
+  # Grafana metrics{dev_comment}
   - job_name: 'grafana'
     static_configs:
-      - targets: ['grafana:3000']
+      - targets: ['{grafana_target}']
     scheme: {scheme}{tls_config}
     scrape_interval: {interval}s
     metrics_path: /metrics
 "#,
         app_name = app_name,
-        app_port = app_port,
+        app_target = app_target,
+        loki_target = loki_target,
+        grafana_target = grafana_target,
         scheme = scheme,
         tls_config = tls_config,
         interval = config.scrape_interval_secs,
         prom_port = config.http_port,
+        dev_comment = if is_dev { " (localhost via host network mode)" } else { "" },
     );
 
     // Add additional targets
@@ -250,7 +270,7 @@ alerting:
   alertmanagers:
     - static_configs:
         - targets:
-            - alertmanager:9093
+            - {alertmanager_target}
       scheme: {scheme}{tls_config}
 
 # Load rules
@@ -265,6 +285,7 @@ scrape_configs:
         scrape_interval = config.scrape_interval_secs,
         eval_interval = config.evaluation_interval_secs,
         app_name = app_name,
+        alertmanager_target = if is_dev { "localhost:9093" } else { "alertmanager:9093" },
         scheme = scheme,
         tls_config = if fedramp.tls_enabled() {
             format!(

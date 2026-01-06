@@ -138,7 +138,7 @@ pub fn profile_from_env() -> ComplianceProfile {
 /// ```
 pub fn session_policy_for_profile(profile: ComplianceProfile) -> SessionPolicy {
     match profile {
-        ComplianceProfile::FedRampLow => SessionPolicy::builder()
+        ComplianceProfile::FedRampLow | ComplianceProfile::Development => SessionPolicy::builder()
             .idle_timeout(Duration::from_secs(30 * 60)) // 30 minutes
             .max_lifetime(Duration::from_secs(12 * 60 * 60)) // 12 hours
             .build(),
@@ -175,7 +175,7 @@ pub fn session_policy_for_profile(profile: ComplianceProfile) -> SessionPolicy {
 /// ```
 pub fn password_policy_for_profile(profile: ComplianceProfile) -> PasswordPolicy {
     match profile {
-        ComplianceProfile::FedRampLow => PasswordPolicy::builder()
+        ComplianceProfile::FedRampLow | ComplianceProfile::Development => PasswordPolicy::builder()
             .min_length(8)
             .build(),
         ComplianceProfile::FedRampModerate | ComplianceProfile::Soc2 => PasswordPolicy::builder()
@@ -208,7 +208,7 @@ pub fn password_policy_for_profile(profile: ComplianceProfile) -> PasswordPolicy
 /// ```
 pub fn lockout_policy_for_profile(profile: ComplianceProfile) -> LockoutPolicy {
     match profile {
-        ComplianceProfile::FedRampLow => LockoutPolicy::builder()
+        ComplianceProfile::FedRampLow | ComplianceProfile::Development => LockoutPolicy::builder()
             .max_attempts(5)
             .lockout_duration(Duration::from_secs(10 * 60))
             .progressive_lockout(false)
@@ -236,7 +236,7 @@ pub fn lockout_policy_for_profile(profile: ComplianceProfile) -> LockoutPolicy {
 /// ```
 pub fn encryption_config_for_profile(profile: ComplianceProfile) -> EncryptionConfig {
     match profile {
-        ComplianceProfile::FedRampLow => EncryptionConfig {
+        ComplianceProfile::FedRampLow | ComplianceProfile::Development => EncryptionConfig {
             algorithm: EncryptionAlgorithm::Aes256Gcm,
             require_encryption: false,
             verify_database_encryption: false,
@@ -272,7 +272,7 @@ pub fn rotation_policy_for_profile(
     profile: ComplianceProfile,
 ) -> crate::keys::RotationPolicy {
     match profile {
-        ComplianceProfile::FedRampLow => {
+        ComplianceProfile::FedRampLow | ComplianceProfile::Development => {
             crate::keys::RotationPolicy::new(Duration::from_secs(365 * 24 * 60 * 60))
         }
         ComplianceProfile::FedRampModerate | ComplianceProfile::Soc2 => {
@@ -324,7 +324,7 @@ pub fn ssl_mode_for_profile(profile: ComplianceProfile) -> SslMode {
     match profile {
         ComplianceProfile::FedRampHigh => SslMode::VerifyFull,
         ComplianceProfile::FedRampModerate | ComplianceProfile::Soc2 => SslMode::VerifyCa,
-        ComplianceProfile::FedRampLow => SslMode::Require,
+        ComplianceProfile::FedRampLow | ComplianceProfile::Development => SslMode::Require,
         ComplianceProfile::Custom => SslMode::Prefer,
     }
 }

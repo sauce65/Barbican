@@ -62,7 +62,7 @@ impl AlertRules {
     /// Create default alert rules for a compliance profile
     pub fn default_for_profile(profile: ComplianceProfile) -> Self {
         match profile {
-            ComplianceProfile::FedRampLow => Self {
+            ComplianceProfile::FedRampLow | ComplianceProfile::Development => Self {
                 login_failure_alerts: true,
                 login_failure_warn_threshold: 10,
                 login_failure_crit_threshold: 25,

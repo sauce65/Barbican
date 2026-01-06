@@ -48,7 +48,7 @@ impl LokiConfig {
     /// Create default configuration for a compliance profile
     pub fn default_for_profile(profile: ComplianceProfile) -> Self {
         match profile {
-            ComplianceProfile::FedRampLow => Self {
+            ComplianceProfile::FedRampLow | ComplianceProfile::Development => Self {
                 http_port: 3100,
                 grpc_port: 9096,
                 storage_path: "/loki/data".to_string(),

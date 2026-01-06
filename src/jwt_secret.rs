@@ -193,7 +193,7 @@ impl JwtSecretPolicy {
                 check_weak_patterns: true,
                 context: format!("{} compliance", profile.name()),
             },
-            ComplianceProfile::FedRampLow => Self {
+            ComplianceProfile::FedRampLow | ComplianceProfile::Development => Self {
                 min_length: 32,
                 min_entropy: 64.0,
                 require_diversity: false,

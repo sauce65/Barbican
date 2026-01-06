@@ -444,7 +444,7 @@ impl SecurityHeaders {
         match profile {
             ComplianceProfile::FedRampHigh => Self::strict(),
             ComplianceProfile::FedRampModerate | ComplianceProfile::Soc2 => Self::production(),
-            ComplianceProfile::FedRampLow => Self::api(),
+            ComplianceProfile::FedRampLow | ComplianceProfile::Development => Self::api(),
             ComplianceProfile::Custom => Self::minimal(),
         }
     }
