@@ -1148,7 +1148,7 @@ pub fn test_ia5_authenticator_management() -> ControlTestArtifact {
 /// Verifies that authentication error responses do not leak sensitive
 /// information that could aid an attacker (e.g., "user not found" vs "invalid password").
 pub fn test_ia6_auth_feedback() -> ControlTestArtifact {
-    use crate::error::{AppError, ErrorConfig, ErrorKind};
+    use crate::error::{AppError, ErrorConfig};
 
     ArtifactBuilder::new("IA-6", "Authentication Feedback")
         .test_name("secure_error_responses")
@@ -1157,7 +1157,7 @@ pub fn test_ia6_auth_feedback() -> ControlTestArtifact {
         .related_control("SI-11")
         .related_control("IA-5")
         .expected("production_hides_details", true)
-        .expected("generic_auth_errors", true)
+        .expected("internal_hides_details", true)
         .expected("no_user_enumeration", true)
         .execute(|collector| {
             // Test that production mode hides internal details
@@ -1190,21 +1190,33 @@ pub fn test_ia6_auth_feedback() -> ControlTestArtifact {
                 }),
             );
 
-            // Verify internal errors are generic
+            // Verify internal errors don't expose details
             let internal_error = AppError::internal_msg("Database connection failed");
-            let internal_msg = internal_error.to_string();
 
-            // In production, should show generic message
-            let generic_auth_errors = internal_msg.contains("internal")
-                || internal_msg.contains("error occurred")
-                || internal_msg.contains("Database");
+            // The key security control: Internal errors should NOT expose details
+            // This prevents information leakage about internal system state
+            let internal_hides_details = !internal_error.kind.expose_details();
 
             collector.assertion(
-                "Internal errors should be generic in production",
-                true, // Error type exists and is used
+                "Internal error kind should not expose details (IA-6 / SI-11)",
+                internal_hides_details,
                 json!({
-                    "error_kind": format!("{:?}", ErrorKind::Internal),
-                    "has_generic_message": true,
+                    "error_kind": format!("{:?}", internal_error.kind),
+                    "expose_details": internal_error.kind.expose_details(),
+                    "expected": false,
+                }),
+            );
+
+            // Verify production config hides details globally
+            let production_hides_internal = !production_config.expose_details
+                && !production_config.include_stack_traces;
+
+            collector.assertion(
+                "Production config should hide error details and stack traces",
+                production_hides_internal,
+                json!({
+                    "expose_details": production_config.expose_details,
+                    "include_stack_traces": production_config.include_stack_traces,
                 }),
             );
 
@@ -1226,7 +1238,7 @@ pub fn test_ia6_auth_feedback() -> ControlTestArtifact {
 
             json!({
                 "production_hides_details": !production_config.expose_details,
-                "generic_auth_errors": true,
+                "internal_hides_details": internal_hides_details,
                 "no_user_enumeration": no_user_enumeration,
             })
         })
