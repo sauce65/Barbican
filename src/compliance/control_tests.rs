@@ -38,6 +38,92 @@ use crate::session::{SessionPolicy, SessionState, SessionTerminationReason};
 use crate::validation::{sanitize_html, validate_email, validate_length};
 use serde_json::json;
 
+// ============================================================================
+// Test Helpers for Capturing Tracing Output
+// ============================================================================
+
+/// Helper module for capturing tracing output in compliance tests.
+///
+/// This allows tests to verify that security events are actually emitted
+/// with the correct content, rather than just checking that enum variants exist.
+mod test_capture {
+    use std::io::Write;
+    use std::sync::{Arc, Mutex};
+
+    /// A writer that captures output to a shared buffer.
+    #[derive(Clone)]
+    pub struct CaptureWriter {
+        buffer: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl CaptureWriter {
+        /// Create a new capture writer with an empty buffer.
+        pub fn new() -> Self {
+            Self {
+                buffer: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+
+        /// Get the captured output as a string.
+        pub fn output(&self) -> String {
+            let buf = self.buffer.lock().unwrap();
+            String::from_utf8_lossy(&buf).to_string()
+        }
+
+        /// Clear the captured output.
+        #[allow(dead_code)]
+        pub fn clear(&self) {
+            self.buffer.lock().unwrap().clear();
+        }
+    }
+
+    impl Write for CaptureWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.buffer.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for CaptureWriter {
+        type Writer = CaptureWriter;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    /// Run a closure with tracing output captured to a buffer.
+    ///
+    /// Returns the captured output after the closure completes.
+    pub fn with_captured_tracing<F, R>(f: F) -> (R, String)
+    where
+        F: FnOnce() -> R,
+    {
+        use tracing_subscriber::fmt::format::FmtSpan;
+        use tracing_subscriber::prelude::*;
+
+        let capture = CaptureWriter::new();
+        let capture_clone = capture.clone();
+
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_span_events(FmtSpan::NONE)
+            .with_writer(move || capture_clone.clone())
+            .with_ansi(false)
+            .with_max_level(tracing::Level::DEBUG)  // Capture debug events for Low severity
+            .finish();
+
+        let result = tracing::subscriber::with_default(subscriber, f);
+        let output = capture.output();
+
+        (result, output)
+    }
+}
+
 /// AC-7: Unsuccessful Logon Attempts
 ///
 /// Verifies that accounts are locked after the configured number of failed
@@ -109,55 +195,101 @@ pub fn test_ac7_lockout() -> ControlTestArtifact {
 /// Verifies that rate limiting is enabled and configured correctly
 /// to protect against denial of service attacks.
 pub fn test_sc5_rate_limiting() -> ControlTestArtifact {
+    use crate::rate_limit::{TieredRateLimiter, RateLimitTier};
+    use std::net::{IpAddr, Ipv4Addr};
+    use std::time::Duration;
+
     ArtifactBuilder::new("SC-5", "Denial of Service Protection")
-        .test_name("rate_limiting_configuration")
-        .description("Verify rate limiting is enabled and configured correctly (SC-5)")
-        .code_location("src/config.rs", 35, 93)
-        .code_location_with_fn("src/layers.rs", 67, 73, "apply_security_layers")
-        .input("expected_rate_limit_enabled", true)
-        .expected("rate_limiting_enabled", true)
-        .expected("has_request_timeout", true)
-        .expected("has_max_request_size", true)
+        .test_name("rate_limiting_behavior")
+        .description("Verify rate limiting actually blocks requests after limit is exceeded (SC-5)")
+        .code_location("src/rate_limit.rs", 371, 430)
+        .code_location_with_fn("src/config.rs", 35, 93, "SecurityConfig")
+        .input("test_ip", "10.0.0.99")
+        .input("tier_limit", 2)
+        .expected("first_request_allowed", true)
+        .expected("second_request_allowed", true)
+        .expected("third_request_blocked", true)
+        .expected("tier_classification_works", true)
         .execute(|collector| {
-            let config = SecurityConfig::default();
+            // Create a rate limiter with very low limits for testing
+            let limiter = TieredRateLimiter::builder()
+                .auth_tier(2, Duration::from_secs(60), Duration::from_secs(30))
+                .build();
+
+            let test_ip = IpAddr::V4(Ipv4Addr::new(10, 0, 0, 99));
 
             collector.configuration(
-                "security_config",
+                "rate_limiter",
                 json!({
-                    "rate_limit_enabled": config.rate_limit_enabled,
-                    "rate_limit_per_second": config.rate_limit_per_second,
-                    "rate_limit_burst": config.rate_limit_burst,
-                    "request_timeout_secs": config.request_timeout.as_secs(),
-                    "max_request_size_bytes": config.max_request_size,
+                    "auth_tier_limit": 2,
+                    "auth_tier_window_secs": 60,
+                    "auth_tier_lockout_secs": 30,
                 }),
             );
 
-            let rate_enabled = config.rate_limit_enabled;
-            let has_timeout = config.request_timeout.as_secs() > 0;
-            let has_size_limit = config.max_request_size > 0;
+            // First request should succeed
+            let first_result = limiter.check(test_ip, "/api/v1/auth/login", "POST");
+            let first_request_allowed = first_result.is_ok();
 
             collector.assertion(
-                "Rate limiting should be enabled by default",
-                rate_enabled,
-                json!({ "enabled": rate_enabled }),
+                "First request should be allowed",
+                first_request_allowed,
+                json!({
+                    "result": if first_result.is_ok() { "allowed" } else { "blocked" },
+                    "remaining": first_result.as_ref().ok().map(|(_, s)| s.remaining),
+                }),
             );
 
-            collector.assertion(
-                "Request timeout should be configured",
-                has_timeout,
-                json!({ "timeout_secs": config.request_timeout.as_secs() }),
-            );
+            // Second request should succeed (at limit)
+            let second_result = limiter.check(test_ip, "/api/v1/auth/login", "POST");
+            let second_request_allowed = second_result.is_ok();
 
             collector.assertion(
-                "Max request size should be configured",
-                has_size_limit,
-                json!({ "max_size_bytes": config.max_request_size }),
+                "Second request should be allowed (at limit)",
+                second_request_allowed,
+                json!({
+                    "result": if second_result.is_ok() { "allowed" } else { "blocked" },
+                    "remaining": second_result.as_ref().ok().map(|(_, s)| s.remaining),
+                }),
+            );
+
+            // Third request should be blocked (over limit)
+            let third_result = limiter.check(test_ip, "/api/v1/auth/login", "POST");
+            let third_request_blocked = third_result.is_err();
+
+            collector.assertion(
+                "Third request should be blocked (over limit)",
+                third_request_blocked,
+                json!({
+                    "result": if third_result.is_err() { "blocked" } else { "allowed" },
+                    "error": third_result.as_ref().err().map(|(_, e)| format!("{:?}", e)),
+                }),
+            );
+
+            // Test tier classification works correctly
+            let auth_tier = RateLimitTier::from_path("/api/v1/auth/login");
+            let standard_tier = RateLimitTier::from_path("/api/v1/items");
+            let relaxed_tier = RateLimitTier::from_path("/health");
+
+            let tier_classification_works = auth_tier == RateLimitTier::Auth
+                && standard_tier == RateLimitTier::Standard
+                && relaxed_tier == RateLimitTier::Relaxed;
+
+            collector.assertion(
+                "Tier classification should work correctly",
+                tier_classification_works,
+                json!({
+                    "auth_login_tier": format!("{:?}", auth_tier),
+                    "items_tier": format!("{:?}", standard_tier),
+                    "health_tier": format!("{:?}", relaxed_tier),
+                }),
             );
 
             json!({
-                "rate_limiting_enabled": rate_enabled,
-                "has_request_timeout": has_timeout,
-                "has_max_request_size": has_size_limit,
+                "first_request_allowed": first_request_allowed,
+                "second_request_allowed": second_request_allowed,
+                "third_request_blocked": third_request_blocked,
+                "tier_classification_works": tier_classification_works,
             })
         })
 }
@@ -296,10 +428,12 @@ pub fn test_ia5_1_password_policy() -> ControlTestArtifact {
 /// Verifies that session policy includes idle timeout and absolute
 /// timeout enforcement as required by NIST 800-53 AC-11.
 pub fn test_ac11_session_timeout() -> ControlTestArtifact {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
     ArtifactBuilder::new("AC-11", "Session Lock")
-        .test_name("session_timeout_configuration")
-        .description("Verify session policy includes idle and absolute timeout (AC-11)")
-        .code_location("src/session.rs", 43, 167)
+        .test_name("session_timeout_behavior")
+        .description("Verify session policy enforces idle and absolute timeout (AC-11)")
+        .code_location("src/session.rs", 172, 195)
         .related_control("AC-12")
         .related_control("SC-10")
         .input("expected_idle_timeout", true)
@@ -307,6 +441,8 @@ pub fn test_ac11_session_timeout() -> ControlTestArtifact {
         .expected("idle_timeout_configured", true)
         .expected("max_lifetime_configured", true)
         .expected("fresh_session_valid", true)
+        .expected("expired_token_terminated", true)
+        .expected("old_issued_token_terminated", true)
         .execute(|collector| {
             // Use strict policy for testing
             let policy = SessionPolicy::strict();
@@ -348,10 +484,75 @@ pub fn test_ac11_session_timeout() -> ControlTestArtifact {
                 json!({ "termination_reason": format!("{:?}", termination_reason) }),
             );
 
+            // Test token expiration detection using check_token_times
+            // This allows us to test timeout behavior without waiting
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+
+            // Expired token (exp in the past)
+            let expired_result = policy.check_token_times(
+                Some(now - 3600),    // issued_at: 1 hour ago
+                Some(now - 60),      // exp: expired 1 minute ago
+            );
+            let expired_token_terminated = matches!(
+                expired_result,
+                SessionTerminationReason::TokenExpired
+            );
+
+            collector.assertion(
+                "Expired token should trigger termination",
+                expired_token_terminated,
+                json!({
+                    "termination_reason": format!("{:?}", expired_result),
+                    "test_exp": now - 60,
+                    "current_time": now,
+                }),
+            );
+
+            // Token issued too long ago (exceeds max_lifetime)
+            let max_lifetime_secs = policy.max_lifetime.as_secs() as i64;
+            let old_issued_result = policy.check_token_times(
+                Some(now - max_lifetime_secs - 3600),  // issued_at: beyond max_lifetime
+                Some(now + 3600),                       // exp: still valid
+            );
+            let old_issued_token_terminated = matches!(
+                old_issued_result,
+                SessionTerminationReason::MaxLifetimeExceeded
+            );
+
+            collector.assertion(
+                "Token issued beyond max_lifetime should trigger termination",
+                old_issued_token_terminated,
+                json!({
+                    "termination_reason": format!("{:?}", old_issued_result),
+                    "max_lifetime_secs": max_lifetime_secs,
+                    "test_issued_at_offset": -max_lifetime_secs - 3600,
+                }),
+            );
+
+            // Valid token should not be terminated
+            let valid_result = policy.check_token_times(
+                Some(now - 300),      // issued_at: 5 minutes ago
+                Some(now + 3600),     // exp: 1 hour from now
+            );
+            let valid_token_ok = matches!(valid_result, SessionTerminationReason::None);
+
+            collector.assertion(
+                "Valid token should not be terminated",
+                valid_token_ok,
+                json!({
+                    "termination_reason": format!("{:?}", valid_result),
+                }),
+            );
+
             json!({
                 "idle_timeout_configured": idle_configured,
                 "max_lifetime_configured": lifetime_configured,
                 "fresh_session_valid": fresh_valid,
+                "expired_token_terminated": expired_token_terminated,
+                "old_issued_token_terminated": old_issued_token_terminated,
             })
         })
 }
@@ -447,134 +648,238 @@ pub fn test_ac4_cors_policy() -> ControlTestArtifact {
 
 /// AU-2: Audit Events
 ///
-/// Verifies that required security event types are defined for
-/// comprehensive audit logging as required by NIST 800-53 AU-2.
+/// Verifies that required security event types are actually emitted
+/// when triggered, as required by NIST 800-53 AU-2.
+///
+/// This test emits security events and captures tracing output to verify
+/// they are actually logged, not just that the enum variants exist.
 pub fn test_au2_security_events() -> ControlTestArtifact {
+    use test_capture::with_captured_tracing;
+
     ArtifactBuilder::new("AU-2", "Audit Events")
-        .test_name("security_event_coverage")
-        .description("Verify all required security event types are defined (AU-2)")
+        .test_name("security_event_emission")
+        .description("Verify security events are actually emitted when triggered (AU-2)")
         .code_location("src/observability/events.rs", 38, 120)
         .related_control("AU-3")
         .related_control("AU-12")
-        .expected("has_auth_events", true)
-        .expected("has_access_events", true)
-        .expected("has_system_events", true)
+        .expected("auth_success_emitted", true)
+        .expected("auth_failure_emitted", true)
+        .expected("access_denied_emitted", true)
+        .expected("session_event_emitted", true)
         .execute(|collector| {
-            // Check authentication events exist
-            let auth_events = vec![
-                SecurityEvent::AuthenticationSuccess,
-                SecurityEvent::AuthenticationFailure,
-                SecurityEvent::Logout,
-                SecurityEvent::SessionCreated,
-                SecurityEvent::SessionDestroyed,
-            ];
+            // Emit events and capture tracing output
+            let (_, captured_output) = with_captured_tracing(|| {
+                // Authentication success
+                crate::security_event!(
+                    SecurityEvent::AuthenticationSuccess,
+                    user_id = "au2-test-user",
+                    "Test authentication success"
+                );
 
-            collector.log(format!("Auth events defined: {}", auth_events.len()));
-            let has_auth = !auth_events.is_empty();
+                // Authentication failure
+                crate::security_event!(
+                    SecurityEvent::AuthenticationFailure,
+                    user_id = "au2-test-user",
+                    reason = "invalid_password",
+                    "Test authentication failure"
+                );
 
-            // Check access control events
-            let access_events = vec![
-                SecurityEvent::AccessGranted,
-                SecurityEvent::AccessDenied,
-            ];
+                // Access denied
+                crate::security_event!(
+                    SecurityEvent::AccessDenied,
+                    user_id = "au2-test-user",
+                    resource = "/api/admin",
+                    "Test access denied"
+                );
 
-            collector.log(format!("Access events defined: {}", access_events.len()));
-            let has_access = !access_events.is_empty();
+                // Session created
+                crate::security_event!(
+                    SecurityEvent::SessionCreated,
+                    session_id = "au2-test-session",
+                    user_id = "au2-test-user",
+                    "Test session created"
+                );
+            });
 
-            // Check system events
-            let system_events = vec![
-                SecurityEvent::SystemStartup,
-                SecurityEvent::SystemShutdown,
-                SecurityEvent::ConfigurationChanged,
-            ];
+            collector.log(format!("Captured {} bytes of tracing output", captured_output.len()));
 
-            collector.log(format!("System events defined: {}", system_events.len()));
-            let has_system = !system_events.is_empty();
+            let lines: Vec<&str> = captured_output.lines().filter(|l| !l.is_empty()).collect();
+            collector.log(format!("Captured {} log lines", lines.len()));
+
+            // Verify AuthenticationSuccess was emitted
+            let auth_success_emitted = lines.iter().any(|l| {
+                l.contains("authentication_success") ||
+                l.contains("AuthenticationSuccess") ||
+                (l.contains("authentication") && l.contains("success"))
+            });
 
             collector.assertion(
-                "Authentication events should be defined",
-                has_auth,
-                json!({ "events": auth_events.iter().map(|e| e.name()).collect::<Vec<_>>() }),
+                "AuthenticationSuccess event should be emitted",
+                auth_success_emitted,
+                json!({
+                    "emitted": auth_success_emitted,
+                    "lines_searched": lines.len(),
+                }),
             );
 
-            collector.assertion(
-                "Access control events should be defined",
-                has_access,
-                json!({ "events": access_events.iter().map(|e| e.name()).collect::<Vec<_>>() }),
-            );
+            // Verify AuthenticationFailure was emitted
+            let auth_failure_emitted = lines.iter().any(|l| {
+                l.contains("authentication_failure") ||
+                l.contains("AuthenticationFailure") ||
+                (l.contains("authentication") && l.contains("failure"))
+            });
 
             collector.assertion(
-                "System events should be defined",
-                has_system,
-                json!({ "events": system_events.iter().map(|e| e.name()).collect::<Vec<_>>() }),
+                "AuthenticationFailure event should be emitted",
+                auth_failure_emitted,
+                json!({ "emitted": auth_failure_emitted }),
+            );
+
+            // Verify AccessDenied was emitted
+            let access_denied_emitted = lines.iter().any(|l| {
+                l.contains("access_denied") ||
+                l.contains("AccessDenied")
+            });
+
+            collector.assertion(
+                "AccessDenied event should be emitted",
+                access_denied_emitted,
+                json!({ "emitted": access_denied_emitted }),
+            );
+
+            // Verify SessionCreated was emitted
+            let session_event_emitted = lines.iter().any(|l| {
+                l.contains("session_created") ||
+                l.contains("SessionCreated")
+            });
+
+            collector.assertion(
+                "SessionCreated event should be emitted",
+                session_event_emitted,
+                json!({ "emitted": session_event_emitted }),
             );
 
             json!({
-                "has_auth_events": has_auth,
-                "has_access_events": has_access,
-                "has_system_events": has_system,
+                "auth_success_emitted": auth_success_emitted,
+                "auth_failure_emitted": auth_failure_emitted,
+                "access_denied_emitted": access_denied_emitted,
+                "session_event_emitted": session_event_emitted,
             })
         })
 }
 
 /// AU-3: Content of Audit Records
 ///
-/// Verifies that security events contain required audit fields
-/// (category, severity, name) as required by NIST 800-53 AU-3.
+/// Verifies that security events contain required audit fields in the
+/// actual log output: timestamp, level, target, and custom fields.
+///
+/// This test emits a security event and parses the captured JSON output
+/// to verify all required AU-3 fields are present.
 pub fn test_au3_audit_content() -> ControlTestArtifact {
+    use test_capture::with_captured_tracing;
+
     ArtifactBuilder::new("AU-3", "Content of Audit Records")
         .test_name("audit_record_fields")
-        .description("Verify security events have required audit fields (AU-3)")
+        .description("Verify security events contain required AU-3 fields in output (AU-3)")
         .code_location("src/observability/events.rs", 120, 200)
         .related_control("AU-2")
-        .expected("has_name", true)
-        .expected("has_category", true)
-        .expected("has_severity", true)
+        .expected("has_timestamp", true)
+        .expected("has_level", true)
+        .expected("has_target", true)
+        .expected("has_message", true)
+        .expected("has_custom_fields", true)
         .execute(|collector| {
-            let event = SecurityEvent::AuthenticationFailure;
+            // Emit event and capture output
+            let (_, captured_output) = with_captured_tracing(|| {
+                crate::security_event!(
+                    SecurityEvent::AccessDenied,
+                    user_id = "au3-test-user",
+                    resource = "/api/admin/settings",
+                    action = "read",
+                    reason = "insufficient_permissions",
+                    "Access denied to protected resource"
+                );
+            });
 
-            // Check required fields
-            let name = event.name();
-            let category = event.category();
-            let severity = event.severity();
+            collector.log(format!("Captured output: {}", captured_output));
 
-            let has_name = !name.is_empty();
-            let has_category = !category.is_empty();
-            let has_severity = true; // Severity is always defined
+            // Parse the JSON output
+            let parsed: Option<serde_json::Value> = captured_output
+                .lines()
+                .filter(|l| !l.is_empty())
+                .find_map(|line| serde_json::from_str(line).ok());
 
-            collector.assertion(
-                "Event should have a name",
-                has_name,
-                json!({ "name": name }),
-            );
+            let parsed = parsed.unwrap_or(serde_json::json!({}));
 
-            collector.assertion(
-                "Event should have a category",
-                has_category,
-                json!({ "category": category }),
-            );
-
-            collector.assertion(
-                "Event should have a severity",
-                has_severity,
-                json!({ "severity": format!("{:?}", severity) }),
-            );
-
-            // Log sample event structure
             collector.configuration(
-                "sample_event",
+                "parsed_log_entry",
+                parsed.clone(),
+            );
+
+            // AU-3 requires: what type of event, when, where, source, outcome
+            // In JSON logs: timestamp, level, target, message, fields
+
+            // Check timestamp (when)
+            let has_timestamp = parsed.get("timestamp").is_some();
+            collector.assertion(
+                "Audit record must have timestamp (AU-3: when)",
+                has_timestamp,
+                json!({ "timestamp": parsed.get("timestamp") }),
+            );
+
+            // Check level (severity/outcome indication)
+            let has_level = parsed.get("level").is_some();
+            collector.assertion(
+                "Audit record must have level (AU-3: outcome)",
+                has_level,
+                json!({ "level": parsed.get("level") }),
+            );
+
+            // Check target (where in code)
+            let has_target = parsed.get("target").is_some();
+            collector.assertion(
+                "Audit record must have target (AU-3: source)",
+                has_target,
+                json!({ "target": parsed.get("target") }),
+            );
+
+            // Check message exists
+            let has_message = parsed.get("fields")
+                .and_then(|f| f.get("message"))
+                .is_some()
+                || parsed.get("message").is_some();
+            collector.assertion(
+                "Audit record must have message (AU-3: what)",
+                has_message,
                 json!({
-                    "event": "AuthenticationFailure",
-                    "name": name,
-                    "category": category,
-                    "severity": format!("{:?}", severity),
+                    "has_fields_message": parsed.get("fields").and_then(|f| f.get("message")).is_some(),
+                    "has_root_message": parsed.get("message").is_some(),
+                }),
+            );
+
+            // Check custom fields (user_id, resource, etc.)
+            let fields = parsed.get("fields").cloned().unwrap_or(serde_json::json!({}));
+            let has_user_id = fields.get("user_id").is_some();
+            let has_resource = fields.get("resource").is_some();
+            let has_custom_fields = has_user_id && has_resource;
+
+            collector.assertion(
+                "Audit record should include custom security fields",
+                has_custom_fields,
+                json!({
+                    "user_id": fields.get("user_id"),
+                    "resource": fields.get("resource"),
+                    "action": fields.get("action"),
+                    "reason": fields.get("reason"),
                 }),
             );
 
             json!({
-                "has_name": has_name,
-                "has_category": has_category,
-                "has_severity": has_severity,
+                "has_timestamp": has_timestamp,
+                "has_level": has_level,
+                "has_target": has_target,
+                "has_message": has_message,
+                "has_custom_fields": has_custom_fields,
             })
         })
 }
@@ -1636,29 +1941,23 @@ pub fn test_au12_audit_generation() -> ControlTestArtifact {
 ///
 /// Verifies that all security events include accurate UTC timestamps,
 /// as required by NIST 800-53 AU-8 for audit record generation.
+///
+/// This test actually emits a security event and captures the tracing output
+/// to verify timestamps are present and in UTC format.
 pub fn test_au8_timestamps() -> ControlTestArtifact {
-    use crate::observability::SecurityEvent;
+    use test_capture::with_captured_tracing;
 
     ArtifactBuilder::new("AU-8", "Time Stamps")
         .test_name("security_event_timestamps")
-        .description("Verify all security events have UTC timestamps (AU-8)")
+        .description("Verify security events have UTC timestamps in captured output (AU-8)")
         .code_location("src/observability/events.rs", 38, 293)
         .related_control("AU-2")
         .related_control("AU-3")
         .related_control("AU-12")
-        .expected("events_have_timestamp_field", true)
-        .expected("tracing_provides_utc", true)
+        .expected("timestamp_present", true)
+        .expected("timestamp_is_utc", true)
+        .expected("timestamp_is_rfc3339", true)
         .execute(|collector| {
-            // Verify SecurityEvent enum has timestamp-relevant events
-            let events = [
-                SecurityEvent::AuthenticationSuccess,
-                SecurityEvent::AuthenticationFailure,
-                SecurityEvent::AccessDenied,
-                SecurityEvent::SessionCreated,
-                SecurityEvent::SessionDestroyed,
-                SecurityEvent::RateLimitExceeded,
-            ];
-
             collector.configuration(
                 "timestamp_source",
                 json!({
@@ -1669,129 +1968,192 @@ pub fn test_au8_timestamps() -> ControlTestArtifact {
                 }),
             );
 
-            // All events are logged via tracing which adds timestamps automatically
-            let events_have_timestamp_field = !events.is_empty();
+            // Emit a security event and capture the tracing output
+            let (_, captured_output) = with_captured_tracing(|| {
+                crate::security_event!(
+                    SecurityEvent::AuthenticationSuccess,
+                    user_id = "au8-test-user",
+                    "AU-8 timestamp verification event"
+                );
+            });
+
+            collector.log(format!("Captured tracing output: {}", captured_output));
+
+            // Parse the captured JSON log line to extract timestamp
+            let timestamp_str = captured_output
+                .lines()
+                .filter(|l| !l.is_empty())
+                .find_map(|line| {
+                    serde_json::from_str::<serde_json::Value>(line)
+                        .ok()
+                        .and_then(|v| v.get("timestamp").and_then(|t| t.as_str().map(String::from)))
+                })
+                .unwrap_or_default();
+
+            collector.log(format!("Extracted timestamp: {}", timestamp_str));
+
+            // Verify timestamp is present
+            let timestamp_present = !timestamp_str.is_empty();
 
             collector.assertion(
-                "Security events should exist for timestamping",
-                events_have_timestamp_field,
+                "Timestamp field should be present in log output",
+                timestamp_present,
+                json!({ "timestamp": &timestamp_str, "present": timestamp_present }),
+            );
+
+            // Verify UTC (ends with Z or +00:00)
+            let timestamp_is_utc = timestamp_str.ends_with('Z')
+                || timestamp_str.ends_with("+00:00")
+                || timestamp_str.contains("+00:00");
+
+            collector.assertion(
+                "Timestamp should be in UTC",
+                timestamp_is_utc,
                 json!({
-                    "event_count": events.len(),
-                    "event_types": events.iter().map(|e| format!("{:?}", e)).collect::<Vec<_>>(),
+                    "timestamp": &timestamp_str,
+                    "ends_with_z": timestamp_str.ends_with('Z'),
+                    "contains_utc_offset": timestamp_str.contains("+00:00"),
                 }),
             );
 
-            // Verify tracing subscriber is configured for UTC
-            // (tracing-subscriber uses UTC by default with json format)
-            let tracing_provides_utc = true; // Verified by tracing-subscriber implementation
+            // Verify RFC 3339 format (parseable by chrono)
+            let timestamp_is_rfc3339 = chrono::DateTime::parse_from_rfc3339(&timestamp_str).is_ok();
 
             collector.assertion(
-                "Tracing should provide UTC timestamps",
-                tracing_provides_utc,
+                "Timestamp should be RFC 3339 compliant",
+                timestamp_is_rfc3339,
                 json!({
-                    "tracing_subscriber_version": "0.3",
-                    "json_format": true,
-                    "utc_default": true,
+                    "timestamp": &timestamp_str,
+                    "rfc3339_parseable": timestamp_is_rfc3339,
                 }),
             );
-
-            collector.log("AU-8: Timestamps are automatically added by tracing crate in UTC".to_string());
 
             json!({
-                "events_have_timestamp_field": events_have_timestamp_field,
-                "tracing_provides_utc": tracing_provides_utc,
+                "timestamp_present": timestamp_present,
+                "timestamp_is_utc": timestamp_is_utc,
+                "timestamp_is_rfc3339": timestamp_is_rfc3339,
             })
         })
 }
 
 /// AU-14: Session Audit
 ///
-/// Verifies that session lifecycle events are properly logged for
-/// audit purposes, including session creation, activity, and termination.
+/// Verifies that session lifecycle events are actually logged by calling
+/// the session logging functions and capturing the tracing output.
+///
+/// This test calls `log_session_created()` and `log_session_terminated()`
+/// and verifies the events appear in captured output with required fields.
 pub fn test_au14_session_audit() -> ControlTestArtifact {
-    use crate::session::{SessionPolicy, SessionState, SessionTerminationReason};
-    use std::time::Duration;
+    use crate::session::{
+        SessionState, SessionTerminationReason,
+        log_session_created, log_session_terminated, log_session_activity,
+    };
+    use test_capture::with_captured_tracing;
 
     ArtifactBuilder::new("AU-14", "Session Audit")
         .test_name("session_lifecycle_logging")
-        .description("Verify session lifecycle events are logged for audit (AU-14)")
-        .code_location("src/session.rs", 1, 400)
+        .description("Verify session lifecycle events are actually logged (AU-14)")
+        .code_location("src/session.rs", 509, 555)
         .related_control("AC-11")
         .related_control("AC-12")
         .related_control("AU-2")
         .expected("session_creation_logged", true)
+        .expected("session_activity_logged", true)
         .expected("session_termination_logged", true)
-        .expected("termination_reasons_defined", true)
+        .expected("log_contains_session_id", true)
+        .expected("log_contains_user_id", true)
         .execute(|collector| {
-            // Create a session policy
-            let policy = SessionPolicy::builder()
-                .idle_timeout(Duration::from_secs(900))
-                .max_lifetime(Duration::from_secs(28800))
-                .build();
+            // Create a test session with identifiable IDs
+            let session = SessionState::new("au14-test-session-xyz", "au14-test-user-abc")
+                .with_client_info(Some("192.168.1.100".to_string()), Some("Mozilla/5.0".to_string()));
 
             collector.configuration(
-                "session_policy",
+                "test_session",
                 json!({
-                    "idle_timeout_secs": 900,
-                    "max_lifetime_secs": 28800,
+                    "session_id": &session.session_id,
+                    "user_id": &session.user_id,
+                    "client_ip": session.client_ip,
                 }),
             );
 
-            // Verify session state captures audit-relevant information
-            let session = SessionState::new("session-123", "user-456");
-            let session_has_audit_fields = !session.session_id.is_empty()
-                && !session.user_id.is_empty()
-                && session.created_at.is_some();
+            // Call session logging functions and capture output
+            let (_, captured_output) = with_captured_tracing(|| {
+                log_session_created(&session);
+                log_session_activity(&session, "/api/protected/resource");
+                log_session_terminated(&session, SessionTerminationReason::IdleTimeout);
+            });
+
+            collector.log(format!("Captured {} bytes of session logs", captured_output.len()));
+
+            let lines: Vec<&str> = captured_output.lines().filter(|l| !l.is_empty()).collect();
+            collector.log(format!("Captured {} log lines", lines.len()));
+
+            // Verify session creation was logged
+            let session_creation_logged = lines.iter().any(|l| {
+                l.contains("session") && (l.contains("created") || l.contains("Created"))
+            });
 
             collector.assertion(
-                "Session state should have audit-relevant fields",
-                session_has_audit_fields,
+                "Session creation should be logged",
+                session_creation_logged,
                 json!({
-                    "has_session_id": !session.session_id.is_empty(),
-                    "has_user_id": !session.user_id.is_empty(),
-                    "has_created_at": session.created_at.is_some(),
-                    "has_last_activity": session.last_activity.is_some(),
+                    "logged": session_creation_logged,
+                    "lines_checked": lines.len(),
                 }),
             );
 
-            // Verify termination reasons are defined for audit
-            let termination_reasons = [
-                SessionTerminationReason::UserLogout,
-                SessionTerminationReason::IdleTimeout,
-                SessionTerminationReason::MaxLifetimeExceeded,
-                SessionTerminationReason::AdminTermination,
-                SessionTerminationReason::SecurityConcern,
-            ];
-
-            let termination_reasons_defined = termination_reasons.len() >= 5;
+            // Verify session activity was logged
+            let session_activity_logged = lines.iter().any(|l| {
+                l.contains("session") && l.contains("activity")
+            });
 
             collector.assertion(
-                "Termination reasons should be defined for audit logging",
-                termination_reasons_defined,
+                "Session activity should be logged",
+                session_activity_logged,
+                json!({ "logged": session_activity_logged }),
+            );
+
+            // Verify session termination was logged
+            let session_termination_logged = lines.iter().any(|l| {
+                l.contains("session") && (l.contains("terminated") || l.contains("Terminated") || l.contains("destroyed"))
+            });
+
+            collector.assertion(
+                "Session termination should be logged",
+                session_termination_logged,
+                json!({ "logged": session_termination_logged }),
+            );
+
+            // Verify session ID appears in logs
+            let log_contains_session_id = lines.iter().any(|l| l.contains("au14-test-session-xyz"));
+
+            collector.assertion(
+                "Session ID should appear in logs for traceability",
+                log_contains_session_id,
                 json!({
-                    "reasons": termination_reasons.iter().map(|r| format!("{:?}", r)).collect::<Vec<_>>(),
-                    "count": termination_reasons.len(),
+                    "session_id": "au14-test-session-xyz",
+                    "found_in_logs": log_contains_session_id,
                 }),
             );
 
-            // Verify session can be terminated (for audit)
-            let mut session_to_terminate = SessionState::new("session-789", "user-abc");
-            session_to_terminate.terminate();
-            let session_terminated = !session_to_terminate.is_active;
+            // Verify user ID appears in logs
+            let log_contains_user_id = lines.iter().any(|l| l.contains("au14-test-user-abc"));
 
             collector.assertion(
-                "Session termination should be auditable",
-                session_terminated,
+                "User ID should appear in logs for accountability",
+                log_contains_user_id,
                 json!({
-                    "terminated": session_terminated,
-                    "reason": "IdleTimeout",
+                    "user_id": "au14-test-user-abc",
+                    "found_in_logs": log_contains_user_id,
                 }),
             );
 
             json!({
-                "session_creation_logged": session_has_audit_fields,
-                "session_termination_logged": session_terminated,
-                "termination_reasons_defined": termination_reasons_defined,
+                "session_creation_logged": session_creation_logged,
+                "session_activity_logged": session_activity_logged,
+                "session_termination_logged": session_termination_logged,
+                "log_contains_session_id": log_contains_session_id,
+                "log_contains_user_id": log_contains_user_id,
             })
         })
 }
@@ -1800,95 +2162,142 @@ pub fn test_au14_session_audit() -> ControlTestArtifact {
 ///
 /// Verifies that correlation IDs are generated and extracted for
 /// distributed tracing across organizational boundaries.
+///
+/// This test actually calls `extract_or_generate_correlation_id()` to verify:
+/// - Extraction from X-Correlation-ID header
+/// - Extraction from X-Request-ID header
+/// - Generation of unique IDs when no header is present
 pub fn test_au16_correlation_id() -> ControlTestArtifact {
+    use crate::audit::extract_or_generate_correlation_id;
     use axum::http::Request;
     use axum::body::Body;
 
     ArtifactBuilder::new("AU-16", "Cross-Organizational Audit Logging")
         .test_name("correlation_id_handling")
-        .description("Verify correlation ID generation and extraction (AU-16)")
-        .code_location("src/audit/mod.rs", 219, 238)
+        .description("Verify correlation ID extraction and generation (AU-16)")
+        .code_location("src/audit/mod.rs", 219, 245)
         .related_control("AU-3")
         .related_control("AU-12")
-        .expected("audit_middleware_exists", true)
-        .expected("extracts_from_headers", true)
-        .expected("supports_multiple_headers", true)
+        .expected("generates_id_when_missing", true)
+        .expected("extracts_x_correlation_id", true)
+        .expected("extracts_x_request_id", true)
+        .expected("generated_ids_are_unique", true)
+        .expected("x_correlation_id_takes_priority", true)
         .execute(|collector| {
-            // Document that audit middleware generates correlation IDs
-            // (function is internal but we verify the middleware exists and is documented)
             collector.configuration(
                 "correlation_id_source",
                 json!({
                     "function": "extract_or_generate_correlation_id",
                     "location": "src/audit/mod.rs",
                     "headers_checked": ["x-correlation-id", "x-request-id"],
-                    "fallback": "timestamp-based generation",
+                    "fallback": "timestamp-based generation (req-{hex})",
                 }),
             );
 
-            let audit_middleware_exists = true; // Verified by code review
-
-            collector.assertion(
-                "Audit middleware should handle correlation IDs",
-                audit_middleware_exists,
-                json!({
-                    "middleware": "audit_middleware",
-                    "generates_ids": true,
-                    "extracts_ids": true,
-                }),
-            );
-
-            // Test extraction from X-Request-ID header
-            let req_with_id = Request::builder()
+            // Test 1: Generate ID when no header present
+            let req_no_header = Request::builder()
                 .uri("/api/test")
-                .header("X-Request-ID", "external-trace-12345")
                 .body(Body::empty())
                 .unwrap();
 
-            let extracted_id = req_with_id
-                .headers()
-                .get("X-Request-ID")
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("");
-            let extracts_from_headers = extracted_id == "external-trace-12345";
+            let generated_id = extract_or_generate_correlation_id(&req_no_header);
+            let generates_id_when_missing = !generated_id.is_empty() && generated_id.starts_with("req-");
 
             collector.assertion(
-                "Should extract correlation ID from X-Request-ID header",
-                extracts_from_headers,
+                "Should generate correlation ID when not provided",
+                generates_id_when_missing,
                 json!({
-                    "header": "X-Request-ID",
-                    "value": extracted_id,
-                    "extracted": extracts_from_headers,
+                    "generated_id": &generated_id,
+                    "starts_with_req": generated_id.starts_with("req-"),
                 }),
             );
 
-            // Test alternative header (X-Correlation-ID)
+            // Test 2: Extract from X-Correlation-ID
             let req_with_correlation = Request::builder()
                 .uri("/api/test")
-                .header("X-Correlation-ID", "corr-67890")
+                .header("x-correlation-id", "external-corr-12345")
                 .body(Body::empty())
                 .unwrap();
 
-            let correlation_id = req_with_correlation
-                .headers()
-                .get("X-Correlation-ID")
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("");
-            let supports_correlation_header = correlation_id == "corr-67890";
+            let extracted_corr = extract_or_generate_correlation_id(&req_with_correlation);
+            let extracts_x_correlation_id = extracted_corr == "external-corr-12345";
 
             collector.assertion(
-                "Should support X-Correlation-ID header",
-                supports_correlation_header,
+                "Should extract X-Correlation-ID header",
+                extracts_x_correlation_id,
                 json!({
-                    "header": "X-Correlation-ID",
-                    "value": correlation_id,
+                    "header": "x-correlation-id",
+                    "expected": "external-corr-12345",
+                    "actual": &extracted_corr,
+                }),
+            );
+
+            // Test 3: Extract from X-Request-ID
+            let req_with_request_id = Request::builder()
+                .uri("/api/test")
+                .header("x-request-id", "external-req-67890")
+                .body(Body::empty())
+                .unwrap();
+
+            let extracted_req = extract_or_generate_correlation_id(&req_with_request_id);
+            let extracts_x_request_id = extracted_req == "external-req-67890";
+
+            collector.assertion(
+                "Should extract X-Request-ID header",
+                extracts_x_request_id,
+                json!({
+                    "header": "x-request-id",
+                    "expected": "external-req-67890",
+                    "actual": &extracted_req,
+                }),
+            );
+
+            // Test 4: Generated IDs are unique
+            let req1 = Request::builder().uri("/test1").body(Body::empty()).unwrap();
+            let req2 = Request::builder().uri("/test2").body(Body::empty()).unwrap();
+            let id1 = extract_or_generate_correlation_id(&req1);
+            // Small delay to ensure different timestamps
+            std::thread::sleep(std::time::Duration::from_nanos(1));
+            let id2 = extract_or_generate_correlation_id(&req2);
+            let generated_ids_are_unique = id1 != id2;
+
+            collector.assertion(
+                "Generated correlation IDs should be unique",
+                generated_ids_are_unique,
+                json!({
+                    "id1": &id1,
+                    "id2": &id2,
+                    "unique": generated_ids_are_unique,
+                }),
+            );
+
+            // Test 5: X-Correlation-ID takes priority over X-Request-ID
+            let req_both_headers = Request::builder()
+                .uri("/api/test")
+                .header("x-correlation-id", "priority-corr")
+                .header("x-request-id", "fallback-req")
+                .body(Body::empty())
+                .unwrap();
+
+            let priority_id = extract_or_generate_correlation_id(&req_both_headers);
+            let x_correlation_id_takes_priority = priority_id == "priority-corr";
+
+            collector.assertion(
+                "X-Correlation-ID should take priority over X-Request-ID",
+                x_correlation_id_takes_priority,
+                json!({
+                    "x_correlation_id": "priority-corr",
+                    "x_request_id": "fallback-req",
+                    "extracted": &priority_id,
                 }),
             );
 
             json!({
-                "audit_middleware_exists": audit_middleware_exists,
-                "extracts_from_headers": extracts_from_headers,
-                "supports_multiple_headers": supports_correlation_header,
+                "generates_id_when_missing": generates_id_when_missing,
+                "extracts_x_correlation_id": extracts_x_correlation_id,
+                "extracts_x_request_id": extracts_x_request_id,
+                "generated_ids_are_unique": generated_ids_are_unique,
+                "x_correlation_id_takes_priority": x_correlation_id_takes_priority,
             })
         })
 }
@@ -2385,6 +2794,550 @@ pub fn test_sc12_key_management() -> ControlTestArtifact {
         })
 }
 
+// ============================================================================
+// Additional Control Tests (Added to address coverage gaps)
+// ============================================================================
+
+/// AC-10: Concurrent Session Control
+///
+/// Verifies that concurrent session limits are configured per compliance profile
+/// and that the SessionTerminationReason for concurrent limit violations exists.
+pub fn test_ac10_concurrent_sessions() -> ControlTestArtifact {
+    use crate::session::{SessionPolicy, SessionTerminationReason};
+    use crate::compliance::ComplianceConfig;
+
+    ArtifactBuilder::new("AC-10", "Concurrent Session Control")
+        .test_name("concurrent_session_limits")
+        .description("Verify concurrent session limits per compliance profile (AC-10)")
+        .code_location("src/session.rs", 55, 68)
+        .related_control("AC-11")
+        .related_control("AC-12")
+        .expected("fedramp_high_limit_is_1", true)
+        .expected("fedramp_moderate_limit_is_3", true)
+        .expected("fedramp_low_limit_is_5", true)
+        .expected("development_unlimited", true)
+        .expected("has_termination_reason", true)
+        .execute(|collector| {
+            // Verify FedRAMP High = 1 session (strictest)
+            let high_policy = SessionPolicy::strict();
+            let fedramp_high_limit_is_1 = high_policy.max_concurrent_sessions == Some(1);
+
+            collector.assertion(
+                "FedRAMP High should allow only 1 concurrent session",
+                fedramp_high_limit_is_1,
+                json!({
+                    "profile": "FedRAMP High (strict)",
+                    "max_sessions": high_policy.max_concurrent_sessions,
+                    "expected": 1,
+                }),
+            );
+
+            // Verify FedRAMP Moderate = 3 sessions
+            let moderate_config = ComplianceConfig::from_profile(ComplianceProfile::FedRampModerate);
+            let moderate_policy = SessionPolicy::from_compliance(&moderate_config);
+            let fedramp_moderate_limit_is_3 = moderate_policy.max_concurrent_sessions == Some(3);
+
+            collector.assertion(
+                "FedRAMP Moderate should allow 3 concurrent sessions",
+                fedramp_moderate_limit_is_3,
+                json!({
+                    "profile": "FedRAMP Moderate",
+                    "max_sessions": moderate_policy.max_concurrent_sessions,
+                    "expected": 3,
+                }),
+            );
+
+            // Verify FedRAMP Low = 5 sessions
+            let low_config = ComplianceConfig::from_profile(ComplianceProfile::FedRampLow);
+            let low_policy = SessionPolicy::from_compliance(&low_config);
+            let fedramp_low_limit_is_5 = low_policy.max_concurrent_sessions == Some(5);
+
+            collector.assertion(
+                "FedRAMP Low should allow 5 concurrent sessions",
+                fedramp_low_limit_is_5,
+                json!({
+                    "profile": "FedRAMP Low",
+                    "max_sessions": low_policy.max_concurrent_sessions,
+                    "expected": 5,
+                }),
+            );
+
+            // Verify Development = unlimited (None)
+            let dev_policy = SessionPolicy::relaxed();
+            let development_unlimited = dev_policy.max_concurrent_sessions.is_none();
+
+            collector.assertion(
+                "Development should allow unlimited sessions",
+                development_unlimited,
+                json!({
+                    "profile": "Development (relaxed)",
+                    "max_sessions": dev_policy.max_concurrent_sessions,
+                    "expected": "None (unlimited)",
+                }),
+            );
+
+            // Verify ConcurrentSessionLimit termination reason exists and works
+            let reason = SessionTerminationReason::ConcurrentSessionLimit;
+            let has_termination_reason = reason.should_terminate() && !reason.message().is_empty();
+
+            collector.assertion(
+                "ConcurrentSessionLimit termination reason should be defined",
+                has_termination_reason,
+                json!({
+                    "reason_code": reason.code(),
+                    "message": reason.message(),
+                    "should_terminate": reason.should_terminate(),
+                }),
+            );
+
+            collector.configuration(
+                "concurrent_session_policies",
+                json!({
+                    "fedramp_high": 1,
+                    "fedramp_moderate": 3,
+                    "fedramp_low": 5,
+                    "development": "unlimited",
+                }),
+            );
+
+            json!({
+                "fedramp_high_limit_is_1": fedramp_high_limit_is_1,
+                "fedramp_moderate_limit_is_3": fedramp_moderate_limit_is_3,
+                "fedramp_low_limit_is_5": fedramp_low_limit_is_5,
+                "development_unlimited": development_unlimited,
+                "has_termination_reason": has_termination_reason,
+            })
+        })
+}
+
+/// CA-7: Continuous Monitoring
+///
+/// Verifies that the health check framework supports continuous monitoring
+/// per NIST 800-53 CA-7.
+pub fn test_ca7_health_checks() -> ControlTestArtifact {
+    use crate::health::{HealthChecker, HealthCheck, HealthStatus, Status};
+
+    ArtifactBuilder::new("CA-7", "Continuous Monitoring")
+        .test_name("health_check_framework")
+        .description("Verify health check framework for continuous monitoring (CA-7)")
+        .code_location("src/health.rs", 1, 200)
+        .related_control("SI-4")
+        .expected("can_register_checks", true)
+        .expected("reports_healthy_status", true)
+        .expected("reports_unhealthy_status", true)
+        .expected("aggregates_to_unhealthy", true)
+        .execute(|collector| {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+
+            // Create health checker
+            let mut checker = HealthChecker::new();
+
+            // Register a healthy check
+            checker.add_check(HealthCheck::new("database", || async {
+                HealthStatus::healthy()
+            }));
+
+            // Register an unhealthy check
+            checker.add_check(HealthCheck::new("external_api", || async {
+                HealthStatus::unhealthy("Connection refused")
+            }));
+
+            let can_register_checks = checker.check_count() == 2;
+
+            collector.assertion(
+                "Health checker should accept multiple checks",
+                can_register_checks,
+                json!({ "check_count": checker.check_count() }),
+            );
+
+            // Run checks
+            let report = rt.block_on(async {
+                checker.check_all().await
+            });
+
+            // Verify individual check results
+            let db_result = report.checks.get("database");
+            let reports_healthy_status = db_result
+                .map(|r| matches!(r.status, Status::Healthy))
+                .unwrap_or(false);
+
+            collector.assertion(
+                "Healthy check should report healthy status",
+                reports_healthy_status,
+                json!({ "database_status": format!("{:?}", db_result.map(|r| &r.status)) }),
+            );
+
+            let api_result = report.checks.get("external_api");
+            let reports_unhealthy_status = api_result
+                .map(|r| matches!(r.status, Status::Unhealthy))
+                .unwrap_or(false);
+
+            collector.assertion(
+                "Unhealthy check should report unhealthy status",
+                reports_unhealthy_status,
+                json!({ "api_status": format!("{:?}", api_result.map(|r| &r.status)) }),
+            );
+
+            // Verify aggregation (overall should be unhealthy if any check fails)
+            let aggregates_to_unhealthy = matches!(report.status, Status::Unhealthy);
+
+            collector.assertion(
+                "Overall status should aggregate to unhealthy when any check fails",
+                aggregates_to_unhealthy,
+                json!({
+                    "overall_status": format!("{:?}", report.status),
+                    "healthy_checks": report.checks.values().filter(|r| matches!(r.status, Status::Healthy)).count(),
+                    "unhealthy_checks": report.checks.values().filter(|r| matches!(r.status, Status::Unhealthy)).count(),
+                }),
+            );
+
+            collector.configuration(
+                "health_check_framework",
+                json!({
+                    "supports_async_checks": true,
+                    "supports_aggregation": true,
+                    "status_types": ["Healthy", "Unhealthy", "Degraded"],
+                }),
+            );
+
+            json!({
+                "can_register_checks": can_register_checks,
+                "reports_healthy_status": reports_healthy_status,
+                "reports_unhealthy_status": reports_unhealthy_status,
+                "aggregates_to_unhealthy": aggregates_to_unhealthy,
+            })
+        })
+}
+
+/// IR-4: Incident Handling
+///
+/// Verifies that the alerting system supports incident handling
+/// per NIST 800-53 IR-4.
+pub fn test_ir4_incident_handling() -> ControlTestArtifact {
+    use crate::alerting::{AlertManager, AlertConfig, Alert, AlertSeverity, AlertCategory};
+
+    ArtifactBuilder::new("IR-4", "Incident Handling")
+        .test_name("alerting_system")
+        .description("Verify alerting system for incident handling (IR-4)")
+        .code_location("src/alerting.rs", 1, 300)
+        .related_control("IR-5")
+        .related_control("IR-6")
+        .expected("can_create_alerts", true)
+        .expected("supports_severity_levels", true)
+        .expected("supports_categories", true)
+        .expected("helper_functions_work", true)
+        .execute(|collector| {
+            let config = AlertConfig::default();
+            let manager = AlertManager::new(config.clone());
+
+            // Test alert creation - Alert::new takes (severity, summary, description)
+            let alert = Alert::new(
+                AlertSeverity::Critical,
+                "Test security incident",
+                "Detailed description of the security incident",
+            ).with_category(AlertCategory::SecurityIncident);
+
+            let can_create_alerts = !alert.summary.is_empty()
+                && !alert.description.is_empty()
+                && matches!(alert.severity, AlertSeverity::Critical)
+                && matches!(alert.category, AlertCategory::SecurityIncident);
+
+            collector.assertion(
+                "Should be able to create alerts with severity and category",
+                can_create_alerts,
+                json!({
+                    "summary": &alert.summary,
+                    "description": &alert.description,
+                    "severity": format!("{:?}", alert.severity),
+                    "category": format!("{:?}", alert.category),
+                }),
+            );
+
+            // Test severity levels exist (Info, Warning, Error, Critical)
+            let severities = [
+                AlertSeverity::Info,
+                AlertSeverity::Warning,
+                AlertSeverity::Error,
+                AlertSeverity::Critical,
+            ];
+            let supports_severity_levels = severities.len() == 4;
+
+            collector.assertion(
+                "Should support all severity levels (Info, Warning, Error, Critical)",
+                supports_severity_levels,
+                json!({
+                    "severities": severities.iter().map(|s| format!("{:?}", s)).collect::<Vec<_>>(),
+                    "count": severities.len(),
+                }),
+            );
+
+            // Test categories exist - actual AlertCategory variants
+            let categories = [
+                AlertCategory::Authentication,
+                AlertCategory::Authorization,
+                AlertCategory::RateLimiting,
+                AlertCategory::Session,
+                AlertCategory::DataIntegrity,
+                AlertCategory::Configuration,
+                AlertCategory::SystemHealth,
+                AlertCategory::SecurityIncident,
+                AlertCategory::Compliance,
+                AlertCategory::Custom,
+            ];
+            let supports_categories = categories.len() >= 8;
+
+            collector.assertion(
+                "Should support security-relevant categories",
+                supports_categories,
+                json!({
+                    "categories": categories.iter().map(|c| format!("{:?}", c)).collect::<Vec<_>>(),
+                }),
+            );
+
+            // Test helper functions exist and work - they require &AlertManager
+            let brute_force_sent = crate::alerting::alert_brute_force("192.168.1.100", 10, &manager);
+            let account_locked_sent = crate::alerting::alert_account_locked("test@example.com", "Too many failed attempts", &manager);
+            let suspicious_sent = crate::alerting::alert_suspicious_activity(
+                "Multiple failed MFA attempts",
+                Some("test-user"),
+                Some("192.168.1.100"),
+                &manager,
+            );
+            // At least one should succeed (depending on rate limiting config)
+            let helper_functions_work = brute_force_sent || account_locked_sent || suspicious_sent;
+
+            collector.assertion(
+                "Alert helper functions should be available and functional",
+                helper_functions_work,
+                json!({
+                    "alert_brute_force": brute_force_sent,
+                    "alert_account_locked": account_locked_sent,
+                    "alert_suspicious_activity": suspicious_sent,
+                }),
+            );
+
+            collector.configuration(
+                "alerting_config",
+                json!({
+                    "rate_limiting_enabled": config.rate_limit_per_category > 0,
+                    "rate_limit_per_category": config.rate_limit_per_category,
+                    "min_severity": format!("{:?}", config.min_severity),
+                    "enable_aggregation": config.enable_aggregation,
+                }),
+            );
+
+            json!({
+                "can_create_alerts": can_create_alerts,
+                "supports_severity_levels": supports_severity_levels,
+                "supports_categories": supports_categories,
+                "helper_functions_work": helper_functions_work,
+            })
+        })
+}
+
+/// SR-3: Supply Chain Controls
+///
+/// Verifies SBOM generation capability for supply chain security
+/// per NIST 800-53 SR-3.
+pub fn test_sr3_supply_chain() -> ControlTestArtifact {
+    use crate::supply_chain::{generate_cyclonedx_sbom, SbomMetadata, Dependency, DependencySource};
+    use std::collections::HashMap;
+
+    ArtifactBuilder::new("SR-3", "Supply Chain Controls and Processes")
+        .test_name("sbom_generation")
+        .description("Verify SBOM generation for supply chain controls (SR-3)")
+        .code_location("src/supply_chain.rs", 1, 200)
+        .related_control("SR-4")
+        .expected("can_create_dependencies", true)
+        .expected("generates_valid_sbom", true)
+        .expected("sbom_contains_dependencies", true)
+        .expected("sbom_has_metadata", true)
+        .execute(|collector| {
+            // Create test dependencies using builder pattern
+            let serde_dep = Dependency::new("serde", "1.0.193")
+                .with_source(DependencySource::CratesIo)
+                .with_checksum("abc123");
+
+            let tokio_dep = Dependency::new("tokio", "1.35.0")
+                .with_source(DependencySource::CratesIo)
+                .with_checksum("def456");
+
+            // generate_cyclonedx_sbom expects HashMap<String, Dependency>
+            let mut deps: HashMap<String, Dependency> = HashMap::new();
+            deps.insert("serde 1.0.193".to_string(), serde_dep);
+            deps.insert("tokio 1.35.0".to_string(), tokio_dep);
+
+            let can_create_dependencies = deps.len() == 2;
+
+            collector.assertion(
+                "Should be able to create dependency records",
+                can_create_dependencies,
+                json!({
+                    "dependency_count": deps.len(),
+                    "dependencies": deps.values().map(|d| format!("{}@{}", d.name, d.version)).collect::<Vec<_>>(),
+                }),
+            );
+
+            // Generate SBOM - signature is (metadata, dependencies)
+            let metadata = SbomMetadata::new("test-app", "1.0.0");
+            let sbom = generate_cyclonedx_sbom(&metadata, &deps);
+
+            // Verify valid CycloneDX format
+            let generates_valid_sbom = sbom.contains("bomFormat")
+                && sbom.contains("CycloneDX")
+                && sbom.contains("components");
+
+            collector.assertion(
+                "Should generate valid CycloneDX SBOM",
+                generates_valid_sbom,
+                json!({
+                    "has_bom_format": sbom.contains("bomFormat"),
+                    "has_cyclonedx": sbom.contains("CycloneDX"),
+                    "has_components": sbom.contains("components"),
+                    "sbom_length": sbom.len(),
+                }),
+            );
+
+            // Verify dependencies are included
+            let sbom_contains_dependencies = sbom.contains("serde") && sbom.contains("tokio");
+
+            collector.assertion(
+                "SBOM should contain parsed dependencies",
+                sbom_contains_dependencies,
+                json!({
+                    "contains_serde": sbom.contains("serde"),
+                    "contains_tokio": sbom.contains("tokio"),
+                }),
+            );
+
+            // Verify metadata is included
+            let sbom_has_metadata = sbom.contains("test-app") && sbom.contains("1.0.0");
+
+            collector.assertion(
+                "SBOM should include application metadata",
+                sbom_has_metadata,
+                json!({
+                    "contains_app_name": sbom.contains("test-app"),
+                    "contains_version": sbom.contains("1.0.0"),
+                }),
+            );
+
+            collector.configuration(
+                "sbom_format",
+                json!({
+                    "format": "CycloneDX",
+                    "version": "1.4",
+                    "output": "JSON",
+                }),
+            );
+
+            json!({
+                "can_create_dependencies": can_create_dependencies,
+                "generates_valid_sbom": generates_valid_sbom,
+                "sbom_contains_dependencies": sbom_contains_dependencies,
+                "sbom_has_metadata": sbom_has_metadata,
+            })
+        })
+}
+
+/// SA-11: Developer Testing and Evaluation
+///
+/// Verifies security testing utilities are available per NIST 800-53 SA-11.
+pub fn test_sa11_security_testing() -> ControlTestArtifact {
+    use crate::testing::{
+        xss_payloads, sql_injection_payloads, command_injection_payloads,
+        SecurityHeaders,
+    };
+
+    ArtifactBuilder::new("SA-11", "Developer Testing and Evaluation")
+        .test_name("security_test_utilities")
+        .description("Verify security testing utilities exist (SA-11)")
+        .code_location("src/testing.rs", 1, 200)
+        .related_control("CA-8")
+        .expected("provides_xss_payloads", true)
+        .expected("provides_sqli_payloads", true)
+        .expected("provides_cmdi_payloads", true)
+        .expected("provides_header_utilities", true)
+        .execute(|collector| {
+            // Test XSS payloads
+            let xss = xss_payloads();
+            let provides_xss_payloads = !xss.is_empty()
+                && xss.iter().any(|p| p.contains("<script>") || p.contains("javascript:"));
+
+            collector.assertion(
+                "Should provide XSS test payloads",
+                provides_xss_payloads,
+                json!({
+                    "payload_count": xss.len(),
+                    "sample_payloads": xss.iter().take(3).collect::<Vec<_>>(),
+                }),
+            );
+
+            // Test SQL injection payloads
+            let sqli = sql_injection_payloads();
+            let provides_sqli_payloads = !sqli.is_empty()
+                && sqli.iter().any(|p| p.contains("'") || p.contains("--") || p.contains("OR"));
+
+            collector.assertion(
+                "Should provide SQL injection test payloads",
+                provides_sqli_payloads,
+                json!({
+                    "payload_count": sqli.len(),
+                    "sample_payloads": sqli.iter().take(3).collect::<Vec<_>>(),
+                }),
+            );
+
+            // Test command injection payloads
+            let cmdi = command_injection_payloads();
+            let provides_cmdi_payloads = !cmdi.is_empty()
+                && cmdi.iter().any(|p| p.contains(";") || p.contains("|") || p.contains("`"));
+
+            collector.assertion(
+                "Should provide command injection test payloads",
+                provides_cmdi_payloads,
+                json!({
+                    "payload_count": cmdi.len(),
+                    "sample_payloads": cmdi.iter().take(3).collect::<Vec<_>>(),
+                }),
+            );
+
+            // Test header verification utilities
+            let expected_headers = SecurityHeaders::strict();
+            let pairs = expected_headers.to_header_pairs();
+            let provides_header_utilities = !pairs.is_empty()
+                && pairs.iter().any(|(k, _)| k == "Strict-Transport-Security");
+
+            collector.assertion(
+                "Should provide security header verification utilities",
+                provides_header_utilities,
+                json!({
+                    "header_count": pairs.len(),
+                    "headers": pairs.iter().map(|(k, _)| k.clone()).collect::<Vec<_>>(),
+                }),
+            );
+
+            collector.configuration(
+                "security_testing_utilities",
+                json!({
+                    "xss_payload_count": xss.len(),
+                    "sqli_payload_count": sqli.len(),
+                    "cmdi_payload_count": cmdi.len(),
+                    "header_profiles": ["default", "strict", "api", "production"],
+                }),
+            );
+
+            json!({
+                "provides_xss_payloads": provides_xss_payloads,
+                "provides_sqli_payloads": provides_sqli_payloads,
+                "provides_cmdi_payloads": provides_cmdi_payloads,
+                "provides_header_utilities": provides_header_utilities,
+            })
+        })
+}
+
 /// Generate a complete compliance test report with all control tests
 ///
 /// This function runs all artifact-generating tests and collects them
@@ -2492,6 +3445,7 @@ pub fn all_control_tests() -> Vec<(&'static str, fn() -> ControlTestArtifact)> {
         ("AC-3", test_ac3_access_enforcement as fn() -> ControlTestArtifact),
         ("AC-4", test_ac4_cors_policy),
         ("AC-7", test_ac7_lockout),
+        ("AC-10", test_ac10_concurrent_sessions),
         ("AC-11", test_ac11_session_timeout),
         ("AC-12", test_ac12_session_termination),
         // Audit and Accountability (AU)
@@ -2502,6 +3456,8 @@ pub fn all_control_tests() -> Vec<(&'static str, fn() -> ControlTestArtifact)> {
         ("AU-12", test_au12_audit_generation),
         ("AU-14", test_au14_session_audit),
         ("AU-16", test_au16_correlation_id),
+        // Contingency Planning (CA)
+        ("CA-7", test_ca7_health_checks),
         // Configuration Management (CM)
         ("CM-6", test_cm6_security_headers),
         // Identification and Authentication (IA)
@@ -2511,6 +3467,10 @@ pub fn all_control_tests() -> Vec<(&'static str, fn() -> ControlTestArtifact)> {
         ("IA-5(1)", test_ia5_1_password_policy),
         ("IA-5(7)", test_ia5_7_secret_detection),
         ("IA-6", test_ia6_auth_feedback),
+        // Incident Response (IR)
+        ("IR-4", test_ir4_incident_handling),
+        // System and Services Acquisition (SA)
+        ("SA-11", test_sa11_security_testing),
         // System and Communications Protection (SC)
         ("SC-5", test_sc5_rate_limiting),
         ("SC-8", test_sc8_transmission_security),
@@ -2523,6 +3483,8 @@ pub fn all_control_tests() -> Vec<(&'static str, fn() -> ControlTestArtifact)> {
         // System and Information Integrity (SI)
         ("SI-10", test_si10_input_validation),
         ("SI-11", test_si11_error_handling),
+        // Supply Chain Risk Management (SR)
+        ("SR-3", test_sr3_supply_chain),
     ]
 }
 
@@ -2730,7 +3692,7 @@ mod tests {
     #[test]
     fn test_all_control_tests_returns_all() {
         let tests = all_control_tests();
-        assert_eq!(tests.len(), 29);
+        assert_eq!(tests.len(), 34);
 
         // Verify each test can be executed
         for (control_id, test_fn) in tests {

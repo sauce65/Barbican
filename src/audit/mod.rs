@@ -217,7 +217,14 @@ fn log_security_event(
 }
 
 /// Extract or generate a correlation ID for request tracing
-fn extract_or_generate_correlation_id(request: &Request<Body>) -> String {
+///
+/// Checks headers in priority order:
+/// 1. `x-correlation-id` (preferred)
+/// 2. `x-request-id` (common alternative)
+/// 3. Falls back to generating a timestamp-based ID
+///
+/// This function is pub(crate) to allow compliance testing (AU-16).
+pub(crate) fn extract_or_generate_correlation_id(request: &Request<Body>) -> String {
     request
         .headers()
         .get("x-correlation-id")
