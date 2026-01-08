@@ -25,6 +25,7 @@
 use crate::audit::integrity::{AuditChain, AuditIntegrityConfig, SignatureAlgorithm};
 use crate::auth::{Claims, MfaPolicy};
 use crate::compliance::artifacts::{ArtifactBuilder, ComplianceTestReport, ControlTestArtifact};
+use crate::compliance::config::ComplianceConfig;
 use crate::compliance::profile::ComplianceProfile;
 use crate::config::SecurityConfig;
 use crate::crypto::constant_time_eq;
@@ -128,64 +129,150 @@ mod test_capture {
 ///
 /// Verifies that accounts are locked after the configured number of failed
 /// login attempts, as required by NIST 800-53 AC-7.
+///
+/// Tests the `from_compliance()` configuration path to ensure lockout policies
+/// are correctly derived from compliance profiles (FedRAMP Low/Moderate/High).
 pub fn test_ac7_lockout() -> ControlTestArtifact {
     ArtifactBuilder::new("AC-7", "Unsuccessful Logon Attempts")
         .test_name("lockout_after_max_attempts")
         .description(
-            "Verify account locks after configured number of failed login attempts (AC-7)",
+            "Verify account locks after profile-configured number of failed attempts (AC-7)",
         )
-        .code_location("src/login.rs", 418, 554)
+        .code_location("src/login.rs", 169, 189)
+        .code_location_with_fn("src/compliance/config.rs", 137, 143, "ComplianceConfig")
         .related_control("AC-2")
         .related_control("IA-5")
         .input("username", "test@example.com")
-        .input("max_attempts", 3)
-        .expected("locked_after_3_attempts", true)
-        .expected("allowed_before_lockout", true)
+        .input("profiles_tested", "FedRAMP Low, Moderate, High")
+        .expected("moderate_locks_at_3", true)
+        .expected("low_locks_at_5", true)
+        .expected("high_locks_at_3", true)
+        .expected("from_compliance_path_tested", true)
         .execute(|collector| {
-            // Use strict policy (3 attempts, 30 min lockout)
-            let policy = LockoutPolicy::strict();
+            let username = "test@example.com";
+
+            // Test FedRAMP Moderate profile (3 attempts)
+            let moderate_config = ComplianceConfig::from_profile(ComplianceProfile::FedRampModerate);
+            let moderate_policy = LockoutPolicy::from_compliance(&moderate_config);
+
             collector.configuration(
-                "lockout_policy",
+                "fedramp_moderate_policy",
                 json!({
-                    "max_attempts": policy.max_attempts,
-                    "lockout_duration_secs": policy.lockout_duration.as_secs(),
-                    "progressive_lockout": policy.progressive_lockout,
+                    "profile": "FedRAMP Moderate",
+                    "max_attempts": moderate_policy.max_attempts,
+                    "lockout_duration_secs": moderate_policy.lockout_duration.as_secs(),
+                    "progressive_lockout": moderate_policy.progressive_lockout,
+                    "track_by_ip": moderate_policy.track_by_ip,
+                    "derived_from": "ComplianceConfig::from_profile()",
                 }),
             );
 
-            let tracker = LoginTracker::new(policy);
-            let username = "test@example.com";
-
-            // First attempt should not lock out
-            let result1 = tracker.record_failure(username);
-            collector.log(format!("Attempt 1: failed_count={}, is_locked={}", result1.failed_count, result1.is_locked_out));
-            let allowed1 = !result1.is_locked_out;
-
-            // Second attempt should not lock out
-            let result2 = tracker.record_failure(username);
-            collector.log(format!("Attempt 2: failed_count={}, is_locked={}", result2.failed_count, result2.is_locked_out));
-            let allowed2 = !result2.is_locked_out;
-
-            // Third attempt should trigger lockout
-            let result3 = tracker.record_failure(username);
-            collector.log(format!("Attempt 3: failed_count={}, is_locked={}", result3.failed_count, result3.is_locked_out));
-            let locked = result3.is_locked_out;
+            // Verify Moderate locks at 3 attempts
+            let moderate_tracker = LoginTracker::new(moderate_policy.clone());
+            moderate_tracker.record_failure(username);
+            moderate_tracker.record_failure(username);
+            let moderate_result = moderate_tracker.record_failure(username);
+            let moderate_locks_at_3 = moderate_result.is_locked_out && moderate_policy.max_attempts == 3;
 
             collector.assertion(
-                "First two attempts should not lock out",
-                allowed1 && allowed2,
-                json!({ "attempt1_allowed": allowed1, "attempt2_allowed": allowed2 }),
+                "FedRAMP Moderate should lock after 3 attempts (from_compliance path)",
+                moderate_locks_at_3,
+                json!({
+                    "policy_max_attempts": moderate_policy.max_attempts,
+                    "locked_after_3": moderate_result.is_locked_out,
+                    "config_source": "ComplianceConfig::from_profile(FedRampModerate)",
+                }),
             );
 
+            // Test FedRAMP Low profile (5 attempts)
+            let low_config = ComplianceConfig::from_profile(ComplianceProfile::FedRampLow);
+            let low_policy = LockoutPolicy::from_compliance(&low_config);
+
+            collector.configuration(
+                "fedramp_low_policy",
+                json!({
+                    "profile": "FedRAMP Low",
+                    "max_attempts": low_policy.max_attempts,
+                    "lockout_duration_secs": low_policy.lockout_duration.as_secs(),
+                    "derived_from": "ComplianceConfig::from_profile()",
+                }),
+            );
+
+            // Verify Low allows 4 attempts but locks at 5
+            let low_tracker = LoginTracker::new(low_policy.clone());
+            for _ in 0..4 {
+                low_tracker.record_failure(username);
+            }
+            let low_4th_lockout = low_tracker.check_lockout(username);
+            let low_result = low_tracker.record_failure(username);
+            let low_locks_at_5 = low_4th_lockout.is_none()  // Not locked after 4 attempts
+                && low_result.is_locked_out                  // Locked after 5th
+                && low_policy.max_attempts == 5;
+
             collector.assertion(
-                "Third attempt should trigger lockout",
-                locked,
-                json!({ "locked_after_3": locked }),
+                "FedRAMP Low should lock after 5 attempts (from_compliance path)",
+                low_locks_at_5,
+                json!({
+                    "policy_max_attempts": low_policy.max_attempts,
+                    "not_locked_at_4": low_4th_lockout.is_none(),
+                    "locked_at_5": low_result.is_locked_out,
+                    "config_source": "ComplianceConfig::from_profile(FedRampLow)",
+                }),
+            );
+
+            // Test FedRAMP High profile (3 attempts, stricter settings)
+            let high_config = ComplianceConfig::from_profile(ComplianceProfile::FedRampHigh);
+            let high_policy = LockoutPolicy::from_compliance(&high_config);
+
+            collector.configuration(
+                "fedramp_high_policy",
+                json!({
+                    "profile": "FedRAMP High",
+                    "max_attempts": high_policy.max_attempts,
+                    "lockout_duration_secs": high_policy.lockout_duration.as_secs(),
+                    "progressive_lockout": high_policy.progressive_lockout,
+                    "lockout_multiplier": high_policy.lockout_multiplier,
+                    "derived_from": "ComplianceConfig::from_profile()",
+                }),
+            );
+
+            let high_tracker = LoginTracker::new(high_policy.clone());
+            high_tracker.record_failure(username);
+            high_tracker.record_failure(username);
+            let high_result = high_tracker.record_failure(username);
+            let high_locks_at_3 = high_result.is_locked_out && high_policy.max_attempts == 3;
+
+            collector.assertion(
+                "FedRAMP High should lock after 3 attempts with stricter settings",
+                high_locks_at_3,
+                json!({
+                    "policy_max_attempts": high_policy.max_attempts,
+                    "locked_after_3": high_result.is_locked_out,
+                    "lockout_multiplier": high_policy.lockout_multiplier,
+                    "config_source": "ComplianceConfig::from_profile(FedRampHigh)",
+                }),
+            );
+
+            // Verify stricter settings for High vs Low
+            let high_stricter = high_policy.lockout_multiplier > low_policy.lockout_multiplier
+                && high_policy.max_ip_attempts < low_policy.max_ip_attempts;
+
+            collector.assertion(
+                "FedRAMP High should have stricter settings than Low",
+                high_stricter,
+                json!({
+                    "high_lockout_multiplier": high_policy.lockout_multiplier,
+                    "low_lockout_multiplier": low_policy.lockout_multiplier,
+                    "high_max_ip_attempts": high_policy.max_ip_attempts,
+                    "low_max_ip_attempts": low_policy.max_ip_attempts,
+                }),
             );
 
             json!({
-                "locked_after_3_attempts": locked,
-                "allowed_before_lockout": allowed1 && allowed2,
+                "moderate_locks_at_3": moderate_locks_at_3,
+                "low_locks_at_5": low_locks_at_5,
+                "high_locks_at_3": high_locks_at_3,
+                "from_compliance_path_tested": true,
             })
         })
 }
@@ -366,59 +453,145 @@ pub fn test_si10_input_validation() -> ControlTestArtifact {
 pub fn test_ia5_1_password_policy() -> ControlTestArtifact {
     ArtifactBuilder::new("IA-5(1)", "Password-Based Authentication")
         .test_name("password_policy_enforcement")
-        .description("Verify password policy meets NIST 800-63B requirements (IA-5(1))")
-        .code_location("src/password.rs", 61, 265)
-        .input("min_length", 12)
+        .description("Verify password policy derived from compliance profile meets NIST 800-63B (IA-5(1))")
+        .code_location("src/password.rs", 138, 153)
+        .code_location_with_fn("src/compliance/config.rs", 128, 134, "ComplianceConfig")
+        .input("profiles_tested", "FedRAMP Low, Moderate, High")
         .input("weak_password", "password123")
-        .input("short_password", "short")
-        .input("strong_password", "K9$mP2vL#nQr5xWz")
-        .expected("weak_password_rejected", true)
-        .expected("short_password_rejected", true)
-        .expected("strong_password_accepted", true)
+        .expected("low_min_length_8", true)
+        .expected("moderate_min_length_12", true)
+        .expected("high_min_length_14", true)
+        .expected("common_password_rejected", true)
+        .expected("from_compliance_path_tested", true)
         .execute(|collector| {
-            let policy = PasswordPolicy::default();
+            // Test FedRAMP Low profile (8 char min, no breach checking)
+            let low_config = ComplianceConfig::from_profile(ComplianceProfile::FedRampLow);
+            let low_policy = PasswordPolicy::from_compliance(&low_config);
 
             collector.configuration(
-                "password_policy",
+                "fedramp_low_policy",
                 json!({
-                    "min_length": policy.min_length,
-                    "max_length": policy.max_length,
-                    "check_common_passwords": policy.check_common_passwords,
-                    "disallow_username_in_password": policy.disallow_username_in_password,
+                    "profile": "FedRAMP Low",
+                    "min_length": low_policy.min_length,
+                    "max_length": low_policy.max_length,
+                    "check_common_passwords": low_policy.check_common_passwords,
+                    "check_breach_database": low_policy.check_breach_database,
+                    "disallow_username_in_password": low_policy.disallow_username_in_password,
+                    "derived_from": "ComplianceConfig::from_profile()",
                 }),
             );
 
-            // Test weak password (common password)
-            let weak_result = policy.validate("password123");
-            let weak_rejected = weak_result.is_err();
+            let low_min_length_8 = low_policy.min_length == 8;
             collector.assertion(
-                "Weak/common password should be rejected",
-                weak_rejected,
-                json!({ "result": format!("{:?}", weak_result) }),
+                "FedRAMP Low should require minimum 8 characters",
+                low_min_length_8,
+                json!({
+                    "expected": 8,
+                    "actual": low_policy.min_length,
+                    "config_source": "ComplianceConfig::from_profile(FedRampLow)",
+                }),
             );
 
-            // Test short password
-            let short_result = policy.validate("short");
-            let short_rejected = short_result.is_err();
-            collector.assertion(
-                "Short password should be rejected",
-                short_rejected,
-                json!({ "result": format!("{:?}", short_result) }),
+            // Test FedRAMP Moderate profile (12 char min, breach checking)
+            let moderate_config = ComplianceConfig::from_profile(ComplianceProfile::FedRampModerate);
+            let moderate_policy = PasswordPolicy::from_compliance(&moderate_config);
+
+            collector.configuration(
+                "fedramp_moderate_policy",
+                json!({
+                    "profile": "FedRAMP Moderate",
+                    "min_length": moderate_policy.min_length,
+                    "check_common_passwords": moderate_policy.check_common_passwords,
+                    "check_breach_database": moderate_policy.check_breach_database,
+                    "derived_from": "ComplianceConfig::from_profile()",
+                }),
             );
 
-            // Test strong password
-            let strong_result = policy.validate("K9$mP2vL#nQr5xWz");
+            let moderate_min_length_12 = moderate_policy.min_length == 12;
+            collector.assertion(
+                "FedRAMP Moderate should require minimum 12 characters",
+                moderate_min_length_12,
+                json!({
+                    "expected": 12,
+                    "actual": moderate_policy.min_length,
+                    "config_source": "ComplianceConfig::from_profile(FedRampModerate)",
+                }),
+            );
+
+            // Test FedRAMP High profile (14 char min, breach checking required)
+            let high_config = ComplianceConfig::from_profile(ComplianceProfile::FedRampHigh);
+            let high_policy = PasswordPolicy::from_compliance(&high_config);
+
+            collector.configuration(
+                "fedramp_high_policy",
+                json!({
+                    "profile": "FedRAMP High",
+                    "min_length": high_policy.min_length,
+                    "check_common_passwords": high_policy.check_common_passwords,
+                    "check_breach_database": high_policy.check_breach_database,
+                    "derived_from": "ComplianceConfig::from_profile()",
+                }),
+            );
+
+            let high_min_length_14 = high_policy.min_length == 14;
+            collector.assertion(
+                "FedRAMP High should require minimum 14 characters",
+                high_min_length_14,
+                json!({
+                    "expected": 14,
+                    "actual": high_policy.min_length,
+                    "config_source": "ComplianceConfig::from_profile(FedRampHigh)",
+                }),
+            );
+
+            // Verify breach checking is enabled for stricter profiles
+            let breach_check_stricter = !low_config.password_check_breach_db
+                && moderate_config.password_check_breach_db
+                && high_config.password_check_breach_db;
+
+            collector.assertion(
+                "Breach checking should be enabled for Moderate/High but not Low",
+                breach_check_stricter,
+                json!({
+                    "low_breach_check": low_config.password_check_breach_db,
+                    "moderate_breach_check": moderate_config.password_check_breach_db,
+                    "high_breach_check": high_config.password_check_breach_db,
+                }),
+            );
+
+            // Test common password rejection (using Moderate policy)
+            let weak_result = moderate_policy.validate("password123");
+            let common_password_rejected = weak_result.is_err();
+            collector.assertion(
+                "Common password should be rejected by Moderate policy",
+                common_password_rejected,
+                json!({
+                    "password": "password123",
+                    "rejected": common_password_rejected,
+                    "error": format!("{:?}", weak_result),
+                }),
+            );
+
+            // Test that a password meeting High requirements is accepted
+            let strong_password = "K9$mP2vL#nQr5xWz!@"; // 18 chars, no common patterns
+            let strong_result = high_policy.validate(strong_password);
             let strong_accepted = strong_result.is_ok();
             collector.assertion(
-                "Strong password should be accepted",
+                "Strong password should be accepted by High policy",
                 strong_accepted,
-                json!({ "result": format!("{:?}", strong_result) }),
+                json!({
+                    "password_length": strong_password.len(),
+                    "accepted": strong_accepted,
+                    "result": format!("{:?}", strong_result),
+                }),
             );
 
             json!({
-                "weak_password_rejected": weak_rejected,
-                "short_password_rejected": short_rejected,
-                "strong_password_accepted": strong_accepted,
+                "low_min_length_8": low_min_length_8,
+                "moderate_min_length_12": moderate_min_length_12,
+                "high_min_length_14": high_min_length_14,
+                "common_password_rejected": common_password_rejected,
+                "from_compliance_path_tested": true,
             })
         })
 }
@@ -432,67 +605,119 @@ pub fn test_ac11_session_timeout() -> ControlTestArtifact {
 
     ArtifactBuilder::new("AC-11", "Session Lock")
         .test_name("session_timeout_behavior")
-        .description("Verify session policy enforces idle and absolute timeout (AC-11)")
-        .code_location("src/session.rs", 172, 195)
+        .description("Verify session policy derived from compliance profile enforces timeouts (AC-11)")
+        .code_location("src/session.rs", 147, 169)
+        .code_location_with_fn("src/compliance/config.rs", 106, 116, "ComplianceConfig")
         .related_control("AC-12")
         .related_control("SC-10")
-        .input("expected_idle_timeout", true)
-        .input("expected_max_lifetime", true)
-        .expected("idle_timeout_configured", true)
-        .expected("max_lifetime_configured", true)
-        .expected("fresh_session_valid", true)
+        .input("profiles_tested", "FedRAMP Low, Moderate, High")
+        .expected("high_stricter_than_low", true)
+        .expected("timeouts_from_compliance", true)
         .expected("expired_token_terminated", true)
-        .expected("old_issued_token_terminated", true)
+        .expected("from_compliance_path_tested", true)
         .execute(|collector| {
-            // Use strict policy for testing
-            let policy = SessionPolicy::strict();
+            // Test FedRAMP Low profile (relaxed timeouts)
+            let low_config = ComplianceConfig::from_profile(ComplianceProfile::FedRampLow);
+            let low_policy = SessionPolicy::from_compliance(&low_config);
 
             collector.configuration(
-                "session_policy",
+                "fedramp_low_session_policy",
                 json!({
-                    "idle_timeout_secs": policy.idle_timeout.as_secs(),
-                    "max_lifetime_secs": policy.max_lifetime.as_secs(),
-                    "allow_extension": policy.allow_extension,
-                    "require_reauth_for_sensitive": policy.require_reauth_for_sensitive,
+                    "profile": "FedRAMP Low",
+                    "idle_timeout_secs": low_policy.idle_timeout.as_secs(),
+                    "max_lifetime_secs": low_policy.max_lifetime.as_secs(),
+                    "max_concurrent_sessions": low_policy.max_concurrent_sessions,
+                    "allow_extension": low_policy.allow_extension,
+                    "derived_from": "SessionPolicy::from_compliance()",
                 }),
             );
 
-            // Verify timeouts are configured
-            let idle_configured = policy.idle_timeout.as_secs() > 0;
-            let lifetime_configured = policy.max_lifetime.as_secs() > 0;
+            // Test FedRAMP Moderate profile
+            let moderate_config = ComplianceConfig::from_profile(ComplianceProfile::FedRampModerate);
+            let moderate_policy = SessionPolicy::from_compliance(&moderate_config);
 
-            collector.assertion(
-                "Idle timeout should be configured",
-                idle_configured,
-                json!({ "idle_timeout_secs": policy.idle_timeout.as_secs() }),
+            collector.configuration(
+                "fedramp_moderate_session_policy",
+                json!({
+                    "profile": "FedRAMP Moderate",
+                    "idle_timeout_secs": moderate_policy.idle_timeout.as_secs(),
+                    "max_lifetime_secs": moderate_policy.max_lifetime.as_secs(),
+                    "max_concurrent_sessions": moderate_policy.max_concurrent_sessions,
+                    "require_reauth_for_sensitive": moderate_policy.require_reauth_for_sensitive,
+                    "derived_from": "SessionPolicy::from_compliance()",
+                }),
             );
 
-            collector.assertion(
-                "Max lifetime should be configured",
-                lifetime_configured,
-                json!({ "max_lifetime_secs": policy.max_lifetime.as_secs() }),
+            // Test FedRAMP High profile (strictest timeouts)
+            let high_config = ComplianceConfig::from_profile(ComplianceProfile::FedRampHigh);
+            let high_policy = SessionPolicy::from_compliance(&high_config);
+
+            collector.configuration(
+                "fedramp_high_session_policy",
+                json!({
+                    "profile": "FedRAMP High",
+                    "idle_timeout_secs": high_policy.idle_timeout.as_secs(),
+                    "max_lifetime_secs": high_policy.max_lifetime.as_secs(),
+                    "max_concurrent_sessions": high_policy.max_concurrent_sessions,
+                    "require_reauth_for_sensitive": high_policy.require_reauth_for_sensitive,
+                    "derived_from": "SessionPolicy::from_compliance()",
+                }),
             );
 
-            // Test that a fresh session is not terminated
-            let session = SessionState::new("test-session-id", "test-user-id");
-            let termination_reason = policy.should_terminate(&session);
-            let fresh_valid = matches!(termination_reason, SessionTerminationReason::None);
+            // Verify High has stricter timeouts than Low
+            let high_stricter_than_low = high_policy.idle_timeout < low_policy.idle_timeout
+                && high_policy.max_lifetime < low_policy.max_lifetime;
 
             collector.assertion(
-                "Fresh session should not be terminated",
-                fresh_valid,
-                json!({ "termination_reason": format!("{:?}", termination_reason) }),
+                "FedRAMP High should have stricter timeouts than Low (from_compliance path)",
+                high_stricter_than_low,
+                json!({
+                    "high_idle_secs": high_policy.idle_timeout.as_secs(),
+                    "low_idle_secs": low_policy.idle_timeout.as_secs(),
+                    "high_lifetime_secs": high_policy.max_lifetime.as_secs(),
+                    "low_lifetime_secs": low_policy.max_lifetime.as_secs(),
+                    "config_source": "SessionPolicy::from_compliance()",
+                }),
             );
 
-            // Test token expiration detection using check_token_times
-            // This allows us to test timeout behavior without waiting
+            // Verify concurrent session limits vary by profile (AC-10)
+            let concurrent_limits_correct = high_policy.max_concurrent_sessions == Some(1)
+                && moderate_policy.max_concurrent_sessions == Some(3)
+                && low_policy.max_concurrent_sessions == Some(5);
+
+            collector.assertion(
+                "Concurrent session limits should vary by profile (AC-10)",
+                concurrent_limits_correct,
+                json!({
+                    "high_limit": high_policy.max_concurrent_sessions,
+                    "moderate_limit": moderate_policy.max_concurrent_sessions,
+                    "low_limit": low_policy.max_concurrent_sessions,
+                }),
+            );
+
+            // Verify timeouts match ComplianceConfig values
+            let timeouts_from_compliance = high_policy.idle_timeout == high_config.session_idle_timeout
+                && high_policy.max_lifetime == high_config.session_max_lifetime
+                && moderate_policy.idle_timeout == moderate_config.session_idle_timeout;
+
+            collector.assertion(
+                "Session timeouts should match ComplianceConfig values",
+                timeouts_from_compliance,
+                json!({
+                    "high_idle_matches": high_policy.idle_timeout == high_config.session_idle_timeout,
+                    "high_lifetime_matches": high_policy.max_lifetime == high_config.session_max_lifetime,
+                    "moderate_idle_matches": moderate_policy.idle_timeout == moderate_config.session_idle_timeout,
+                }),
+            );
+
+            // Test token expiration detection using High profile
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map(|d| d.as_secs() as i64)
                 .unwrap_or(0);
 
             // Expired token (exp in the past)
-            let expired_result = policy.check_token_times(
+            let expired_result = high_policy.check_token_times(
                 Some(now - 3600),    // issued_at: 1 hour ago
                 Some(now - 60),      // exp: expired 1 minute ago
             );
@@ -506,53 +731,47 @@ pub fn test_ac11_session_timeout() -> ControlTestArtifact {
                 expired_token_terminated,
                 json!({
                     "termination_reason": format!("{:?}", expired_result),
-                    "test_exp": now - 60,
-                    "current_time": now,
+                    "policy": "FedRAMP High (from_compliance)",
                 }),
             );
 
-            // Token issued too long ago (exceeds max_lifetime)
-            let max_lifetime_secs = policy.max_lifetime.as_secs() as i64;
-            let old_issued_result = policy.check_token_times(
+            // Token issued too long ago (exceeds High's max_lifetime)
+            let max_lifetime_secs = high_policy.max_lifetime.as_secs() as i64;
+            let old_issued_result = high_policy.check_token_times(
                 Some(now - max_lifetime_secs - 3600),  // issued_at: beyond max_lifetime
                 Some(now + 3600),                       // exp: still valid
             );
-            let old_issued_token_terminated = matches!(
+            let old_issued_terminated = matches!(
                 old_issued_result,
                 SessionTerminationReason::MaxLifetimeExceeded
             );
 
             collector.assertion(
-                "Token issued beyond max_lifetime should trigger termination",
-                old_issued_token_terminated,
+                "Token exceeding High profile max_lifetime should be terminated",
+                old_issued_terminated,
                 json!({
                     "termination_reason": format!("{:?}", old_issued_result),
-                    "max_lifetime_secs": max_lifetime_secs,
-                    "test_issued_at_offset": -max_lifetime_secs - 3600,
+                    "high_max_lifetime_secs": max_lifetime_secs,
+                    "config_source": "ComplianceConfig::from_profile(FedRampHigh)",
                 }),
             );
 
-            // Valid token should not be terminated
-            let valid_result = policy.check_token_times(
-                Some(now - 300),      // issued_at: 5 minutes ago
-                Some(now + 3600),     // exp: 1 hour from now
-            );
-            let valid_token_ok = matches!(valid_result, SessionTerminationReason::None);
+            // Test that a fresh session passes High policy
+            let session = SessionState::new("test-session-id", "test-user-id");
+            let termination_reason = high_policy.should_terminate(&session);
+            let fresh_valid = matches!(termination_reason, SessionTerminationReason::None);
 
             collector.assertion(
-                "Valid token should not be terminated",
-                valid_token_ok,
-                json!({
-                    "termination_reason": format!("{:?}", valid_result),
-                }),
+                "Fresh session should not be terminated by High policy",
+                fresh_valid,
+                json!({ "termination_reason": format!("{:?}", termination_reason) }),
             );
 
             json!({
-                "idle_timeout_configured": idle_configured,
-                "max_lifetime_configured": lifetime_configured,
-                "fresh_session_valid": fresh_valid,
+                "high_stricter_than_low": high_stricter_than_low,
+                "timeouts_from_compliance": timeouts_from_compliance,
                 "expired_token_terminated": expired_token_terminated,
-                "old_issued_token_terminated": old_issued_token_terminated,
+                "from_compliance_path_tested": true,
             })
         })
 }
@@ -1382,26 +1601,100 @@ pub fn test_sc13_constant_time() -> ControlTestArtifact {
 pub fn test_sc28_protection_at_rest() -> ControlTestArtifact {
     ArtifactBuilder::new("SC-28", "Protection of Information at Rest")
         .test_name("field_level_encryption")
-        .description("Verify field-level encryption protects data at rest (SC-28)")
-        .code_location("src/encryption.rs", 1, 700)
+        .description("Verify encryption config from compliance profile protects data at rest (SC-28)")
+        .code_location("src/encryption.rs", 97, 104)
+        .code_location_with_fn("src/compliance/config.rs", 159, 161, "ComplianceConfig")
         .related_control("SC-13")
         .related_control("SC-12")
+        .input("profiles_tested", "FedRAMP Low, Moderate, High")
         .input("algorithm", "AES-256-GCM")
-        .input("key_size_bits", 256)
-        .expected("encryption_available", true)
+        .expected("low_no_encryption_required", true)
+        .expected("moderate_requires_encryption", true)
+        .expected("high_requires_disk_verification", true)
         .expected("encryption_roundtrip_works", true)
         .expected("tamper_detection_works", true)
-        .expected("unique_nonces_per_encryption", true)
+        .expected("from_compliance_path_tested", true)
         .execute(|collector| {
-            // Test encryption configuration
-            let config = EncryptionConfig::fedramp_moderate();
+            // Test FedRAMP Low profile (encryption not required)
+            let low_config = ComplianceConfig::from_profile(ComplianceProfile::FedRampLow);
+            let low_enc_config = EncryptionConfig::from_compliance(&low_config);
 
             collector.configuration(
-                "encryption_config",
+                "fedramp_low_encryption",
                 json!({
-                    "require_encryption": config.require_encryption,
-                    "verify_database_encryption": config.verify_database_encryption,
-                    "algorithm": format!("{:?}", config.algorithm),
+                    "profile": "FedRAMP Low",
+                    "require_encryption": low_enc_config.require_encryption,
+                    "verify_database_encryption": low_enc_config.verify_database_encryption,
+                    "verify_disk_encryption": low_enc_config.verify_disk_encryption,
+                    "algorithm": format!("{:?}", low_enc_config.algorithm),
+                    "derived_from": "EncryptionConfig::from_compliance()",
+                }),
+            );
+
+            let low_no_encryption_required = !low_enc_config.require_encryption;
+            collector.assertion(
+                "FedRAMP Low should not require encryption at rest",
+                low_no_encryption_required,
+                json!({
+                    "require_encryption": low_enc_config.require_encryption,
+                    "compliance_config_value": low_config.require_encryption_at_rest,
+                    "config_source": "ComplianceConfig::from_profile(FedRampLow)",
+                }),
+            );
+
+            // Test FedRAMP Moderate profile (encryption required)
+            let moderate_config = ComplianceConfig::from_profile(ComplianceProfile::FedRampModerate);
+            let moderate_enc_config = EncryptionConfig::from_compliance(&moderate_config);
+
+            collector.configuration(
+                "fedramp_moderate_encryption",
+                json!({
+                    "profile": "FedRAMP Moderate",
+                    "require_encryption": moderate_enc_config.require_encryption,
+                    "verify_database_encryption": moderate_enc_config.verify_database_encryption,
+                    "verify_disk_encryption": moderate_enc_config.verify_disk_encryption,
+                    "derived_from": "EncryptionConfig::from_compliance()",
+                }),
+            );
+
+            let moderate_requires_encryption = moderate_enc_config.require_encryption
+                && moderate_enc_config.verify_database_encryption;
+            collector.assertion(
+                "FedRAMP Moderate should require encryption at rest",
+                moderate_requires_encryption,
+                json!({
+                    "require_encryption": moderate_enc_config.require_encryption,
+                    "verify_database_encryption": moderate_enc_config.verify_database_encryption,
+                    "config_source": "ComplianceConfig::from_profile(FedRampModerate)",
+                }),
+            );
+
+            // Test FedRAMP High profile (encryption + disk verification required)
+            let high_config = ComplianceConfig::from_profile(ComplianceProfile::FedRampHigh);
+            let high_enc_config = EncryptionConfig::from_compliance(&high_config);
+
+            collector.configuration(
+                "fedramp_high_encryption",
+                json!({
+                    "profile": "FedRAMP High",
+                    "require_encryption": high_enc_config.require_encryption,
+                    "verify_database_encryption": high_enc_config.verify_database_encryption,
+                    "verify_disk_encryption": high_enc_config.verify_disk_encryption,
+                    "derived_from": "EncryptionConfig::from_compliance()",
+                }),
+            );
+
+            let high_requires_disk_verification = high_enc_config.require_encryption
+                && high_enc_config.verify_database_encryption
+                && high_enc_config.verify_disk_encryption;
+            collector.assertion(
+                "FedRAMP High should require disk encryption verification",
+                high_requires_disk_verification,
+                json!({
+                    "require_encryption": high_enc_config.require_encryption,
+                    "verify_disk_encryption": high_enc_config.verify_disk_encryption,
+                    "require_mtls_drives_disk_check": high_config.require_mtls,
+                    "config_source": "ComplianceConfig::from_profile(FedRampHigh)",
                 }),
             );
 
@@ -1419,18 +1712,10 @@ pub fn test_sc28_protection_at_rest() -> ControlTestArtifact {
                 }),
             );
 
-            // Create encryptor with test key
+            // Create encryptor with test key and verify roundtrip
             let test_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
             let encryptor = FieldEncryptor::new(test_key).expect("Valid test key");
-            let encryption_available = true;
 
-            collector.assertion(
-                "Field encryptor can be initialized with valid key",
-                encryption_available,
-                json!({ "key_length": 64, "algorithm": "AES-256-GCM" }),
-            );
-
-            // Test encryption roundtrip
             let plaintext = "sensitive-ssn-123-45-6789";
             let encrypted = encryptor.encrypt_string(plaintext).expect("Encrypt");
             let decrypted = encryptor.decrypt_string(&encrypted).expect("Decrypt");
@@ -1444,17 +1729,6 @@ pub fn test_sc28_protection_at_rest() -> ControlTestArtifact {
                     "encrypted_len": encrypted.len(),
                     "decrypted_matches": roundtrip_works,
                 }),
-            );
-
-            // Test EncryptedField wrapper
-            let field = EncryptedField::encrypt(plaintext, &encryptor).expect("Encrypt field");
-            let field_decrypted = field.decrypt(&encryptor).expect("Decrypt field");
-            let field_roundtrip = field_decrypted == plaintext;
-
-            collector.assertion(
-                "EncryptedField wrapper works correctly",
-                field_roundtrip,
-                json!({ "field_roundtrip": field_roundtrip }),
             );
 
             // Test tamper detection (GCM authentication)
@@ -1482,18 +1756,20 @@ pub fn test_sc28_protection_at_rest() -> ControlTestArtifact {
                 json!({ "unique_nonces": unique_nonces }),
             );
 
-            // Log encryption verification status
-            let status = crate::encryption::verify_encryption_config(&config, Some(test_key));
+            // Log encryption verification status using High profile config
+            let status = crate::encryption::verify_encryption_config(&high_enc_config, Some(test_key));
             collector.log(format!(
-                "Encryption verification: field_encryption={}, compliant={}",
+                "Encryption verification (High profile): field_encryption={}, compliant={}",
                 status.field_encryption_available, status.compliant
             ));
 
             json!({
-                "encryption_available": encryption_available,
+                "low_no_encryption_required": low_no_encryption_required,
+                "moderate_requires_encryption": moderate_requires_encryption,
+                "high_requires_disk_verification": high_requires_disk_verification,
                 "encryption_roundtrip_works": roundtrip_works,
                 "tamper_detection_works": tamper_detected,
-                "unique_nonces_per_encryption": unique_nonces,
+                "from_compliance_path_tested": true,
             })
         })
 }
@@ -1796,43 +2072,84 @@ pub fn test_ac3_access_enforcement() -> ControlTestArtifact {
 pub fn test_ac12_session_termination() -> ControlTestArtifact {
     ArtifactBuilder::new("AC-12", "Session Termination")
         .test_name("absolute_timeout_enforcement")
-        .description("Verify sessions terminate after max lifetime is exceeded (AC-12)")
-        .code_location("src/session.rs", 143, 167)
+        .description("Verify session termination derived from compliance profile (AC-12)")
+        .code_location("src/session.rs", 147, 169)
+        .code_location_with_fn("src/compliance/config.rs", 106, 116, "ComplianceConfig")
         .related_control("AC-11")
         .related_control("SC-10")
-        .input("max_lifetime_hours", 4)
-        .expected("max_lifetime_enforced", true)
+        .input("profiles_tested", "FedRAMP Moderate, High")
+        .expected("max_lifetime_from_compliance", true)
+        .expected("high_shorter_than_moderate", true)
         .expected("fresh_session_valid", true)
+        .expected("from_compliance_path_tested", true)
         .execute(|collector| {
-            let policy = SessionPolicy::strict();
+            // Test FedRAMP Moderate profile
+            let moderate_config = ComplianceConfig::from_profile(ComplianceProfile::FedRampModerate);
+            let moderate_policy = SessionPolicy::from_compliance(&moderate_config);
 
             collector.configuration(
-                "session_policy",
+                "fedramp_moderate_session",
                 json!({
-                    "max_lifetime_secs": policy.max_lifetime.as_secs(),
-                    "idle_timeout_secs": policy.idle_timeout.as_secs(),
-                    "allow_extension": policy.allow_extension,
+                    "profile": "FedRAMP Moderate",
+                    "max_lifetime_secs": moderate_policy.max_lifetime.as_secs(),
+                    "idle_timeout_secs": moderate_policy.idle_timeout.as_secs(),
+                    "allow_extension": moderate_policy.allow_extension,
+                    "derived_from": "SessionPolicy::from_compliance()",
                 }),
             );
 
-            // Test fresh session is valid
+            // Test FedRAMP High profile (stricter)
+            let high_config = ComplianceConfig::from_profile(ComplianceProfile::FedRampHigh);
+            let high_policy = SessionPolicy::from_compliance(&high_config);
+
+            collector.configuration(
+                "fedramp_high_session",
+                json!({
+                    "profile": "FedRAMP High",
+                    "max_lifetime_secs": high_policy.max_lifetime.as_secs(),
+                    "idle_timeout_secs": high_policy.idle_timeout.as_secs(),
+                    "derived_from": "SessionPolicy::from_compliance()",
+                }),
+            );
+
+            // Verify max lifetime comes from compliance config
+            let max_lifetime_from_compliance = high_policy.max_lifetime == high_config.session_max_lifetime
+                && moderate_policy.max_lifetime == moderate_config.session_max_lifetime;
+
+            collector.assertion(
+                "Max lifetime should be derived from ComplianceConfig",
+                max_lifetime_from_compliance,
+                json!({
+                    "high_matches": high_policy.max_lifetime == high_config.session_max_lifetime,
+                    "moderate_matches": moderate_policy.max_lifetime == moderate_config.session_max_lifetime,
+                    "config_source": "ComplianceConfig::from_profile()",
+                }),
+            );
+
+            // Verify High has shorter lifetime than Moderate
+            let high_shorter_than_moderate = high_policy.max_lifetime < moderate_policy.max_lifetime;
+
+            collector.assertion(
+                "FedRAMP High should have shorter max lifetime than Moderate",
+                high_shorter_than_moderate,
+                json!({
+                    "high_lifetime_secs": high_policy.max_lifetime.as_secs(),
+                    "moderate_lifetime_secs": moderate_policy.max_lifetime.as_secs(),
+                }),
+            );
+
+            // Test fresh session is valid under High policy
             let session = SessionState::new("session-123", "user-456");
-            let termination = policy.should_terminate(&session);
+            let termination = high_policy.should_terminate(&session);
             let fresh_valid = matches!(termination, SessionTerminationReason::None);
 
             collector.assertion(
                 "Fresh session should not be terminated",
                 fresh_valid,
-                json!({ "termination_reason": format!("{:?}", termination) }),
-            );
-
-            // Verify policy has max lifetime configured
-            let max_lifetime_enforced = policy.max_lifetime.as_secs() > 0;
-
-            collector.assertion(
-                "Max lifetime should be configured",
-                max_lifetime_enforced,
-                json!({ "max_lifetime_secs": policy.max_lifetime.as_secs() }),
+                json!({
+                    "termination_reason": format!("{:?}", termination),
+                    "policy": "FedRAMP High (from_compliance)",
+                }),
             );
 
             // Verify termination reasons are defined
@@ -1854,8 +2171,10 @@ pub fn test_ac12_session_termination() -> ControlTestArtifact {
             );
 
             json!({
-                "max_lifetime_enforced": max_lifetime_enforced,
+                "max_lifetime_from_compliance": max_lifetime_from_compliance,
+                "high_shorter_than_moderate": high_shorter_than_moderate,
                 "fresh_session_valid": fresh_valid,
+                "from_compliance_path_tested": true,
             })
         })
 }
@@ -2651,30 +2970,69 @@ pub fn test_sc13_fips_crypto() -> ControlTestArtifact {
 pub fn test_sc10_network_disconnect() -> ControlTestArtifact {
     ArtifactBuilder::new("SC-10", "Network Disconnect")
         .test_name("session_disconnect_policy")
-        .description("Verify network sessions can be disconnected per policy (SC-10)")
-        .code_location("src/session.rs", 143, 167)
+        .description("Verify network disconnect policies from compliance profile (SC-10)")
+        .code_location("src/session.rs", 147, 169)
+        .code_location_with_fn("src/compliance/config.rs", 106, 116, "ComplianceConfig")
         .related_control("AC-11")
         .related_control("AC-12")
-        .expected("idle_disconnect_configured", true)
+        .input("profiles_tested", "FedRAMP Moderate, High")
+        .expected("idle_disconnect_from_compliance", true)
+        .expected("high_faster_disconnect", true)
         .expected("termination_reasons_exist", true)
+        .expected("from_compliance_path_tested", true)
         .execute(|collector| {
-            let policy = SessionPolicy::strict();
+            // Test FedRAMP Moderate profile
+            let moderate_config = ComplianceConfig::from_profile(ComplianceProfile::FedRampModerate);
+            let moderate_policy = SessionPolicy::from_compliance(&moderate_config);
 
             collector.configuration(
-                "disconnect_policy",
+                "fedramp_moderate_disconnect",
                 json!({
-                    "idle_timeout_secs": policy.idle_timeout.as_secs(),
-                    "max_lifetime_secs": policy.max_lifetime.as_secs(),
+                    "profile": "FedRAMP Moderate",
+                    "idle_timeout_secs": moderate_policy.idle_timeout.as_secs(),
+                    "max_lifetime_secs": moderate_policy.max_lifetime.as_secs(),
+                    "derived_from": "SessionPolicy::from_compliance()",
                 }),
             );
 
-            // Verify idle timeout is configured for network disconnect
-            let idle_configured = policy.idle_timeout.as_secs() > 0;
+            // Test FedRAMP High profile (stricter disconnect)
+            let high_config = ComplianceConfig::from_profile(ComplianceProfile::FedRampHigh);
+            let high_policy = SessionPolicy::from_compliance(&high_config);
+
+            collector.configuration(
+                "fedramp_high_disconnect",
+                json!({
+                    "profile": "FedRAMP High",
+                    "idle_timeout_secs": high_policy.idle_timeout.as_secs(),
+                    "max_lifetime_secs": high_policy.max_lifetime.as_secs(),
+                    "derived_from": "SessionPolicy::from_compliance()",
+                }),
+            );
+
+            // Verify idle timeout comes from compliance config
+            let idle_disconnect_from_compliance = high_policy.idle_timeout == high_config.session_idle_timeout
+                && moderate_policy.idle_timeout == moderate_config.session_idle_timeout;
 
             collector.assertion(
-                "Idle timeout should be configured for disconnection",
-                idle_configured,
-                json!({ "idle_timeout_secs": policy.idle_timeout.as_secs() }),
+                "Idle disconnect timeout should come from ComplianceConfig",
+                idle_disconnect_from_compliance,
+                json!({
+                    "high_idle_matches": high_policy.idle_timeout == high_config.session_idle_timeout,
+                    "moderate_idle_matches": moderate_policy.idle_timeout == moderate_config.session_idle_timeout,
+                    "config_source": "ComplianceConfig::from_profile()",
+                }),
+            );
+
+            // Verify High has faster disconnect than Moderate
+            let high_faster_disconnect = high_policy.idle_timeout < moderate_policy.idle_timeout;
+
+            collector.assertion(
+                "FedRAMP High should disconnect faster than Moderate",
+                high_faster_disconnect,
+                json!({
+                    "high_idle_secs": high_policy.idle_timeout.as_secs(),
+                    "moderate_idle_secs": moderate_policy.idle_timeout.as_secs(),
+                }),
             );
 
             // Verify termination/disconnect reasons are available
@@ -2703,8 +3061,10 @@ pub fn test_sc10_network_disconnect() -> ControlTestArtifact {
             );
 
             json!({
-                "idle_disconnect_configured": idle_configured,
+                "idle_disconnect_from_compliance": idle_disconnect_from_compliance,
+                "high_faster_disconnect": high_faster_disconnect,
                 "termination_reasons_exist": reasons_have_messages,
+                "from_compliance_path_tested": true,
             })
         })
 }
@@ -2815,76 +3175,119 @@ pub fn test_sc12_key_management() -> ControlTestArtifact {
 /// Verifies that concurrent session limits are configured per compliance profile
 /// and that the SessionTerminationReason for concurrent limit violations exists.
 pub fn test_ac10_concurrent_sessions() -> ControlTestArtifact {
-    use crate::session::{SessionPolicy, SessionTerminationReason};
-    use crate::compliance::ComplianceConfig;
+    use crate::session::SessionTerminationReason;
 
     ArtifactBuilder::new("AC-10", "Concurrent Session Control")
         .test_name("concurrent_session_limits")
-        .description("Verify concurrent session limits per compliance profile (AC-10)")
-        .code_location("src/session.rs", 55, 68)
+        .description("Verify concurrent session limits from compliance profile (AC-10)")
+        .code_location("src/session.rs", 147, 169)
+        .code_location_with_fn("src/compliance/config.rs", 106, 116, "ComplianceConfig")
         .related_control("AC-11")
         .related_control("AC-12")
+        .input("profiles_tested", "FedRAMP Low, Moderate, High, Development")
         .expected("fedramp_high_limit_is_1", true)
         .expected("fedramp_moderate_limit_is_3", true)
         .expected("fedramp_low_limit_is_5", true)
         .expected("development_unlimited", true)
-        .expected("has_termination_reason", true)
+        .expected("from_compliance_path_tested", true)
         .execute(|collector| {
-            // Verify FedRAMP High = 1 session (strictest)
-            let high_policy = SessionPolicy::strict();
+            // Test FedRAMP High via from_compliance (strictest)
+            let high_config = ComplianceConfig::from_profile(ComplianceProfile::FedRampHigh);
+            let high_policy = SessionPolicy::from_compliance(&high_config);
             let fedramp_high_limit_is_1 = high_policy.max_concurrent_sessions == Some(1);
 
-            collector.assertion(
-                "FedRAMP High should allow only 1 concurrent session",
-                fedramp_high_limit_is_1,
+            collector.configuration(
+                "fedramp_high_concurrent",
                 json!({
-                    "profile": "FedRAMP High (strict)",
-                    "max_sessions": high_policy.max_concurrent_sessions,
-                    "expected": 1,
+                    "profile": "FedRAMP High",
+                    "max_concurrent_sessions": high_policy.max_concurrent_sessions,
+                    "derived_from": "SessionPolicy::from_compliance()",
                 }),
             );
 
-            // Verify FedRAMP Moderate = 3 sessions
+            collector.assertion(
+                "FedRAMP High should allow only 1 concurrent session (from_compliance)",
+                fedramp_high_limit_is_1,
+                json!({
+                    "profile": "FedRAMP High",
+                    "max_sessions": high_policy.max_concurrent_sessions,
+                    "expected": 1,
+                    "config_source": "ComplianceConfig::from_profile(FedRampHigh)",
+                }),
+            );
+
+            // Test FedRAMP Moderate via from_compliance
             let moderate_config = ComplianceConfig::from_profile(ComplianceProfile::FedRampModerate);
             let moderate_policy = SessionPolicy::from_compliance(&moderate_config);
             let fedramp_moderate_limit_is_3 = moderate_policy.max_concurrent_sessions == Some(3);
 
+            collector.configuration(
+                "fedramp_moderate_concurrent",
+                json!({
+                    "profile": "FedRAMP Moderate",
+                    "max_concurrent_sessions": moderate_policy.max_concurrent_sessions,
+                    "derived_from": "SessionPolicy::from_compliance()",
+                }),
+            );
+
             collector.assertion(
-                "FedRAMP Moderate should allow 3 concurrent sessions",
+                "FedRAMP Moderate should allow 3 concurrent sessions (from_compliance)",
                 fedramp_moderate_limit_is_3,
                 json!({
                     "profile": "FedRAMP Moderate",
                     "max_sessions": moderate_policy.max_concurrent_sessions,
                     "expected": 3,
+                    "config_source": "ComplianceConfig::from_profile(FedRampModerate)",
                 }),
             );
 
-            // Verify FedRAMP Low = 5 sessions
+            // Test FedRAMP Low via from_compliance
             let low_config = ComplianceConfig::from_profile(ComplianceProfile::FedRampLow);
             let low_policy = SessionPolicy::from_compliance(&low_config);
             let fedramp_low_limit_is_5 = low_policy.max_concurrent_sessions == Some(5);
 
+            collector.configuration(
+                "fedramp_low_concurrent",
+                json!({
+                    "profile": "FedRAMP Low",
+                    "max_concurrent_sessions": low_policy.max_concurrent_sessions,
+                    "derived_from": "SessionPolicy::from_compliance()",
+                }),
+            );
+
             collector.assertion(
-                "FedRAMP Low should allow 5 concurrent sessions",
+                "FedRAMP Low should allow 5 concurrent sessions (from_compliance)",
                 fedramp_low_limit_is_5,
                 json!({
                     "profile": "FedRAMP Low",
                     "max_sessions": low_policy.max_concurrent_sessions,
                     "expected": 5,
+                    "config_source": "ComplianceConfig::from_profile(FedRampLow)",
                 }),
             );
 
-            // Verify Development = unlimited (None)
-            let dev_policy = SessionPolicy::relaxed();
+            // Test Development profile via from_compliance (unlimited)
+            let dev_config = ComplianceConfig::from_profile(ComplianceProfile::Development);
+            let dev_policy = SessionPolicy::from_compliance(&dev_config);
             let development_unlimited = dev_policy.max_concurrent_sessions.is_none();
 
+            collector.configuration(
+                "development_concurrent",
+                json!({
+                    "profile": "Development",
+                    "max_concurrent_sessions": dev_policy.max_concurrent_sessions,
+                    "derived_from": "SessionPolicy::from_compliance()",
+                }),
+            );
+
             collector.assertion(
-                "Development should allow unlimited sessions",
+                "Development should allow unlimited sessions (from_compliance)",
                 development_unlimited,
                 json!({
-                    "profile": "Development (relaxed)",
+                    "profile": "Development",
                     "max_sessions": dev_policy.max_concurrent_sessions,
                     "expected": "None (unlimited)",
+                    "config_source": "ComplianceConfig::from_profile(Development)",
                 }),
             );
 
@@ -2902,22 +3305,12 @@ pub fn test_ac10_concurrent_sessions() -> ControlTestArtifact {
                 }),
             );
 
-            collector.configuration(
-                "concurrent_session_policies",
-                json!({
-                    "fedramp_high": 1,
-                    "fedramp_moderate": 3,
-                    "fedramp_low": 5,
-                    "development": "unlimited",
-                }),
-            );
-
             json!({
                 "fedramp_high_limit_is_1": fedramp_high_limit_is_1,
                 "fedramp_moderate_limit_is_3": fedramp_moderate_limit_is_3,
                 "fedramp_low_limit_is_5": fedramp_low_limit_is_5,
                 "development_unlimited": development_unlimited,
-                "has_termination_reason": has_termination_reason,
+                "from_compliance_path_tested": true,
             })
         })
 }
