@@ -124,37 +124,51 @@ pub fn profile_from_env() -> ComplianceProfile {
 
 /// Create a session policy configured for the compliance profile.
 ///
-/// Each profile has different timeout requirements:
-/// - FedRAMP Low: 30 min idle, 12 hour absolute
-/// - FedRAMP Moderate: 15 min idle, 8 hour absolute
-/// - FedRAMP High: 10 min idle, 4 hour absolute, re-auth for sensitive ops
-/// - SOC 2: 30 min idle, 8 hour absolute
+/// Each profile has different timeout and concurrent session requirements:
+///
+/// | Profile | Idle Timeout | Max Lifetime | Concurrent Sessions (AC-10) |
+/// |---------|--------------|--------------|----------------------------|
+/// | FedRAMP Low | 30 min | 12 hours | 5 |
+/// | FedRAMP Moderate | 15 min | 8 hours | 3 |
+/// | FedRAMP High | 10 min | 4 hours | 1 |
+/// | SOC 2 | 30 min | 8 hours | 3 |
+/// | Development | 30 min | 12 hours | unlimited |
 ///
 /// # Example
 ///
 /// ```ignore
 /// let policy = session_policy_for_profile(ComplianceProfile::FedRampHigh);
 /// assert_eq!(policy.idle_timeout, Duration::from_secs(600));
+/// assert_eq!(policy.max_concurrent_sessions, Some(1));
 /// ```
 pub fn session_policy_for_profile(profile: ComplianceProfile) -> SessionPolicy {
     match profile {
-        ComplianceProfile::FedRampLow | ComplianceProfile::Development => SessionPolicy::builder()
+        ComplianceProfile::FedRampLow => SessionPolicy::builder()
             .idle_timeout(Duration::from_secs(30 * 60)) // 30 minutes
             .max_lifetime(Duration::from_secs(12 * 60 * 60)) // 12 hours
+            .max_concurrent_sessions(Some(5)) // AC-10
+            .build(),
+        ComplianceProfile::Development => SessionPolicy::builder()
+            .idle_timeout(Duration::from_secs(30 * 60)) // 30 minutes
+            .max_lifetime(Duration::from_secs(12 * 60 * 60)) // 12 hours
+            .max_concurrent_sessions(None) // AC-10: unlimited for dev
             .build(),
         ComplianceProfile::FedRampModerate | ComplianceProfile::Soc2 => SessionPolicy::builder()
             .idle_timeout(Duration::from_secs(15 * 60)) // 15 minutes
             .max_lifetime(Duration::from_secs(8 * 60 * 60)) // 8 hours
+            .max_concurrent_sessions(Some(3)) // AC-10
             .build(),
         ComplianceProfile::FedRampHigh => SessionPolicy::builder()
             .idle_timeout(Duration::from_secs(10 * 60)) // 10 minutes
             .max_lifetime(Duration::from_secs(4 * 60 * 60)) // 4 hours
+            .max_concurrent_sessions(Some(1)) // AC-10: strictest
             .require_reauth_for_sensitive(true)
             .reauth_timeout(Duration::from_secs(5 * 60)) // 5 min for sensitive
             .build(),
         ComplianceProfile::Custom => SessionPolicy::builder()
             .idle_timeout(Duration::from_secs(15 * 60))
             .max_lifetime(Duration::from_secs(8 * 60 * 60))
+            .max_concurrent_sessions(None) // AC-10: unlimited for custom
             .build(),
     }
 }

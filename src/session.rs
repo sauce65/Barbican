@@ -1,7 +1,7 @@
-//! Session Management (AC-11, AC-12)
+//! Session Management (AC-10, AC-11, AC-12)
 //!
-//! NIST SP 800-53 AC-11 (Device Lock) and AC-12 (Session Termination) compliant
-//! session management utilities.
+//! NIST SP 800-53 AC-10 (Concurrent Session Control), AC-11 (Device Lock),
+//! and AC-12 (Session Termination) compliant session management utilities.
 //!
 //! # Design Philosophy
 //!
@@ -36,9 +36,9 @@ use crate::observability::SecurityEvent;
 // Session Policy (AC-11, AC-12)
 // ============================================================================
 
-/// Session management policy (AC-11, AC-12)
+/// Session management policy (AC-10, AC-11, AC-12)
 ///
-/// Defines rules for session lifetime and idle timeout.
+/// Defines rules for session lifetime, idle timeout, and concurrent session limits.
 #[derive(Debug, Clone)]
 pub struct SessionPolicy {
     /// Maximum session lifetime from creation (AC-12)
@@ -48,6 +48,11 @@ pub struct SessionPolicy {
     /// Idle timeout duration (AC-11)
     /// Session is terminated after this duration of inactivity.
     pub idle_timeout: Duration,
+
+    /// Maximum concurrent sessions per user (AC-10)
+    /// None means unlimited sessions are allowed.
+    /// When the limit is reached, the oldest session is terminated.
+    pub max_concurrent_sessions: Option<u32>,
 
     /// Whether to require re-authentication for sensitive operations
     pub require_reauth_for_sensitive: bool,
@@ -67,11 +72,13 @@ impl Default for SessionPolicy {
     ///
     /// - 8 hour max lifetime (typical workday)
     /// - 30 minute idle timeout
+    /// - 3 concurrent sessions (FedRAMP Moderate default)
     /// - Re-auth required for sensitive operations after 15 minutes
     fn default() -> Self {
         Self {
             max_lifetime: Duration::from_secs(8 * 60 * 60),      // 8 hours
             idle_timeout: Duration::from_secs(30 * 60),          // 30 minutes
+            max_concurrent_sessions: Some(3),                     // AC-10: 3 sessions
             require_reauth_for_sensitive: true,
             reauth_timeout: Duration::from_secs(15 * 60),        // 15 minutes
             allow_extension: false,
@@ -86,11 +93,17 @@ impl SessionPolicy {
         SessionPolicyBuilder::default()
     }
 
-    /// Create a strict policy for high-security environments
+    /// Create a strict policy for high-security environments (FedRAMP High)
+    ///
+    /// - 4 hour max lifetime
+    /// - 15 minute idle timeout
+    /// - 1 concurrent session (AC-10)
+    /// - Re-auth required for sensitive operations
     pub fn strict() -> Self {
         Self {
             max_lifetime: Duration::from_secs(4 * 60 * 60),      // 4 hours
             idle_timeout: Duration::from_secs(15 * 60),          // 15 minutes
+            max_concurrent_sessions: Some(1),                     // AC-10: 1 session only
             require_reauth_for_sensitive: true,
             reauth_timeout: Duration::from_secs(5 * 60),         // 5 minutes
             allow_extension: false,
@@ -98,11 +111,17 @@ impl SessionPolicy {
         }
     }
 
-    /// Create a relaxed policy for low-risk applications
+    /// Create a relaxed policy for low-risk applications (development)
+    ///
+    /// - 24 hour max lifetime
+    /// - 1 hour idle timeout
+    /// - Unlimited concurrent sessions
+    /// - No re-auth for sensitive operations
     pub fn relaxed() -> Self {
         Self {
             max_lifetime: Duration::from_secs(24 * 60 * 60),     // 24 hours
             idle_timeout: Duration::from_secs(60 * 60),          // 1 hour
+            max_concurrent_sessions: None,                        // AC-10: unlimited
             require_reauth_for_sensitive: false,
             reauth_timeout: Duration::from_secs(60 * 60),        // 1 hour
             allow_extension: true,
@@ -130,9 +149,18 @@ impl SessionPolicy {
 
         let is_low_security = matches!(config.profile, ComplianceProfile::FedRampLow);
 
+        // AC-10: Concurrent session limits by profile
+        let max_concurrent_sessions = match config.profile {
+            ComplianceProfile::FedRampHigh => Some(1),
+            ComplianceProfile::FedRampModerate | ComplianceProfile::Soc2 => Some(3),
+            ComplianceProfile::FedRampLow => Some(5),
+            ComplianceProfile::Development | ComplianceProfile::Custom => None,
+        };
+
         Self {
             max_lifetime: config.session_max_lifetime,
             idle_timeout: config.session_idle_timeout,
+            max_concurrent_sessions,
             require_reauth_for_sensitive: !is_low_security,
             reauth_timeout: config.reauth_timeout,
             allow_extension: is_low_security,
@@ -226,6 +254,18 @@ impl SessionPolicyBuilder {
     /// Set idle timeout (AC-11)
     pub fn idle_timeout(mut self, duration: Duration) -> Self {
         self.policy.idle_timeout = duration;
+        self
+    }
+
+    /// Set maximum concurrent sessions per user (AC-10)
+    ///
+    /// - `Some(n)` limits users to n concurrent sessions
+    /// - `None` allows unlimited sessions
+    ///
+    /// When the limit is reached, behavior depends on the application:
+    /// either reject new logins or terminate the oldest session.
+    pub fn max_concurrent_sessions(mut self, limit: Option<u32>) -> Self {
+        self.policy.max_concurrent_sessions = limit;
         self
     }
 
@@ -992,5 +1032,60 @@ mod tests {
         assert!(config.exempt_paths.iter().any(|p| "/login/oauth".starts_with(p)));
         assert!(config.exempt_paths.iter().any(|p| "/public/docs".starts_with(p)));
         assert!(!config.exempt_paths.iter().any(|p| "/api/protected".starts_with(p)));
+    }
+
+    // ========================================================================
+    // AC-10: Concurrent Session Control Tests
+    // ========================================================================
+
+    #[test]
+    fn test_default_concurrent_sessions() {
+        let policy = SessionPolicy::default();
+        // Default is FedRAMP Moderate-like: 3 concurrent sessions
+        assert_eq!(policy.max_concurrent_sessions, Some(3));
+    }
+
+    #[test]
+    fn test_strict_concurrent_sessions() {
+        let policy = SessionPolicy::strict();
+        // Strict (FedRAMP High): 1 concurrent session
+        assert_eq!(policy.max_concurrent_sessions, Some(1));
+    }
+
+    #[test]
+    fn test_relaxed_concurrent_sessions() {
+        let policy = SessionPolicy::relaxed();
+        // Relaxed (development): unlimited concurrent sessions
+        assert_eq!(policy.max_concurrent_sessions, None);
+    }
+
+    #[test]
+    fn test_builder_concurrent_sessions() {
+        // Test setting specific limit
+        let policy = SessionPolicy::builder()
+            .max_concurrent_sessions(Some(5))
+            .build();
+        assert_eq!(policy.max_concurrent_sessions, Some(5));
+
+        // Test setting unlimited
+        let policy = SessionPolicy::builder()
+            .max_concurrent_sessions(None)
+            .build();
+        assert_eq!(policy.max_concurrent_sessions, None);
+
+        // Test setting single session (strictest)
+        let policy = SessionPolicy::builder()
+            .max_concurrent_sessions(Some(1))
+            .build();
+        assert_eq!(policy.max_concurrent_sessions, Some(1));
+    }
+
+    #[test]
+    fn test_concurrent_session_termination_reason() {
+        // Test the ConcurrentSessionLimit termination reason
+        let reason = SessionTerminationReason::ConcurrentSessionLimit;
+        assert!(reason.should_terminate());
+        assert_eq!(reason.code(), "concurrent_session_limit");
+        assert!(reason.message().contains("signed in from another location"));
     }
 }
