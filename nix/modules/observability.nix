@@ -747,6 +747,9 @@ in {
       wants = [ "podman.service" ];
       wantedBy = [ "multi-user.target" ];
 
+      # podman-compose internally calls 'podman' as a subprocess
+      path = [ pkgs.podman ];
+
       serviceConfig = {
         Type = "oneshot";
         RemainAfterExit = true;
