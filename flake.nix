@@ -45,6 +45,7 @@
         hardenedSSH = import ./nix/modules/hardened-ssh.nix;
         hardenedNginx = import ./nix/modules/hardened-nginx.nix;
         secretsManagement = import ./nix/modules/secrets-management.nix;
+        observability = import ./nix/modules/observability.nix;        # SI-4, AU-6
         observabilityAuth = import ./nix/modules/observability-auth.nix;
         vmFirewall = import ./nix/modules/vm-firewall.nix;
         databaseBackup = import ./nix/modules/database-backup.nix;
@@ -54,6 +55,8 @@
         intrusionDetection = import ./nix/modules/intrusion-detection.nix;
         systemdHardening = import ./nix/modules/systemd-hardening.nix;
         vaultPki = import ./nix/modules/vault-pki.nix;
+        doctor = import ./nix/modules/doctor.nix;                      # CM-4, SI-6
+        oidcProvider = import ./nix/modules/oidc-provider.nix;         # IA-2, AC-2
 
         # Composite profiles
         minimal = import ./nix/profiles/minimal.nix;
@@ -70,6 +73,7 @@
               ./nix/modules/hardened-ssh.nix
               ./nix/modules/hardened-nginx.nix
               ./nix/modules/secrets-management.nix
+              ./nix/modules/observability.nix
               ./nix/modules/observability-auth.nix
               ./nix/modules/vm-firewall.nix
               ./nix/modules/database-backup.nix
@@ -79,6 +83,8 @@
               ./nix/modules/intrusion-detection.nix
               ./nix/modules/systemd-hardening.nix
               ./nix/modules/vault-pki.nix
+              ./nix/modules/doctor.nix
+              ./nix/modules/oidc-provider.nix
             ];
           };
       };

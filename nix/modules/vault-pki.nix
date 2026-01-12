@@ -115,14 +115,18 @@ in {
 
     address = mkOption {
       type = types.str;
-      default = "127.0.0.1:8200";
-      description = "Address for Vault to listen on";
+      default = "0.0.0.0:8200";
+      description = ''
+        Address for Vault to listen on.
+        Defaults to 0.0.0.0:8200 to support VM/container port forwarding.
+        In production with proper network segmentation, consider 127.0.0.1:8200.
+      '';
     };
 
     apiAddr = mkOption {
       type = types.str;
       default = "http://127.0.0.1:8200";
-      description = "Full URL for Vault API (used for CA URLs)";
+      description = "Full URL for Vault API (used for CA URLs in certificates)";
     };
 
     # PKI Configuration
@@ -322,6 +326,15 @@ in {
         '';
       })
     ];
+
+    # Override systemd service to add -dev-listen-address in dev mode
+    # The NixOS vault module doesn't pass this flag, so Vault binds to 127.0.0.1:8200
+    # by default in dev mode, ignoring cfg.address. This override fixes that.
+    systemd.services.vault.serviceConfig.ExecStart = mkIf (cfg.mode == "dev") (
+      let
+        vaultPackage = pkgs.vault;
+      in mkForce "${vaultPackage}/bin/vault server -dev -dev-root-token-id=barbican-dev -dev-listen-address=${cfg.address}"
+    );
 
     # PKI setup service (runs after Vault starts)
     systemd.services.vault-pki-setup = mkIf (cfg.mode == "dev") {

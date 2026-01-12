@@ -6,6 +6,7 @@
   hardenedSSH = import ./hardened-ssh.nix;
   hardenedNginx = import ./hardened-nginx.nix;  # SC-8, IA-3: Reverse Proxy
   secretsManagement = import ./secrets-management.nix;
+  observability = import ./observability.nix;  # SI-4, AU-6: Full observability stack
   observabilityAuth = import ./observability-auth.nix;
   vmFirewall = import ./vm-firewall.nix;
   databaseBackup = import ./database-backup.nix;
@@ -15,4 +16,6 @@
   intrusionDetection = import ./intrusion-detection.nix;
   systemdHardening = import ./systemd-hardening.nix;
   vaultPki = import ./vault-pki.nix;  # SC-12, SC-17: PKI/Key Management
+  doctor = import ./doctor.nix;  # CM-4, SI-6: Diagnostic health checks
+  oidcProvider = import ./oidc-provider.nix;  # IA-2, AC-2: OIDC/Keycloak
 }
