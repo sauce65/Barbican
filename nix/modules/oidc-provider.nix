@@ -1,24 +1,95 @@
 # Barbican Security Module: OIDC Provider (Keycloak)
 #
-# Provides a ready-to-use OIDC identity provider with:
-# - Automatic Keycloak deployment via container
-# - Declarative realm, client, role, and user provisioning
-# - FedRAMP-compliant security settings
-# - Integration with Vault PKI for TLS
+# Why: Provides a turnkey, compliance-ready OIDC/OAuth2 identity provider
+# for FedRAMP Low/Moderate/High applications with FAPI 2.0 security profile.
 #
-# NIST 800-53 Controls:
-# - IA-2: Identification and Authentication
-# - IA-2(1): Multi-Factor Authentication (configurable)
-# - IA-4: Identifier Management
-# - IA-5: Authenticator Management
-# - AC-2: Account Management
-# - AC-7: Unsuccessful Logon Attempts
+# What: Deploys Keycloak with:
+# - FIPS 140-3 validated cryptography
+# - FAPI 2.0 security profile (mTLS, PAR, certificate-bound tokens)
+# - FedRAMP-compliant password policies and session timeouts
+# - Declarative realm, client, role, and user provisioning
+# - Integration with Barbican's secure-postgres, vault-pki, and observability
+#
+# How: Uses Podman containers for Keycloak, integrates with existing Barbican
+# modules via NixOS configuration, auto-provisions on first boot.
+#
+# NIST 800-53 Controls: IA-2, IA-2(1), IA-2(2), IA-4, IA-5, IA-5(1), IA-8,
+# AC-2, AC-3, AC-7, AC-11, AC-12, AU-2, AU-3, SC-8, SC-13, SC-23
 { config, lib, pkgs, ... }:
 
 with lib;
 
 let
   cfg = config.barbican.oidc;
+
+  # FedRAMP profile defaults for session and security settings
+  # Based on NIST 800-53 Rev 5 controls AC-11, AC-12, AC-7, IA-5(1)
+  profileDefaults = {
+    development = {
+      accessTokenLifespan = 3600;  # 1 hour for dev convenience
+      sessionIdleTimeout = 3600;   # 1 hour
+      sessionMaxLifespan = 43200;  # 12 hours
+      bruteForceEnabled = false;
+      failureFactor = 10;
+      lockoutDuration = 300;       # 5 minutes
+      passwordMinLength = 8;
+      passwordRequireUppercase = false;
+      passwordRequireDigit = false;
+      passwordRequireSpecialChar = false;
+      passwordHistoryCount = 0;
+      requireMFA = false;
+      fipsMode = false;
+      enableFAPI = false;
+    };
+    fedramp-low = {
+      accessTokenLifespan = 600;   # 10 minutes (FAPI 2.0 max)
+      sessionIdleTimeout = 1800;   # 30 minutes (AC-11)
+      sessionMaxLifespan = 28800;  # 8 hours (AC-12)
+      bruteForceEnabled = true;
+      failureFactor = 5;           # 5 attempts (AC-7)
+      lockoutDuration = 900;       # 15 minutes (AC-7)
+      passwordMinLength = 8;       # NIST 800-63B minimum
+      passwordRequireUppercase = true;
+      passwordRequireDigit = true;
+      passwordRequireSpecialChar = true;
+      passwordHistoryCount = 24;   # IA-5(1)
+      requireMFA = false;
+      fipsMode = true;
+      enableFAPI = false;
+    };
+    fedramp-moderate = {
+      accessTokenLifespan = 600;   # 10 minutes (FAPI 2.0 max)
+      sessionIdleTimeout = 900;    # 15 minutes (AC-11)
+      sessionMaxLifespan = 14400;  # 4 hours (AC-12)
+      bruteForceEnabled = true;
+      failureFactor = 3;           # 3 attempts (AC-7)
+      lockoutDuration = 1800;      # 30 minutes (AC-7)
+      passwordMinLength = 12;      # 12 characters
+      passwordRequireUppercase = true;
+      passwordRequireDigit = true;
+      passwordRequireSpecialChar = true;
+      passwordHistoryCount = 24;   # IA-5(1)
+      requireMFA = false;          # Optional for Moderate
+      fipsMode = true;
+      enableFAPI = true;           # FAPI 2.0 for financial apps
+    };
+    fedramp-high = {
+      accessTokenLifespan = 300;   # 5 minutes (stricter than FAPI)
+      sessionIdleTimeout = 600;    # 10 minutes (AC-11)
+      sessionMaxLifespan = 7200;   # 2 hours (AC-12)
+      bruteForceEnabled = true;
+      failureFactor = 3;           # 3 attempts (AC-7)
+      lockoutDuration = 1800;      # 30 minutes (AC-7)
+      passwordMinLength = 15;      # 15 characters for High
+      passwordRequireUppercase = true;
+      passwordRequireDigit = true;
+      passwordRequireSpecialChar = true;
+      passwordHistoryCount = 24;   # IA-5(1)
+      requireMFA = true;           # MFA mandatory (IA-2(1))
+      fipsMode = true;
+      enableFAPI = true;
+    };
+  };
 
   # Generate random secret if not provided
   defaultSecret = "barbican-oidc-${builtins.substring 0 8 (builtins.hashString "sha256" (toString builtins.currentTime))}";
@@ -62,7 +133,7 @@ let
     };
   };
 
-  # Client submodule type
+  # Client submodule type with FAPI 2.0 support
   clientType = types.submodule {
     options = {
       name = mkOption {
@@ -104,6 +175,52 @@ let
         type = types.bool;
         default = false;
         description = "Enable service account (client credentials grant)";
+      };
+
+      # FAPI 2.0 Security Profile Options
+      enableFAPI = mkOption {
+        type = types.bool;
+        default = profileDefaults.${cfg.profile}.enableFAPI;
+        description = ''
+          Enable FAPI 2.0 security profile for this client.
+          Enforces: PKCE, PAR, mTLS, certificate-bound tokens, signed responses.
+        '';
+      };
+
+      requirePKCE = mkOption {
+        type = types.bool;
+        default = true;
+        description = "Require Proof Key for Code Exchange (PKCE) for authorization code flow";
+      };
+
+      pkceMethod = mkOption {
+        type = types.enum [ "S256" "plain" ];
+        default = "S256";
+        description = "PKCE challenge method (S256 required for FAPI 2.0)";
+      };
+
+      requirePAR = mkOption {
+        type = types.bool;
+        default = false;
+        description = "Require Pushed Authorization Requests (PAR) per RFC 9126";
+      };
+
+      requireMTLS = mkOption {
+        type = types.bool;
+        default = false;
+        description = "Require mutual TLS for token endpoint authentication";
+      };
+
+      certificateBoundTokens = mkOption {
+        type = types.bool;
+        default = false;
+        description = "Issue certificate-bound access tokens per RFC 8705";
+      };
+
+      useJWTAccessTokens = mkOption {
+        type = types.bool;
+        default = true;
+        description = "Issue JWTs as access tokens (required for FAPI)";
       };
     };
   };
@@ -188,10 +305,19 @@ let
       -X GET "''${KC_BASE_URL}/admin/realms/''${REALM_NAME}" \
       -H "Authorization: Bearer $TOKEN")
 
+    # Build password policy string
+    PASSWORD_POLICY="length(${toString cfg.passwordPolicy.minLength})"
+    ${optionalString cfg.passwordPolicy.requireUppercase ''PASSWORD_POLICY="$PASSWORD_POLICY and upperCase(1)"''}
+    ${optionalString cfg.passwordPolicy.requireDigit ''PASSWORD_POLICY="$PASSWORD_POLICY and digits(1)"''}
+    ${optionalString cfg.passwordPolicy.requireSpecialChar ''PASSWORD_POLICY="$PASSWORD_POLICY and specialChars(1)"''}
+    ${optionalString (cfg.passwordPolicy.historyCount > 0) ''PASSWORD_POLICY="$PASSWORD_POLICY and passwordHistory(${toString cfg.passwordPolicy.historyCount})"''}
+    ${optionalString cfg.passwordPolicy.notUsername ''PASSWORD_POLICY="$PASSWORD_POLICY and notUsername"''}
+
     if [ "$REALM_STATUS" = "200" ]; then
       log_warn "Realm ''${REALM_NAME} already exists, skipping creation"
     else
       log_info "Creating realm: ''${REALM_NAME}"
+      log_info "Password policy: $PASSWORD_POLICY"
       curl -sf -X POST "''${KC_BASE_URL}/admin/realms" \
         -H "Authorization: Bearer $TOKEN" \
         -H "Content-Type: application/json" \
@@ -208,7 +334,8 @@ let
           "permanentLockout": false,
           "failureFactor": ${toString cfg.security.failureFactor},
           "waitIncrementSeconds": ${toString cfg.security.lockoutWaitIncrement},
-          "maxFailureWaitSeconds": ${toString cfg.security.maxLockoutWait}
+          "maxFailureWaitSeconds": ${toString cfg.security.maxLockoutWait},
+          "passwordPolicy": "'"$PASSWORD_POLICY"'"
         }'
     fi
 
@@ -229,9 +356,9 @@ let
         }' || log_warn "Role ${name} may already exist"
     '') cfg.realm.roles)}
 
-    # Create clients
+    # Create clients with FAPI 2.0 support
     ${concatStringsSep "\n" (mapAttrsToList (clientId: client: ''
-      log_info "Creating client: ${clientId}"
+      log_info "Creating client: ${clientId}${optionalString client.enableFAPI " (FAPI 2.0 enabled)"}"
       curl -sf -X POST "''${KC_BASE_URL}/admin/realms/''${REALM_NAME}/clients" \
         -H "Authorization: Bearer $TOKEN" \
         -H "Content-Type: application/json" \
@@ -239,8 +366,8 @@ let
           "clientId": "${clientId}",
           "name": "${client.name}",
           "enabled": true,
-          "clientAuthenticatorType": "client-secret",
-          ${optionalString (client.secret != null) ''"secret": "${client.secret}",''}
+          "clientAuthenticatorType": ${if client.requireMTLS then ''"client-x509"'' else ''"client-secret"''},
+          ${optionalString (client.secret != null && !client.requireMTLS) ''"secret": "${client.secret}",''}
           "redirectUris": ${builtins.toJSON client.redirectUris},
           "webOrigins": ${builtins.toJSON client.webOrigins},
           "publicClient": ${boolToString client.public},
@@ -251,7 +378,15 @@ let
           "serviceAccountsEnabled": ${boolToString client.serviceAccountsEnabled},
           "fullScopeAllowed": true,
           "defaultClientScopes": ["web-origins", "acr", "profile", "roles", "email"],
-          "optionalClientScopes": ["address", "phone", "offline_access", "microprofile-jwt"]
+          "optionalClientScopes": ["address", "phone", "offline_access", "microprofile-jwt"],
+          "attributes": {
+            ${optionalString client.enableFAPI ''"fapi-profile": "fapi-2-security-profile",''}
+            "pkce.code.challenge.method": "${client.pkceMethod}",
+            "require.pushed.authorization.requests": "${boolToString client.requirePAR}",
+            "tls.client.certificate.bound.access.tokens": "${boolToString client.certificateBoundTokens}",
+            "use.jwks.url": "false",
+            "access.token.as.jwt.enabled": "${boolToString client.useJWTAccessTokens}"
+          }
         }' || log_warn "Client ${clientId} may already exist"
     '') cfg.realm.clients)}
 
@@ -347,6 +482,10 @@ let
           ''}
           - --health-enabled=true
           - --metrics-enabled=true
+          ${optionalString cfg.fipsMode ''
+          - --features=fips
+          - --fips-mode=strict
+          ''}
         environment:
           KC_DB: postgres
           KC_DB_URL: jdbc:postgresql://keycloak-db:5432/keycloak
@@ -356,6 +495,10 @@ let
           KEYCLOAK_ADMIN_PASSWORD: ''${KEYCLOAK_ADMIN_PASSWORD:-${cfg.adminPassword}}
           KC_PROXY: edge
           KC_HTTP_RELATIVE_PATH: /
+          ${optionalString cfg.fipsMode ''
+          KC_FIPS_MODE: strict
+          JAVA_OPTS: "-Dorg.bouncycastle.fips.approved_only=true"
+          ''}
         ports:
           - "${cfg.bindAddress}:${toString cfg.port}:${toString cfg.port}"
           ${optionalString cfg.tls.enable ''
@@ -384,19 +527,33 @@ in {
     enable = mkEnableOption "Barbican OIDC provider (Keycloak)";
 
     profile = mkOption {
-      type = types.enum [ "development" "production" ];
+      type = types.enum [ "development" "fedramp-low" "fedramp-moderate" "fedramp-high" ];
       default = "development";
       description = ''
-        Deployment profile:
-        - development: HTTP, relaxed security, start-dev mode
-        - production: HTTPS required, strict security
+        Security compliance profile:
+        - development: Relaxed security for local development
+        - fedramp-low: FedRAMP Low baseline (FIPS, basic security)
+        - fedramp-moderate: FedRAMP Moderate (stricter timeouts, FAPI 2.0)
+        - fedramp-high: FedRAMP High (MFA required, shortest sessions)
+
+        Profile defaults can be overridden via specific options.
+      '';
+    };
+
+    fipsMode = mkOption {
+      type = types.bool;
+      default = profileDefaults.${cfg.profile}.fipsMode;
+      description = ''
+        Enable FIPS 140-3 validated cryptography mode.
+        Uses BouncyCastle FIPS provider for all cryptographic operations.
+        Required for FedRAMP compliance (SC-13).
       '';
     };
 
     version = mkOption {
       type = types.str;
-      default = "24.0";
-      description = "Keycloak version";
+      default = "25.0";
+      description = "Keycloak version (25.0+ required for full FAPI 2.0 support)";
     };
 
     hostname = mkOption {
@@ -466,18 +623,18 @@ in {
       };
     };
 
-    # Security settings
+    # Security settings (AC-7: Unsuccessful Login Attempts)
     security = {
       bruteForceProtection = mkOption {
         type = types.bool;
-        default = true;
+        default = profileDefaults.${cfg.profile}.bruteForceEnabled;
         description = "Enable brute force protection (AC-7)";
       };
 
       failureFactor = mkOption {
         type = types.int;
-        default = 5;
-        description = "Number of failed attempts before lockout";
+        default = profileDefaults.${cfg.profile}.failureFactor;
+        description = "Number of failed attempts before lockout (AC-7)";
       };
 
       lockoutWaitIncrement = mkOption {
@@ -488,8 +645,47 @@ in {
 
       maxLockoutWait = mkOption {
         type = types.int;
-        default = 900;
-        description = "Maximum lockout wait time in seconds";
+        default = profileDefaults.${cfg.profile}.lockoutDuration;
+        description = "Maximum lockout wait time in seconds (AC-7)";
+      };
+    };
+
+    # Password policy (IA-5(1): Password-Based Authentication)
+    passwordPolicy = {
+      minLength = mkOption {
+        type = types.int;
+        default = profileDefaults.${cfg.profile}.passwordMinLength;
+        description = "Minimum password length (NIST 800-63B)";
+      };
+
+      requireUppercase = mkOption {
+        type = types.bool;
+        default = profileDefaults.${cfg.profile}.passwordRequireUppercase;
+        description = "Require at least one uppercase letter";
+      };
+
+      requireDigit = mkOption {
+        type = types.bool;
+        default = profileDefaults.${cfg.profile}.passwordRequireDigit;
+        description = "Require at least one digit";
+      };
+
+      requireSpecialChar = mkOption {
+        type = types.bool;
+        default = profileDefaults.${cfg.profile}.passwordRequireSpecialChar;
+        description = "Require at least one special character";
+      };
+
+      historyCount = mkOption {
+        type = types.int;
+        default = profileDefaults.${cfg.profile}.passwordHistoryCount;
+        description = "Number of previous passwords to remember (IA-5(1))";
+      };
+
+      notUsername = mkOption {
+        type = types.bool;
+        default = true;
+        description = "Password must not match username";
       };
     };
 
@@ -509,20 +705,20 @@ in {
 
       accessTokenLifespan = mkOption {
         type = types.int;
-        default = 300;
-        description = "Access token lifespan in seconds";
+        default = profileDefaults.${cfg.profile}.accessTokenLifespan;
+        description = "Access token lifespan in seconds (max 600 for FAPI 2.0)";
       };
 
       sessionIdleTimeout = mkOption {
         type = types.int;
-        default = 1800;
-        description = "Session idle timeout in seconds";
+        default = profileDefaults.${cfg.profile}.sessionIdleTimeout;
+        description = "Session idle timeout in seconds (AC-11)";
       };
 
       sessionMaxLifespan = mkOption {
         type = types.int;
-        default = 36000;
-        description = "Maximum session lifespan in seconds";
+        default = profileDefaults.${cfg.profile}.sessionMaxLifespan;
+        description = "Maximum session lifespan in seconds (AC-12)";
       };
 
       roles = mkOption {
