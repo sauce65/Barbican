@@ -370,12 +370,11 @@ let
         image: grafana/loki:2.9.2
         container_name: ${cfg.appName}-loki
         restart: always
+        network_mode: host
         command: -config.file=/etc/loki/loki-config.yml
         volumes:
           - loki-config:/etc/loki:ro
           - ${cfg.appName}_loki_data:/loki/data
-        ports:
-          - "${cfg.loki.bindAddress}:3100:3100"
         depends_on:
           loki-init:
             condition: service_completed_successfully
