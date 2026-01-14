@@ -478,9 +478,13 @@ let
       ${cfg.appName}_grafana_data:
       ${cfg.appName}_alertmanager_data:
       loki-config:
+        external: true
       prometheus-config:
+        external: true
       grafana-config:
+        external: true
       alertmanager-config:
+        external: true
   '';
 
   # Setup script that prepares configs and starts the stack
