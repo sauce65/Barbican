@@ -444,27 +444,35 @@ let
     '') cfg.realm.clients)}
   '';
 
+  # Build database URL based on configuration
+  dbUrl = if cfg.database.useExternal
+    then "jdbc:postgresql://${cfg.database.host}:${toString cfg.database.port}/${cfg.database.name}"
+    else "jdbc:postgresql://keycloak-db:5432/${cfg.database.name}";
+
   # Docker compose for Keycloak
   keycloakComposeConfig = pkgs.writeText "keycloak-compose.yml" ''
     # Keycloak OIDC Provider - Barbican
     # FedRAMP Profile: ${cfg.profile}
+    # Database: ${if cfg.database.useExternal then "External PostgreSQL" else "Embedded"}
 
     services:
+      ${optionalString (!cfg.database.useExternal) ''
       keycloak-db:
         image: postgres:15-alpine
         container_name: ${cfg.containerPrefix}-keycloak-db
         restart: always
         environment:
-          POSTGRES_DB: keycloak
-          POSTGRES_USER: keycloak
+          POSTGRES_DB: ${cfg.database.name}
+          POSTGRES_USER: ${cfg.database.username}
           POSTGRES_PASSWORD: ''${KEYCLOAK_DB_PASSWORD:-keycloak}
         volumes:
           - ${cfg.containerPrefix}_keycloak_db:/var/lib/postgresql/data
         healthcheck:
-          test: ["CMD-SHELL", "pg_isready -U keycloak"]
+          test: ["CMD-SHELL", "pg_isready -U ${cfg.database.username}"]
           interval: 10s
           timeout: 5s
           retries: 5
+      ''}
 
       keycloak:
         image: quay.io/keycloak/keycloak:${cfg.version}
@@ -488,8 +496,8 @@ let
           ''}
         environment:
           KC_DB: postgres
-          KC_DB_URL: jdbc:postgresql://keycloak-db:5432/keycloak
-          KC_DB_USERNAME: keycloak
+          KC_DB_URL: ${dbUrl}${optionalString (cfg.database.sslMode != "disable") "?sslmode=${cfg.database.sslMode}"}
+          KC_DB_USERNAME: ${cfg.database.username}
           KC_DB_PASSWORD: ''${KEYCLOAK_DB_PASSWORD:-keycloak}
           KEYCLOAK_ADMIN: ${cfg.adminUser}
           KEYCLOAK_ADMIN_PASSWORD: ''${KEYCLOAK_ADMIN_PASSWORD:-${cfg.adminPassword}}
@@ -498,6 +506,10 @@ let
           ${optionalString cfg.fipsMode ''
           KC_FIPS_MODE: strict
           JAVA_OPTS: "-Dorg.bouncycastle.fips.approved_only=true"
+          ''}
+          ${optionalString cfg.observability.enable ''
+          KC_METRICS_ENABLED: true
+          KC_HEALTH_ENABLED: true
           ''}
         ports:
           - "${cfg.bindAddress}:${toString cfg.port}:${toString cfg.port}"
@@ -508,9 +520,16 @@ let
           ${optionalString cfg.tls.enable ''
           - ${cfg.tls.certPath}:/certs:ro
           ''}
+          ${optionalString (cfg.database.useExternal && cfg.database.clientCertFile != null) ''
+          - ${toString cfg.database.clientCertFile}:/db-certs/client.crt:ro
+          - ${toString cfg.database.clientKeyFile}:/db-certs/client.key:ro
+          - ${toString cfg.database.caCertFile}:/db-certs/ca.crt:ro
+          ''}
+        ${optionalString (!cfg.database.useExternal) ''
         depends_on:
           keycloak-db:
             condition: service_healthy
+        ''}
         healthcheck:
           test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/${toString cfg.port} && echo -e 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && cat <&3 | grep -q '200 OK'"]
           interval: 30s
@@ -518,8 +537,10 @@ let
           retries: 5
           start_period: 120s
 
+    ${optionalString (!cfg.database.useExternal) ''
     volumes:
       ${cfg.containerPrefix}_keycloak_db:
+    ''}
   '';
 
 in {
@@ -650,6 +671,72 @@ in {
       };
     };
 
+    # Database configuration
+    database = {
+      useExternal = mkOption {
+        type = types.bool;
+        default = false;
+        description = ''
+          Use external PostgreSQL instead of embedded container.
+          When true, integrates with barbican.securePostgres module.
+        '';
+      };
+
+      host = mkOption {
+        type = types.str;
+        default = "localhost";
+        description = "PostgreSQL host (when useExternal = true)";
+      };
+
+      port = mkOption {
+        type = types.port;
+        default = 5432;
+        description = "PostgreSQL port (when useExternal = true)";
+      };
+
+      name = mkOption {
+        type = types.str;
+        default = "keycloak";
+        description = "Database name";
+      };
+
+      username = mkOption {
+        type = types.str;
+        default = "keycloak";
+        description = "Database username";
+      };
+
+      passwordFile = mkOption {
+        type = types.nullOr types.path;
+        default = null;
+        description = "Path to file containing database password";
+      };
+
+      sslMode = mkOption {
+        type = types.enum [ "disable" "require" "verify-ca" "verify-full" ];
+        default = "require";
+        description = "PostgreSQL SSL mode (SC-8)";
+      };
+
+      clientCertFile = mkOption {
+        type = types.nullOr types.path;
+        default = null;
+        description = "Client certificate for mTLS to PostgreSQL (IA-5(2))";
+      };
+
+      clientKeyFile = mkOption {
+        type = types.nullOr types.path;
+        default = null;
+        description = "Client private key for mTLS to PostgreSQL";
+      };
+
+      caCertFile = mkOption {
+        type = types.nullOr types.path;
+        default = null;
+        description = "CA certificate for PostgreSQL server verification";
+      };
+    };
+
     # Password policy (IA-5(1): Password-Based Authentication)
     passwordPolicy = {
       minLength = mkOption {
@@ -770,6 +857,92 @@ in {
       default = true;
       description = "Automatically provision realm, clients, and users on start";
     };
+
+    # Vault PKI integration (SC-12, SC-17)
+    vaultPki = {
+      enable = mkOption {
+        type = types.bool;
+        default = false;
+        description = ''
+          Use Vault PKI for TLS certificate management.
+          When enabled, integrates with barbican.vault module.
+        '';
+      };
+
+      roleName = mkOption {
+        type = types.str;
+        default = "keycloak-server";
+        description = "Vault PKI role name for certificate issuance";
+      };
+
+      commonName = mkOption {
+        type = types.str;
+        default = cfg.hostname;
+        description = "Common name for TLS certificate";
+      };
+
+      altNames = mkOption {
+        type = types.listOf types.str;
+        default = [];
+        description = "Alternative names for TLS certificate";
+        example = [ "keycloak.internal" "auth.internal" ];
+      };
+
+      ttl = mkOption {
+        type = types.str;
+        default = "720h";  # 30 days
+        description = "Certificate TTL";
+      };
+
+      renewBeforeExpiry = mkOption {
+        type = types.str;
+        default = "168h";  # 7 days
+        description = "Renew certificate this long before expiry";
+      };
+    };
+
+    # Observability integration (SI-4, AU-6)
+    observability = {
+      enable = mkOption {
+        type = types.bool;
+        default = false;
+        description = ''
+          Enable integration with barbican.observability for event logging.
+          Forwards Keycloak events to Loki for centralized audit logging.
+        '';
+      };
+
+      lokiEndpoint = mkOption {
+        type = types.str;
+        default = "http://localhost:3100";
+        description = "Loki push endpoint for log forwarding";
+      };
+
+      prometheusPort = mkOption {
+        type = types.port;
+        default = 9990;
+        description = "Port for Keycloak Prometheus metrics endpoint";
+      };
+
+      auditEvents = mkOption {
+        type = types.listOf types.str;
+        default = [
+          "LOGIN" "LOGIN_ERROR" "LOGOUT"
+          "REGISTER" "UPDATE_PASSWORD" "UPDATE_PROFILE"
+          "FEDERATED_IDENTITY_LINK" "REMOVE_FEDERATED_IDENTITY"
+          "UPDATE_TOTP" "REMOVE_TOTP"
+          "GRANT_CONSENT" "REVOKE_GRANT"
+          "CLIENT_LOGIN" "CLIENT_LOGIN_ERROR"
+        ];
+        description = "Keycloak events to forward to observability stack (AU-2)";
+      };
+
+      includeRepresentations = mkOption {
+        type = types.bool;
+        default = false;
+        description = "Include full event representations (may contain sensitive data)";
+      };
+    };
   };
 
   config = mkIf cfg.enable {
@@ -822,17 +995,38 @@ in {
     # Firewall
     networking.firewall.allowedTCPPorts = [
       cfg.port
-    ] ++ (optional cfg.tls.enable cfg.tls.port);
+    ] ++ (optional cfg.tls.enable cfg.tls.port)
+      ++ (optional cfg.observability.enable cfg.observability.prometheusPort);
 
     # Assertions
     assertions = [
       {
         assertion = cfg.profile == "development" || cfg.tls.enable;
-        message = "Production profile requires TLS to be enabled";
+        message = "FedRAMP profiles require TLS to be enabled";
       }
       {
-        assertion = !cfg.tls.enable || cfg.tls.certPath != null;
-        message = "TLS requires certPath to be set";
+        assertion = !cfg.tls.enable || (cfg.tls.certPath != null || cfg.vaultPki.enable);
+        message = "TLS requires either certPath or vaultPki.enable";
+      }
+      {
+        assertion = !cfg.vaultPki.enable || config.barbican.vault.enable or false;
+        message = "vaultPki integration requires barbican.vault.enable = true";
+      }
+      {
+        assertion = !cfg.database.useExternal || cfg.database.passwordFile != null;
+        message = "External database requires passwordFile to be set";
+      }
+      {
+        assertion = !cfg.database.useExternal || (cfg.database.sslMode != "disable" || cfg.profile == "development");
+        message = "External database should use SSL for FedRAMP profiles";
+      }
+      {
+        assertion = !(cfg.database.clientCertFile != null) || (cfg.database.clientKeyFile != null && cfg.database.caCertFile != null);
+        message = "Database client certificate requires both clientKeyFile and caCertFile";
+      }
+      {
+        assertion = !cfg.observability.enable || config.barbican.observability.enable or false;
+        message = "Observability integration requires barbican.observability.enable = true";
       }
     ];
   };
