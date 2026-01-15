@@ -631,6 +631,7 @@ in {
           ${optionalString (certCfg.altNames != []) ''alt_names="${concatStringsSep "," certCfg.altNames}"''} \
           ${optionalString (certCfg.ipSans != []) ''ip_sans="${concatStringsSep "," certCfg.ipSans}"''} \
           ttl="${certCfg.ttl}" \
+          private_key_format=pkcs8 \
           > "$CERT_DIR/cert.json"
 
         jq -r '.data.certificate' "$CERT_DIR/cert.json" > "$CERT_DIR/${certCfg.certFile}"
