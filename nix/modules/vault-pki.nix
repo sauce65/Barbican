@@ -580,10 +580,12 @@ in {
           vault read -field=certificate pki/cert/ca > "$CA_DIR/root-ca.pem"
           vault read -field=certificate pki_int/cert/ca > "$CA_DIR/intermediate-ca.pem"
 
+          # Build CA chain with root CA first, then intermediate
+          # This order is required by native-tls/OpenSSL when verifying certificate chains
           {
-            cat "$CA_DIR/intermediate-ca.pem"
-            echo ""
             cat "$CA_DIR/root-ca.pem"
+            echo ""
+            cat "$CA_DIR/intermediate-ca.pem"
             echo ""
           } > "$CA_DIR/ca-chain.pem"
 
