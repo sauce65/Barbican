@@ -518,75 +518,75 @@ in {
       "d ${certCfg.outputDir} 0755 ${certCfg.owner} ${certCfg.group} -"
     ) cfg.client.certificates);
 
-    # Service to fetch CA chain from external Vault
-    systemd.services.vault-fetch-ca = mkIf cfg.client.caChain.enable {
-      description = "Fetch CA chain from external Vault";
-      wantedBy = [ "multi-user.target" ];
+    # Create systemd services for client mode (CA chain + certificate fetchers)
+    systemd.services = (optionalAttrs cfg.client.caChain.enable {
+      # Service to fetch CA chain from external Vault
+      vault-fetch-ca = {
+        description = "Fetch CA chain from external Vault";
+        wantedBy = [ "multi-user.target" ];
 
-      environment = {
-        VAULT_ADDR = cfg.client.address;
+        environment = {
+          VAULT_ADDR = cfg.client.address;
+        };
+
+        path = [ pkgs.vault pkgs.curl ];
+
+        serviceConfig = {
+          Type = "oneshot";
+          RemainAfterExit = true;
+        };
+
+        script = ''
+          set -euo pipefail
+
+          CA_DIR="${cfg.client.caChain.outputDir}"
+          mkdir -p "$CA_DIR"
+
+          ${optionalString (cfg.client.tokenFile != null) ''
+          export VAULT_TOKEN=$(cat ${cfg.client.tokenFile})
+          ''}
+
+          # Wait for Vault to be reachable
+          echo "Waiting for Vault at $VAULT_ADDR..."
+          TIMEOUT=120
+          ELAPSED=0
+          until curl -sf "$VAULT_ADDR/v1/sys/health" > /dev/null 2>&1; do
+            if [ $ELAPSED -ge $TIMEOUT ]; then
+              echo "ERROR: Timeout waiting for Vault at $VAULT_ADDR"
+              exit 1
+            fi
+            sleep 2
+            ELAPSED=$((ELAPSED + 2))
+          done
+
+          # Wait for PKI to be configured (intermediate CA exists)
+          echo "Waiting for PKI setup..."
+          ELAPSED=0
+          until vault read pki_int/cert/ca > /dev/null 2>&1; do
+            if [ $ELAPSED -ge $TIMEOUT ]; then
+              echo "ERROR: Timeout waiting for PKI setup"
+              exit 1
+            fi
+            sleep 2
+            ELAPSED=$((ELAPSED + 2))
+          done
+
+          echo "Fetching CA chain from Vault..."
+          vault read -field=certificate pki/cert/ca > "$CA_DIR/root-ca.pem"
+          vault read -field=certificate pki_int/cert/ca > "$CA_DIR/intermediate-ca.pem"
+
+          {
+            cat "$CA_DIR/intermediate-ca.pem"
+            echo ""
+            cat "$CA_DIR/root-ca.pem"
+            echo ""
+          } > "$CA_DIR/ca-chain.pem"
+
+          chmod 644 "$CA_DIR"/*.pem
+          echo "CA chain fetched successfully"
+        '';
       };
-
-      path = [ pkgs.vault pkgs.curl ];
-
-      serviceConfig = {
-        Type = "oneshot";
-        RemainAfterExit = true;
-      };
-
-      script = ''
-        set -euo pipefail
-
-        CA_DIR="${cfg.client.caChain.outputDir}"
-        mkdir -p "$CA_DIR"
-
-        ${optionalString (cfg.client.tokenFile != null) ''
-        export VAULT_TOKEN=$(cat ${cfg.client.tokenFile})
-        ''}
-
-        # Wait for Vault to be reachable
-        echo "Waiting for Vault at $VAULT_ADDR..."
-        TIMEOUT=120
-        ELAPSED=0
-        until curl -sf "$VAULT_ADDR/v1/sys/health" > /dev/null 2>&1; do
-          if [ $ELAPSED -ge $TIMEOUT ]; then
-            echo "ERROR: Timeout waiting for Vault at $VAULT_ADDR"
-            exit 1
-          fi
-          sleep 2
-          ELAPSED=$((ELAPSED + 2))
-        done
-
-        # Wait for PKI to be configured (intermediate CA exists)
-        echo "Waiting for PKI setup..."
-        ELAPSED=0
-        until vault read pki_int/cert/ca > /dev/null 2>&1; do
-          if [ $ELAPSED -ge $TIMEOUT ]; then
-            echo "ERROR: Timeout waiting for PKI setup"
-            exit 1
-          fi
-          sleep 2
-          ELAPSED=$((ELAPSED + 2))
-        done
-
-        echo "Fetching CA chain from Vault..."
-        vault read -field=certificate pki/cert/ca > "$CA_DIR/root-ca.pem"
-        vault read -field=certificate pki_int/cert/ca > "$CA_DIR/intermediate-ca.pem"
-
-        {
-          cat "$CA_DIR/intermediate-ca.pem"
-          echo ""
-          cat "$CA_DIR/root-ca.pem"
-          echo ""
-        } > "$CA_DIR/ca-chain.pem"
-
-        chmod 644 "$CA_DIR"/*.pem
-        echo "CA chain fetched successfully"
-      '';
-    };
-
-    # Create systemd services for each certificate
-    systemd.services = mapAttrs' (name: certCfg: nameValuePair "vault-fetch-cert-${name}" {
+    }) // (mapAttrs' (name: certCfg: nameValuePair "vault-fetch-cert-${name}" {
       description = "Fetch ${name} certificate from external Vault";
       after = [ "vault-fetch-ca.service" ];
       wants = [ "vault-fetch-ca.service" ];
@@ -639,7 +639,7 @@ in {
         rm -f "$CERT_DIR/cert.json"
         echo "${name} certificate issued successfully"
       '';
-    }) cfg.client.certificates;
+    }) cfg.client.certificates);
 
     # Assertion: client mode and server mode are mutually exclusive
     assertions = [
