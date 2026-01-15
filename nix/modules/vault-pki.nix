@@ -67,6 +67,12 @@ let
         description = "Allow IP SANs in certificates";
       };
 
+      enforceHostnames = mkOption {
+        type = types.bool;
+        default = true;
+        description = "Enforce valid hostnames in CN (disable for usernames like dpe_user)";
+      };
+
       serverFlag = mkOption {
         type = types.bool;
         default = false;
@@ -264,6 +270,121 @@ in {
       default = "/var/lib/vault";
       description = "Data storage path for production mode";
     };
+
+    # Client mode - connect to external Vault instead of running local server
+    client = {
+      enable = mkOption {
+        type = types.bool;
+        default = false;
+        description = "Enable Vault PKI client mode (connect to external Vault)";
+      };
+
+      address = mkOption {
+        type = types.str;
+        default = "http://10.0.2.2:18200";
+        description = "Address of external Vault server";
+        example = "http://10.0.2.2:18200";
+      };
+
+      tokenFile = mkOption {
+        type = types.nullOr types.path;
+        default = null;
+        description = "Path to file containing Vault token";
+        example = "/run/secrets/vault-token";
+      };
+
+      caChain = {
+        enable = mkOption {
+          type = types.bool;
+          default = true;
+          description = "Fetch CA chain from external Vault";
+        };
+
+        outputDir = mkOption {
+          type = types.path;
+          default = "/var/lib/vault/certs/ca";
+          description = "Directory to write CA files";
+        };
+      };
+
+      # Certificate submodule type for client mode
+      certificates = mkOption {
+        type = types.attrsOf (types.submodule {
+          options = {
+            role = mkOption {
+              type = types.str;
+              description = "PKI role to use for certificate issuance";
+              example = "postgres";
+            };
+
+            commonName = mkOption {
+              type = types.str;
+              description = "Common name for the certificate";
+              example = "localhost";
+            };
+
+            altNames = mkOption {
+              type = types.listOf types.str;
+              default = [];
+              description = "Subject Alternative Names";
+              example = [ "localhost" "postgres" ];
+            };
+
+            ipSans = mkOption {
+              type = types.listOf types.str;
+              default = [];
+              description = "IP SANs";
+              example = [ "127.0.0.1" "::1" ];
+            };
+
+            outputDir = mkOption {
+              type = types.path;
+              description = "Directory to write certificate files";
+              example = "/var/lib/postgres/certs";
+            };
+
+            certFile = mkOption {
+              type = types.str;
+              default = "server.crt";
+              description = "Certificate file name";
+            };
+
+            keyFile = mkOption {
+              type = types.str;
+              default = "server.key";
+              description = "Private key file name";
+            };
+
+            owner = mkOption {
+              type = types.str;
+              default = "root";
+              description = "Owner of certificate files";
+            };
+
+            group = mkOption {
+              type = types.str;
+              default = "root";
+              description = "Group of certificate files";
+            };
+
+            ttl = mkOption {
+              type = types.str;
+              default = "8760h";
+              description = "Certificate TTL";
+            };
+
+            wantedBy = mkOption {
+              type = types.listOf types.str;
+              default = [];
+              description = "Services that require this certificate";
+              example = [ "postgresql.service" ];
+            };
+          };
+        });
+        default = {};
+        description = "Certificates to fetch from external Vault";
+      };
+    };
   };
 
   config = mkIf cfg.enable {
@@ -378,6 +499,157 @@ in {
       {
         assertion = !cfg.ha.enable || cfg.ha.clusterAddr != null;
         message = "HA mode requires clusterAddr to be set";
+      }
+    ];
+  };
+
+  # =========================================================================
+  # Client Mode Configuration
+  # Connect to external Vault instead of running local server
+  # =========================================================================
+  config = mkIf cfg.client.enable {
+    # Ensure Vault CLI is available
+    environment.systemPackages = [ pkgs.vault pkgs.jq pkgs.curl ];
+
+    # Create directories for certificates
+    systemd.tmpfiles.rules = [
+      "d ${cfg.client.caChain.outputDir} 0755 root root -"
+    ] ++ (mapAttrsToList (name: certCfg:
+      "d ${certCfg.outputDir} 0755 ${certCfg.owner} ${certCfg.group} -"
+    ) cfg.client.certificates);
+
+    # Service to fetch CA chain from external Vault
+    systemd.services.vault-fetch-ca = mkIf cfg.client.caChain.enable {
+      description = "Fetch CA chain from external Vault";
+      wantedBy = [ "multi-user.target" ];
+
+      environment = {
+        VAULT_ADDR = cfg.client.address;
+      };
+
+      path = [ pkgs.vault pkgs.curl ];
+
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+      };
+
+      script = ''
+        set -euo pipefail
+
+        CA_DIR="${cfg.client.caChain.outputDir}"
+        mkdir -p "$CA_DIR"
+
+        ${optionalString (cfg.client.tokenFile != null) ''
+        export VAULT_TOKEN=$(cat ${cfg.client.tokenFile})
+        ''}
+
+        # Wait for Vault to be reachable
+        echo "Waiting for Vault at $VAULT_ADDR..."
+        TIMEOUT=120
+        ELAPSED=0
+        until curl -sf "$VAULT_ADDR/v1/sys/health" > /dev/null 2>&1; do
+          if [ $ELAPSED -ge $TIMEOUT ]; then
+            echo "ERROR: Timeout waiting for Vault at $VAULT_ADDR"
+            exit 1
+          fi
+          sleep 2
+          ELAPSED=$((ELAPSED + 2))
+        done
+
+        # Wait for PKI to be configured (intermediate CA exists)
+        echo "Waiting for PKI setup..."
+        ELAPSED=0
+        until vault read pki_int/cert/ca > /dev/null 2>&1; do
+          if [ $ELAPSED -ge $TIMEOUT ]; then
+            echo "ERROR: Timeout waiting for PKI setup"
+            exit 1
+          fi
+          sleep 2
+          ELAPSED=$((ELAPSED + 2))
+        done
+
+        echo "Fetching CA chain from Vault..."
+        vault read -field=certificate pki/cert/ca > "$CA_DIR/root-ca.pem"
+        vault read -field=certificate pki_int/cert/ca > "$CA_DIR/intermediate-ca.pem"
+
+        {
+          cat "$CA_DIR/intermediate-ca.pem"
+          echo ""
+          cat "$CA_DIR/root-ca.pem"
+          echo ""
+        } > "$CA_DIR/ca-chain.pem"
+
+        chmod 644 "$CA_DIR"/*.pem
+        echo "CA chain fetched successfully"
+      '';
+    };
+
+    # Create systemd services for each certificate
+    systemd.services = mapAttrs' (name: certCfg: nameValuePair "vault-fetch-cert-${name}" {
+      description = "Fetch ${name} certificate from external Vault";
+      after = [ "vault-fetch-ca.service" ];
+      wants = [ "vault-fetch-ca.service" ];
+      wantedBy = certCfg.wantedBy;
+      before = certCfg.wantedBy;
+
+      environment = {
+        VAULT_ADDR = cfg.client.address;
+      };
+
+      path = [ pkgs.vault pkgs.jq pkgs.coreutils ];
+
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+      };
+
+      script = ''
+        set -euo pipefail
+
+        CERT_DIR="${certCfg.outputDir}"
+        mkdir -p "$CERT_DIR"
+
+        ${optionalString (cfg.client.tokenFile != null) ''
+        export VAULT_TOKEN=$(cat ${cfg.client.tokenFile})
+        ''}
+
+        # Wait for CA chain to be ready
+        until [ -f "${cfg.client.caChain.outputDir}/ca-chain.pem" ]; do
+          echo "Waiting for CA chain..."
+          sleep 1
+        done
+
+        echo "Issuing ${name} certificate from role ${certCfg.role}..."
+        vault write -format=json pki_int/issue/${certCfg.role} \
+          common_name="${certCfg.commonName}" \
+          ${optionalString (certCfg.altNames != []) ''alt_names="${concatStringsSep "," certCfg.altNames}"''} \
+          ${optionalString (certCfg.ipSans != []) ''ip_sans="${concatStringsSep "," certCfg.ipSans}"''} \
+          ttl="${certCfg.ttl}" \
+          > "$CERT_DIR/cert.json"
+
+        jq -r '.data.certificate' "$CERT_DIR/cert.json" > "$CERT_DIR/${certCfg.certFile}"
+        jq -r '.data.private_key' "$CERT_DIR/cert.json" > "$CERT_DIR/${certCfg.keyFile}"
+        jq -r '.data.ca_chain[]' "$CERT_DIR/cert.json" >> "$CERT_DIR/${certCfg.certFile}"
+
+        chmod 600 "$CERT_DIR/${certCfg.keyFile}"
+        chmod 644 "$CERT_DIR/${certCfg.certFile}"
+        chown ${certCfg.owner}:${certCfg.group} "$CERT_DIR/${certCfg.keyFile}" "$CERT_DIR/${certCfg.certFile}"
+
+        rm -f "$CERT_DIR/cert.json"
+        echo "${name} certificate issued successfully"
+      '';
+    }) cfg.client.certificates;
+
+    # Assertion: client mode and server mode are mutually exclusive
+    assertions = [
+      {
+        assertion = !cfg.enable || !cfg.client.enable;
+        message = "Vault server mode (enable) and client mode (client.enable) are mutually exclusive";
+      }
+      {
+        assertion = !cfg.client.enable || cfg.client.tokenFile != null;
+        message = "Client mode requires tokenFile to be set";
       }
     ];
   };

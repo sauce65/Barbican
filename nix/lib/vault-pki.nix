@@ -53,11 +53,27 @@ rec {
       allowBareDomains = true;
       allowAnyName = false;
       allowIpSans = true;
+      enforceHostnames = true;
       serverFlag = true;
       clientFlag = true;  # PostgreSQL can use same cert for both
       keyUsage = [ "DigitalSignature" "KeyEncipherment" ];
       extKeyUsage = [ "ServerAuth" "ClientAuth" ];
       maxTtl = "8760h";
+    };
+    # DPE client role for mTLS to PostgreSQL
+    # CN must match PostgreSQL username (e.g., dpe_user)
+    dpe-client = {
+      allowedDomains = [];  # Not used when allow_any_name is true
+      allowSubdomains = false;
+      allowBareDomains = false;
+      allowAnyName = true;  # Client certs can have any CN (like dpe_user)
+      allowIpSans = false;
+      enforceHostnames = false;  # Allow underscores in CN (dpe_user)
+      serverFlag = false;
+      clientFlag = true;
+      keyUsage = [ "DigitalSignature" ];
+      extKeyUsage = [ "ClientAuth" ];
+      maxTtl = "720h";  # 30 days for client certs
     };
   };
 
@@ -184,6 +200,7 @@ rec {
         allow_bare_domains=${boolToString role.allowBareDomains} \
         allow_any_name=${boolToString (role.allowAnyName or false)} \
         allow_ip_sans=${boolToString role.allowIpSans} \
+        enforce_hostnames=${boolToString (role.enforceHostnames or true)} \
         server_flag=${boolToString role.serverFlag} \
         client_flag=${boolToString role.clientFlag} \
         key_type="${config.keyType}" \
