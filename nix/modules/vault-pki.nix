@@ -387,9 +387,14 @@ in {
     };
   };
 
-  config = mkIf cfg.enable {
-    # Ensure Vault package is available
-    environment.systemPackages = [ pkgs.vault ];
+  config = mkMerge [
+    # =========================================================================
+    # Server Mode Configuration
+    # Run a local Vault server with PKI
+    # =========================================================================
+    (mkIf cfg.enable {
+      # Ensure Vault package is available
+      environment.systemPackages = [ pkgs.vault ];
 
     # Create directories
     systemd.tmpfiles.rules = [
@@ -501,13 +506,13 @@ in {
         message = "HA mode requires clusterAddr to be set";
       }
     ];
-  };
+  })
 
-  # =========================================================================
-  # Client Mode Configuration
-  # Connect to external Vault instead of running local server
-  # =========================================================================
-  config = mkIf cfg.client.enable {
+    # =========================================================================
+    # Client Mode Configuration
+    # Connect to external Vault instead of running local server
+    # =========================================================================
+    (mkIf cfg.client.enable {
     # Ensure Vault CLI is available
     environment.systemPackages = [ pkgs.vault pkgs.jq pkgs.curl ];
 
@@ -652,5 +657,6 @@ in {
         message = "Client mode requires tokenFile to be set";
       }
     ];
-  };
+  })
+  ];
 }
