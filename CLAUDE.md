@@ -64,23 +64,36 @@ barbican/
 ├── nix/
 │   ├── modules/                  # NixOS security modules
 │   │   ├── default.nix           # Module exports
+│   │   ├── secure-users.nix      # User hardening (AC-2, AC-6)
 │   │   ├── secure-postgres.nix   # Hardened PostgreSQL (IA-5(2), SC-8)
-│   │   ├── vm-firewall.nix       # iptables with egress filtering (SC-7)
 │   │   ├── hardened-ssh.nix      # SSH hardening (AC-7)
-│   │   ├── kernel-hardening.nix  # Kernel sysctl hardening (SI-16)
-│   │   ├── systemd-hardening.nix # Process isolation (AC-6, SC-39)
-│   │   ├── intrusion-detection.nix # AIDE + auditd (SI-4, SI-7)
+│   │   ├── hardened-nginx.nix    # Nginx hardening (SC-8, CM-6)
+│   │   ├── secrets-management.nix# Age encryption (IA-5)
+│   │   ├── observability.nix     # Loki/Prometheus/Grafana (SI-4, AU-6)
+│   │   ├── observability-auth.nix# Grafana/Prometheus auth (IA-2, AC-3)
+│   │   ├── vm-firewall.nix       # iptables with egress filtering (SC-7)
 │   │   ├── database-backup.nix   # Encrypted backups (CP-9)
-│   │   ├── vault-pki.nix         # Certificate management (SC-17)
 │   │   ├── resource-limits.nix   # Memory/CPU quotas (SC-6)
-│   │   ├── hardened-nginx.nix    # Nginx hardening
-│   │   ├── secrets-management.nix# Secret handling
-│   │   ├── secure-users.nix      # User hardening
-│   │   ├── time-sync.nix         # NTP configuration
-│   │   └── observability-auth.nix# Grafana/Prometheus auth
+│   │   ├── kernel-hardening.nix  # Kernel sysctl hardening (SI-16)
+│   │   ├── time-sync.nix         # NTP configuration (AU-8)
+│   │   ├── intrusion-detection.nix # AIDE + auditd (SI-4, SI-7)
+│   │   ├── systemd-hardening.nix # Process isolation (AC-6, SC-39)
+│   │   ├── vault-pki.nix         # Certificate management (SC-12, SC-17)
+│   │   ├── doctor.nix            # Diagnostic health checks (CM-4, SI-6)
+│   │   └── oidc-provider.nix     # Keycloak OIDC setup (IA-2, AC-2)
 │   ├── tests/                    # NixOS VM tests
 │   ├── lib/                      # Nix library functions
-│   └── profiles/                 # Profile configurations
+│   │   ├── network-zones.nix     # Network segmentation helpers
+│   │   ├── pki.nix               # Certificate generation scripts
+│   │   └── systemd-hardening-lib.nix # Systemd hardening helpers
+│   ├── profiles/                 # Pre-configured security profiles
+│   │   ├── minimal.nix           # Development/testing profile
+│   │   ├── standard.nix          # Staging/internal profile
+│   │   └── hardened.nix          # Production/FedRAMP profile
+│   ├── apps.nix                  # Flake apps (audit, vault-*, observability-*)
+│   ├── checks.nix                # Security checks and VM tests
+│   ├── package.nix               # Package definitions
+│   └── devshell.nix              # Development shell
 │
 ├── examples/
 │   ├── fedramp-low/              # FedRAMP Low example
@@ -251,11 +264,60 @@ Example flakes import barbican modules:
 
 ### Module Loading
 
-`barbican.nixosModules.all` imports all modules. Individual modules:
-- `barbican.nixosModules.secure-postgres`
-- `barbican.nixosModules.vm-firewall`
-- `barbican.nixosModules.hardened-ssh`
-- etc.
+`barbican.nixosModules.all` imports all modules. Individual modules use camelCase:
+
+```nix
+barbican.nixosModules.secureUsers
+barbican.nixosModules.securePostgres
+barbican.nixosModules.hardenedSSH
+barbican.nixosModules.hardenedNginx
+barbican.nixosModules.secretsManagement
+barbican.nixosModules.observability
+barbican.nixosModules.observabilityAuth
+barbican.nixosModules.vmFirewall
+barbican.nixosModules.databaseBackup
+barbican.nixosModules.resourceLimits
+barbican.nixosModules.kernelHardening
+barbican.nixosModules.timeSync
+barbican.nixosModules.intrusionDetection
+barbican.nixosModules.systemdHardening
+barbican.nixosModules.vaultPki
+barbican.nixosModules.doctor
+barbican.nixosModules.oidcProvider
+```
+
+### Security Profiles
+
+Pre-configured profiles for common deployment scenarios:
+- `barbican.nixosModules.minimal` - Development/testing (basic security)
+- `barbican.nixosModules.standard` - Staging (balanced security)
+- `barbican.nixosModules.hardened` - Production (FedRAMP-aligned)
+
+### Library Functions
+
+```nix
+barbican.lib.networkZones  # Network segmentation helpers
+barbican.lib.pki           # Certificate generation scripts
+barbican.lib.systemdHardening # Systemd hardening helpers
+```
+
+### Flake Apps
+
+```bash
+nix run .#audit              # Run security audit
+nix run .#vault-dev          # Start Vault dev server
+nix run .#vault-cert-server  # Issue server certificate
+nix run .#vault-cert-client  # Issue client certificate
+nix run .#vault-cert-postgres # Issue PostgreSQL certs
+nix run .#observability-init # Setup observability stack
+nix run .#test-<module>      # Run individual module tests
+```
+
+### Templates
+
+```bash
+nix flake init -t .#microvm-stack  # MicroVM with Barbican hardening
+```
 
 ## Feature Flags
 

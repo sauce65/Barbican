@@ -109,16 +109,23 @@ Barbican supports three FedRAMP impact levels with pre-configured security setti
 
 | Module | Purpose | NIST Controls |
 |--------|---------|---------------|
-| `secure-postgres` | Hardened PostgreSQL with SSL, pgaudit | IA-5(2), SC-8, AU-2, AU-9 |
-| `vm-firewall` | iptables with egress filtering | SC-7, SC-7(5) |
-| `hardened-ssh` | Public key only, fail2ban | AC-7, IA-5(1) |
-| `kernel-hardening` | ASLR, sysctl hardening | SI-16 |
-| `systemd-hardening` | Process isolation, capabilities | AC-6, SI-3, SC-39 |
-| `intrusion-detection` | AIDE file integrity, auditd | SI-4, SI-7 |
-| `database-backup` | Automated encrypted backups | CP-9, CP-9(1) |
-| `vault-pki` | Certificate management | SC-12, SC-17 |
-| `resource-limits` | Memory/CPU quotas | SC-6 |
-| `time-sync` | NTP with authentication | AU-8 |
+| `secureUsers` | User account hardening, SSH key management | AC-2, AC-6 |
+| `securePostgres` | Hardened PostgreSQL with SSL, pgaudit | IA-5(2), SC-8, AU-2, AU-9 |
+| `hardenedSSH` | Public key only, fail2ban integration | AC-7, IA-5(1) |
+| `hardenedNginx` | Nginx security hardening | SC-8, CM-6 |
+| `secretsManagement` | Age encryption for secrets | IA-5 |
+| `observability` | Loki/Prometheus/Grafana stack | SI-4, AU-6, CA-7 |
+| `observabilityAuth` | Grafana/Prometheus authentication | IA-2, AC-3 |
+| `vmFirewall` | iptables with egress filtering | SC-7, SC-7(5) |
+| `databaseBackup` | Automated encrypted backups | CP-9, CP-9(1) |
+| `resourceLimits` | Memory/CPU quotas | SC-6 |
+| `kernelHardening` | ASLR, sysctl hardening | SI-16 |
+| `timeSync` | NTP with authentication | AU-8 |
+| `intrusionDetection` | AIDE file integrity, auditd | SI-4, SI-7 |
+| `systemdHardening` | Process isolation, capabilities | AC-6, SI-3, SC-39 |
+| `vaultPki` | Certificate management with HashiCorp Vault | SC-12, SC-17 |
+| `doctor` | Diagnostic health checks | CM-4, SI-6 |
+| `oidcProvider` | Keycloak OIDC provider setup | IA-2, AC-2 |
 
 ## Architecture
 
@@ -364,14 +371,98 @@ if tracker.is_locked_out("user@example.com") {
 
 ### Available NixOS Modules
 
-Import individual modules or use `all` for everything:
+Import individual modules, profiles, or use `all` for everything:
 
 ```nix
-barbican.nixosModules.all              # All modules
-barbican.nixosModules.secure-postgres  # Just PostgreSQL
-barbican.nixosModules.vm-firewall      # Just firewall
-barbican.nixosModules.hardened-ssh     # Just SSH
-# ... etc
+# Import all modules
+barbican.nixosModules.all
+
+# Or import a pre-configured profile
+barbican.nixosModules.minimal   # Development/testing (basic security)
+barbican.nixosModules.standard  # Staging (balanced security)
+barbican.nixosModules.hardened  # Production (FedRAMP-aligned)
+
+# Or import individual modules (camelCase naming)
+barbican.nixosModules.secureUsers
+barbican.nixosModules.securePostgres
+barbican.nixosModules.hardenedSSH
+barbican.nixosModules.hardenedNginx
+barbican.nixosModules.secretsManagement
+barbican.nixosModules.observability
+barbican.nixosModules.observabilityAuth
+barbican.nixosModules.vmFirewall
+barbican.nixosModules.databaseBackup
+barbican.nixosModules.resourceLimits
+barbican.nixosModules.kernelHardening
+barbican.nixosModules.timeSync
+barbican.nixosModules.intrusionDetection
+barbican.nixosModules.systemdHardening
+barbican.nixosModules.vaultPki
+barbican.nixosModules.doctor
+barbican.nixosModules.oidcProvider
+```
+
+### Security Profiles
+
+Barbican provides pre-configured security profiles for common deployment scenarios:
+
+| Profile | Use Case | Modules Included |
+|---------|----------|------------------|
+| `minimal` | Development/testing | secureUsers, timeSync |
+| `standard` | Staging/internal | + hardenedSSH, kernelHardening, resourceLimits, vmFirewall |
+| `hardened` | Production/FedRAMP | + intrusionDetection, systemdHardening (all modules) |
+
+### Flake Apps
+
+Run security tools directly:
+
+```bash
+# Run full security audit
+nix run github:Sauce65/barbican#audit
+
+# Start Vault dev server for PKI
+nix run github:Sauce65/barbican#vault-dev
+
+# Issue certificates
+nix run github:Sauce65/barbican#vault-cert-server -- localhost
+nix run github:Sauce65/barbican#vault-cert-client -- worker-1
+nix run github:Sauce65/barbican#vault-cert-postgres
+
+# Generate observability stack config
+nix run github:Sauce65/barbican#observability-init
+
+# Run individual NixOS tests
+nix run github:Sauce65/barbican#test-secure-postgres
+nix run github:Sauce65/barbican#test-vault-pki
+```
+
+### Library Functions
+
+Barbican exports helper functions for custom configurations:
+
+```nix
+# Network zone helpers (SC-7)
+barbican.lib.networkZones.mkZones { ... }
+barbican.lib.networkZones.mkIP zone host
+barbican.lib.networkZones.mkZoneFirewallRules zones allowedFlows
+
+# PKI certificate generation (SC-12, SC-17)
+barbican.lib.pki.mkCAScript { name, days, algorithm }
+barbican.lib.pki.mkServerCertScript { name, caName, commonName, sans }
+barbican.lib.pki.mkClientCertScript { name, caName, commonName }
+barbican.lib.pki.mkPKISetupScript { name, servers, clients }
+
+# Systemd hardening helpers (AC-6, SC-39)
+barbican.lib.systemdHardening
+```
+
+### Templates
+
+Bootstrap new projects with security built-in:
+
+```bash
+# Create a new MicroVM project with Barbican hardening
+nix flake init -t github:Sauce65/barbican#microvm-stack
 ```
 
 ## Testing

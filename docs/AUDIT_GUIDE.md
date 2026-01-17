@@ -148,6 +148,40 @@ Phase 7: Report Generation
 - [ ] Access to `barbican.toml` configuration file
 - [ ] Rust toolchain installed (`rustup`, `cargo`)
 - [ ] `cargo-audit` installed (`cargo install cargo-audit`)
+- [ ] Nix with flakes enabled (for VM tests and automated audit)
+
+### Quick Start: Automated Audit
+
+Barbican provides a built-in audit runner that executes all security checks:
+
+```bash
+# Run the full security audit (builds and runs NixOS VM tests)
+nix run github:Sauce65/barbican#audit
+
+# Or from a local clone
+nix run .#audit
+```
+
+This will:
+1. Build the NixOS VM security tests
+2. Run all module tests (secure-postgres, kernel-hardening, etc.)
+3. Generate an audit report with timestamps
+
+For individual module testing:
+
+```bash
+nix run .#test-secure-postgres     # Test PostgreSQL hardening
+nix run .#test-hardened-ssh        # Test SSH configuration
+nix run .#test-kernel-hardening    # Test kernel hardening
+nix run .#test-vm-firewall         # Test firewall rules
+nix run .#test-intrusion-detection # Test AIDE/auditd
+nix run .#test-vault-pki           # Test Vault PKI setup
+nix run .#test-resource-limits     # Test resource limits
+nix run .#test-time-sync           # Test NTP configuration
+nix run .#test-secure-users        # Test user hardening
+```
+
+The automated tests complement manual verification in Phase 5.
 
 ### Key Files to Review
 
@@ -226,6 +260,24 @@ end-to-end audit including runtime verification (Phase 5).
 - [ ] QEMU/KVM available (`nix-shell -p qemu`)
 - [ ] `age` installed for secret encryption (`nix-shell -p age`)
 - [ ] `agenix` CLI available (`nix run github:ryantm/agenix`)
+
+### Optional: Vault PKI for Certificates
+
+If the audit target requires TLS certificates, use Barbican's Vault apps:
+
+```bash
+# Start a Vault dev server with PKI configured
+nix run .#vault-dev
+
+# In another terminal, issue certificates:
+export VAULT_ADDR=http://127.0.0.1:8200
+export VAULT_TOKEN=barbican-dev
+
+nix run .#vault-cert-server -- localhost ./certs/server
+nix run .#vault-cert-client -- audit-client ./certs/client
+nix run .#vault-cert-postgres -- ./certs/postgres
+nix run .#vault-ca-chain -- ./certs/ca
+```
 
 ### Step 1b.1: Generate Age Keys for Secrets
 
