@@ -57,6 +57,8 @@
         vaultPki = import ./nix/modules/vault-pki.nix;
         doctor = import ./nix/modules/doctor.nix;                      # CM-4, SI-6
         oidcProvider = import ./nix/modules/oidc-provider.nix;         # IA-2, AC-2
+        cluster = import ./nix/modules/cluster.nix;                    # SC-7, SC-32, AC-4
+        clusterOutput = import ./nix/modules/cluster-output.nix;       # Cluster deployment artifacts
 
         # FedRAMP Security Profiles (align with Rust ComplianceProfile enum)
         # These profiles match the *_for_profile() functions in src/integration.rs
@@ -87,6 +89,8 @@
               ./nix/modules/vault-pki.nix
               ./nix/modules/doctor.nix
               ./nix/modules/oidc-provider.nix
+              ./nix/modules/cluster.nix
+              ./nix/modules/cluster-output.nix
             ];
           };
       };
@@ -96,6 +100,17 @@
         networkZones = import ./nix/lib/network-zones.nix { lib = nixpkgs.lib; };
         pki = import ./nix/lib/pki.nix { lib = nixpkgs.lib; };
         systemdHardening = import ./nix/lib/systemd-hardening-lib.nix { lib = nixpkgs.lib; };
+
+        # Cluster orchestration libraries
+        cluster = rec {
+          constraints = import ./nix/lib/cluster-constraints.nix { lib = nixpkgs.lib; };
+          images = import ./nix/lib/cluster-images.nix { lib = nixpkgs.lib; };
+          resolver = import ./nix/lib/cluster-resolver.nix { lib = nixpkgs.lib; };
+          builder = import ./nix/lib/cluster-mkCluster.nix { lib = nixpkgs.lib; };
+
+          # Main entry point for creating clusters
+          inherit (builder) mkCluster;
+        };
       };
 
     in
