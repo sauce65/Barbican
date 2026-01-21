@@ -86,10 +86,11 @@ barbican/
 │   │   ├── network-zones.nix     # Network segmentation helpers
 │   │   ├── pki.nix               # Certificate generation scripts
 │   │   └── systemd-hardening-lib.nix # Systemd hardening helpers
-│   ├── profiles/                 # Pre-configured security profiles
-│   │   ├── minimal.nix           # Development/testing profile
-│   │   ├── standard.nix          # Staging/internal profile
-│   │   └── hardened.nix          # Production/FedRAMP profile
+│   ├── profiles/                 # FedRAMP security profiles (align with Rust ComplianceProfile)
+│   │   ├── development.nix       # Local dev only (no hardening)
+│   │   ├── fedramp-low.nix       # FedRAMP Low baseline
+│   │   ├── fedramp-moderate.nix  # FedRAMP Moderate baseline (most common)
+│   │   └── fedramp-high.nix      # FedRAMP High baseline (maximum security)
 │   ├── apps.nix                  # Flake apps (audit, vault-*, observability-*)
 │   ├── checks.nix                # Security checks and VM tests
 │   ├── package.nix               # Package definitions
@@ -286,12 +287,16 @@ barbican.nixosModules.doctor
 barbican.nixosModules.oidcProvider
 ```
 
-### Security Profiles
+### FedRAMP Security Profiles
 
-Pre-configured profiles for common deployment scenarios:
-- `barbican.nixosModules.minimal` - Development/testing (basic security)
-- `barbican.nixosModules.standard` - Staging (balanced security)
-- `barbican.nixosModules.hardened` - Production (FedRAMP-aligned)
+Pre-configured profiles aligned with Rust `ComplianceProfile` enum:
+- `barbican.nixosModules.development` - Local development only (no hardening)
+- `barbican.nixosModules.fedrampLow` - FedRAMP Low baseline (limited impact)
+- `barbican.nixosModules.fedrampModerate` - FedRAMP Moderate baseline (most common)
+- `barbican.nixosModules.fedrampHigh` - FedRAMP High baseline (maximum security)
+
+Each profile automatically sets `BARBICAN_COMPLIANCE_PROFILE` environment variable
+so Rust `*_for_profile()` functions return matching policies.
 
 ### Library Functions
 

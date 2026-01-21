@@ -58,10 +58,12 @@
         doctor = import ./nix/modules/doctor.nix;                      # CM-4, SI-6
         oidcProvider = import ./nix/modules/oidc-provider.nix;         # IA-2, AC-2
 
-        # Composite profiles
-        minimal = import ./nix/profiles/minimal.nix;
-        standard = import ./nix/profiles/standard.nix;
-        hardened = import ./nix/profiles/hardened.nix;
+        # FedRAMP Security Profiles (align with Rust ComplianceProfile enum)
+        # These profiles match the *_for_profile() functions in src/integration.rs
+        fedrampLow = import ./nix/profiles/fedramp-low.nix;           # Basic security
+        fedrampModerate = import ./nix/profiles/fedramp-moderate.nix; # Standard (most common)
+        fedrampHigh = import ./nix/profiles/fedramp-high.nix;         # Maximum security
+        development = import ./nix/profiles/development.nix;          # Local dev only
 
         # All modules combined (for easy import)
         all =

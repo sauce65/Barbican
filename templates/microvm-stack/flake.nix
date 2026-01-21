@@ -12,7 +12,7 @@
       system = "x86_64-linux";
       modules = [
         microvm.nixosModules.microvm
-        barbican.nixosModules.hardened
+        barbican.nixosModules.fedrampModerate  # Or fedrampHigh for maximum security
         {
           microvm = {
             hypervisor = "qemu";

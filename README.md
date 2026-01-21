@@ -377,10 +377,11 @@ Import individual modules, profiles, or use `all` for everything:
 # Import all modules
 barbican.nixosModules.all
 
-# Or import a pre-configured profile
-barbican.nixosModules.minimal   # Development/testing (basic security)
-barbican.nixosModules.standard  # Staging (balanced security)
-barbican.nixosModules.hardened  # Production (FedRAMP-aligned)
+# Or import a FedRAMP security profile (aligned with Rust ComplianceProfile)
+barbican.nixosModules.development     # Local development only (no hardening)
+barbican.nixosModules.fedrampLow      # FedRAMP Low baseline
+barbican.nixosModules.fedrampModerate # FedRAMP Moderate baseline (most common)
+barbican.nixosModules.fedrampHigh     # FedRAMP High baseline (maximum security)
 
 # Or import individual modules (camelCase naming)
 barbican.nixosModules.secureUsers
