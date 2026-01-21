@@ -27,8 +27,16 @@
 
 {
   imports = [
+    # Core modules (enabled for development)
     ../modules/secure-users.nix
     ../modules/time-sync.nix
+    # Additional modules (imported for option availability, disabled by default)
+    # Consumer apps can enable these if needed even in development
+    ../modules/secure-postgres.nix
+    ../modules/vault-pki.nix
+    ../modules/vm-firewall.nix
+    ../modules/hardened-ssh.nix
+    ../modules/kernel-hardening.nix
   ];
 
   barbican = {

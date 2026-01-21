@@ -21,11 +21,16 @@
 
 {
   imports = [
+    # Core modules (enabled for FedRAMP Low)
     ../modules/secure-users.nix
     ../modules/hardened-ssh.nix
     ../modules/kernel-hardening.nix
     ../modules/time-sync.nix
     ../modules/vm-firewall.nix
+    # Additional modules (imported for option availability, disabled by default)
+    # Consumer apps can enable these if needed
+    ../modules/secure-postgres.nix
+    ../modules/vault-pki.nix
   ];
 
   barbican = {
