@@ -53,6 +53,10 @@ let
     '') realmFiles)}
   '';
 
+  # Helper to safely convert nullable paths/strings to shell-safe values
+  toShellPath = v: if v == null then "" else toString v;
+  toShellStr = v: if v == null then "" else v;
+
   # Vault secret injection script
   vaultInjectScript = pkgs.writeShellScript "keycloak-vault-inject" ''
     set -euo pipefail
@@ -61,14 +65,18 @@ let
     VAULT_ADDR="${cfg.vault.address}"
 
     # Get Vault token (from file or AppRole)
-    if [ -f "${cfg.vault.tokenFile}" ]; then
-      VAULT_TOKEN=$(cat "${cfg.vault.tokenFile}")
-    elif [ -n "${cfg.vault.roleId}" ]; then
+    TOKEN_FILE="${toShellPath cfg.vault.tokenFile}"
+    ROLE_ID="${toShellStr cfg.vault.roleId}"
+    SECRET_ID_FILE="${toShellPath cfg.vault.secretIdFile}"
+
+    if [ -n "$TOKEN_FILE" ] && [ -f "$TOKEN_FILE" ]; then
+      VAULT_TOKEN=$(cat "$TOKEN_FILE")
+    elif [ -n "$ROLE_ID" ]; then
       # AppRole authentication
-      SECRET_ID=$(cat "${cfg.vault.secretIdFile}")
+      SECRET_ID=$(cat "$SECRET_ID_FILE")
       VAULT_TOKEN=$(${pkgs.curl}/bin/curl -sf -X POST \
         "$VAULT_ADDR/v1/auth/approle/login" \
-        -d "{\"role_id\":\"${cfg.vault.roleId}\",\"secret_id\":\"$SECRET_ID\"}" \
+        -d "{\"role_id\":\"$ROLE_ID\",\"secret_id\":\"$SECRET_ID\"}" \
         | ${pkgs.jq}/bin/jq -r '.auth.client_token')
     else
       echo "ERROR: No Vault authentication method configured"
@@ -119,8 +127,9 @@ let
     mkdir -p "$CERT_DIR"
 
     # Get Vault token
-    if [ -f "${cfg.vault.tokenFile}" ]; then
-      VAULT_TOKEN=$(cat "${cfg.vault.tokenFile}")
+    TOKEN_FILE="${toShellPath cfg.vault.tokenFile}"
+    if [ -n "$TOKEN_FILE" ] && [ -f "$TOKEN_FILE" ]; then
+      VAULT_TOKEN=$(cat "$TOKEN_FILE")
     else
       echo "ERROR: Vault token not available"
       exit 1
@@ -519,7 +528,7 @@ in {
         # Database
         db = cfg.database.type;
         db-url-host = cfg.database.host;
-        db-url-port = cfg.database.port;
+        db-url-port = toString cfg.database.port;
         db-url-database = cfg.database.name;
         db-username = cfg.database.user;
 
