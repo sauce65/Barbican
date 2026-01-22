@@ -21,8 +21,8 @@
 with lib;
 
 let
-  constraints = import ./cluster-constraints.nix { inherit lib; };
-  images = import ./cluster-images.nix { inherit lib; };
+  constraintsLib = import ./cluster-constraints.nix { inherit lib; };
+  imagesLib = import ./cluster-images.nix { inherit lib; };
 in rec {
   # ==========================================================================
   # Main Resolution Function
@@ -125,7 +125,7 @@ in rec {
 
       # Services that MUST be dedicated due to constraints (regardless of user preference)
       constraintDedicated = filter (svc:
-        constraints.requiresDedicated constraints svc.name
+        constraintsLib.requiresDedicated constraints svc.name
       ) enabledServices;
 
       # Build dedicated placements
@@ -181,7 +181,7 @@ in rec {
           # Check all pairs for sharing compatibility
           canAllShare = all (svc1:
             all (svc2:
-              svc1.name == svc2.name || constraints.canShare constraints svc1.name svc2.name
+              svc1.name == svc2.name || constraintsLib.canShare constraints svc1.name svc2.name
             ) groupServices
           ) groupServices;
 
@@ -254,9 +254,9 @@ in rec {
 
   validateTopology = placements: constraints:
     let
-      # Convert placements to format expected by constraints.validatePlacement
+      # Convert placements to format expected by constraintsLib.validatePlacement
       placementMap = mapAttrs (_: p: map (s: s.name) p.services) placements;
-      validation = constraints.validatePlacement {
+      validation = constraintsLib.validatePlacement {
         inherit constraints;
         placement = placementMap;
       };
