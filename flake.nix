@@ -57,6 +57,7 @@
         vaultPki = import ./nix/modules/vault-pki.nix;
         doctor = import ./nix/modules/doctor.nix;                      # CM-4, SI-6
         oidcProvider = import ./nix/modules/oidc-provider.nix;         # IA-2, AC-2
+        keycloakVm = import ./nix/modules/keycloak-vm.nix;            # IA-2, FAPI 2.0
         cluster = import ./nix/modules/cluster.nix;                    # SC-7, SC-32, AC-4
         clusterOutput = import ./nix/modules/cluster-output.nix;       # Cluster deployment artifacts
 
@@ -89,6 +90,7 @@
               ./nix/modules/vault-pki.nix
               ./nix/modules/doctor.nix
               ./nix/modules/oidc-provider.nix
+              ./nix/modules/keycloak-vm.nix
               ./nix/modules/cluster.nix
               ./nix/modules/cluster-output.nix
             ];
@@ -100,6 +102,12 @@
         networkZones = import ./nix/lib/network-zones.nix { lib = nixpkgs.lib; };
         pki = import ./nix/lib/pki.nix { lib = nixpkgs.lib; };
         systemdHardening = import ./nix/lib/systemd-hardening-lib.nix { lib = nixpkgs.lib; };
+
+        # Keycloak FAPI 2.0 libraries
+        keycloak = {
+          fapi = import ./nix/lib/keycloak-fapi.nix { lib = nixpkgs.lib; };
+          realm = import ./nix/lib/keycloak-realm-json.nix { lib = nixpkgs.lib; };
+        };
 
         # Cluster orchestration libraries
         cluster = rec {

@@ -120,10 +120,24 @@ with lib;
           colocateWith = services.keycloak.colocateWith or null;
           priority = services.keycloak.priority or 60;
           dependsOn = services.keycloak.dependsOn or [ "vault" "postgres" ];
-          healthCheck = services.keycloak.healthCheck or null;
-          ports = services.keycloak.ports or [{ port = 8080; protocol = "http"; public = true; }];
-          resources = services.keycloak.resources or {};
+          healthCheck = services.keycloak.healthCheck or {
+            type = "http";
+            target = "/health/ready";
+            interval = 30;
+            timeout = 10;
+            retries = 5;
+          };
+          ports = services.keycloak.ports or [
+            { port = 8443; protocol = "https"; public = true; }   # HTTPS (FAPI 2.0)
+            { port = 8080; protocol = "http"; public = false; }   # HTTP (dev only)
+          ];
+          resources = services.keycloak.resources or {
+            memory = "2G";
+            cpus = 2;
+          };
           config = services.keycloak.config or {};
+          # Keycloak-specific: realm definitions for data injection
+          realms = services.keycloak.realms or {};
         };
         observability = {
           enable = services.observability.enable or false;
