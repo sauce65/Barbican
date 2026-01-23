@@ -124,15 +124,17 @@ pub fn profile_from_env() -> ComplianceProfile {
 
 /// Create a session policy configured for the compliance profile.
 ///
-/// Each profile has different timeout and concurrent session requirements:
+/// Uses STIG-compliant values from `ComplianceProfile` methods:
+/// - Idle timeout from `profile.idle_timeout()` (STIG UBTU-22-412020: 15 min)
+/// - Concurrent session limits for AC-10 compliance
 ///
 /// | Profile | Idle Timeout | Max Lifetime | Concurrent Sessions (AC-10) |
 /// |---------|--------------|--------------|----------------------------|
-/// | FedRAMP Low | 30 min | 12 hours | 5 |
+/// | FedRAMP Low | 15 min | 12 hours | 5 |
 /// | FedRAMP Moderate | 15 min | 8 hours | 3 |
 /// | FedRAMP High | 10 min | 4 hours | 1 |
-/// | SOC 2 | 30 min | 8 hours | 3 |
-/// | Development | 30 min | 12 hours | unlimited |
+/// | SOC 2 | 15 min | 8 hours | 3 |
+/// | Development | 24 hours | 24 hours | unlimited |
 ///
 /// # Example
 ///
@@ -142,24 +144,26 @@ pub fn profile_from_env() -> ComplianceProfile {
 /// assert_eq!(policy.max_concurrent_sessions, Some(1));
 /// ```
 pub fn session_policy_for_profile(profile: ComplianceProfile) -> SessionPolicy {
+    let idle_timeout = profile.idle_timeout();
+
     match profile {
         ComplianceProfile::FedRampLow => SessionPolicy::builder()
-            .idle_timeout(Duration::from_secs(30 * 60)) // 30 minutes
+            .idle_timeout(idle_timeout)
             .max_lifetime(Duration::from_secs(12 * 60 * 60)) // 12 hours
             .max_concurrent_sessions(Some(5)) // AC-10
             .build(),
         ComplianceProfile::Development => SessionPolicy::builder()
-            .idle_timeout(Duration::from_secs(30 * 60)) // 30 minutes
-            .max_lifetime(Duration::from_secs(12 * 60 * 60)) // 12 hours
+            .idle_timeout(idle_timeout) // 24 hours for dev
+            .max_lifetime(Duration::from_secs(24 * 60 * 60)) // 24 hours
             .max_concurrent_sessions(None) // AC-10: unlimited for dev
             .build(),
         ComplianceProfile::FedRampModerate | ComplianceProfile::Soc2 => SessionPolicy::builder()
-            .idle_timeout(Duration::from_secs(15 * 60)) // 15 minutes
+            .idle_timeout(idle_timeout)
             .max_lifetime(Duration::from_secs(8 * 60 * 60)) // 8 hours
             .max_concurrent_sessions(Some(3)) // AC-10
             .build(),
         ComplianceProfile::FedRampHigh => SessionPolicy::builder()
-            .idle_timeout(Duration::from_secs(10 * 60)) // 10 minutes
+            .idle_timeout(idle_timeout)
             .max_lifetime(Duration::from_secs(4 * 60 * 60)) // 4 hours
             .max_concurrent_sessions(Some(1)) // AC-10: strictest
             .require_reauth_for_sensitive(true)
@@ -175,11 +179,13 @@ pub fn session_policy_for_profile(profile: ComplianceProfile) -> SessionPolicy {
 
 /// Create a password policy configured for the compliance profile.
 ///
+/// Uses STIG-compliant values from `ComplianceProfile` methods:
+/// - FedRAMP Low: 8 char min (NIST 800-63B with MFA compensation)
+/// - FedRAMP Moderate: 15 char min (STIG UBTU-22-611035)
+/// - FedRAMP High: 15 char min + breach database check
+///
 /// All profiles use NIST 800-63B compliant defaults which emphasize
 /// length over complexity (no arbitrary character requirements).
-/// - FedRAMP Low: 8 char min
-/// - FedRAMP Moderate/SOC 2: 12 char min, common password check
-/// - FedRAMP High: 15 char min, common password check, breach database
 ///
 /// # Example
 ///
@@ -188,19 +194,22 @@ pub fn session_policy_for_profile(profile: ComplianceProfile) -> SessionPolicy {
 /// policy.validate("MySecurePassword123!")?;
 /// ```
 pub fn password_policy_for_profile(profile: ComplianceProfile) -> PasswordPolicy {
+    let min_length = profile.min_password_length();
+    let requires_breach_check = profile.requires_breach_checking();
+
     match profile {
         ComplianceProfile::FedRampLow | ComplianceProfile::Development => PasswordPolicy::builder()
-            .min_length(8)
+            .min_length(min_length)
             .build(),
         ComplianceProfile::FedRampModerate | ComplianceProfile::Soc2 => PasswordPolicy::builder()
-            .min_length(12)
+            .min_length(min_length)
             .check_common_passwords(true)
             .disallow_username_in_password(true)
             .build(),
         ComplianceProfile::FedRampHigh => PasswordPolicy::builder()
-            .min_length(15)
+            .min_length(min_length)
             .check_common_passwords(true)
-            .check_breach_database(true)
+            .check_breach_database(requires_breach_check)
             .disallow_username_in_password(true)
             .disallow_email_in_password(true)
             .build(),
@@ -210,9 +219,10 @@ pub fn password_policy_for_profile(profile: ComplianceProfile) -> PasswordPolicy
 
 /// Create a lockout policy configured for the compliance profile.
 ///
-/// - FedRAMP Low: 5 attempts, 10 min lockout (relaxed)
-/// - FedRAMP Moderate/SOC 2: 3 attempts, 15 min lockout
-/// - FedRAMP High: 3 attempts, 30 min lockout, progressive (strict)
+/// Uses STIG-compliant values from `ComplianceProfile` methods:
+/// - All FedRAMP profiles: 3 attempts (STIG UBTU-22-411045)
+/// - FedRAMP Low/Moderate: 30 min lockout (STIG UBTU-22-411050)
+/// - FedRAMP High: 3 hour lockout (FedRAMP baseline, admin release)
 ///
 /// # Example
 ///
@@ -221,18 +231,30 @@ pub fn password_policy_for_profile(profile: ComplianceProfile) -> PasswordPolicy
 /// let tracker = LoginTracker::new(policy);
 /// ```
 pub fn lockout_policy_for_profile(profile: ComplianceProfile) -> LockoutPolicy {
+    let max_attempts = profile.max_login_attempts();
+    let lockout_duration = profile.lockout_duration();
+
     match profile {
-        ComplianceProfile::FedRampLow | ComplianceProfile::Development => LockoutPolicy::builder()
-            .max_attempts(5)
-            .lockout_duration(Duration::from_secs(10 * 60))
+        ComplianceProfile::FedRampLow => LockoutPolicy::builder()
+            .max_attempts(max_attempts)
+            .lockout_duration(lockout_duration)
+            .progressive_lockout(false)
+            .build(),
+        ComplianceProfile::Development => LockoutPolicy::builder()
+            .max_attempts(max_attempts)
+            .lockout_duration(lockout_duration) // 1 minute for dev
             .progressive_lockout(false)
             .build(),
         ComplianceProfile::FedRampModerate | ComplianceProfile::Soc2 => LockoutPolicy::builder()
-            .max_attempts(3)
-            .lockout_duration(Duration::from_secs(15 * 60))
+            .max_attempts(max_attempts)
+            .lockout_duration(lockout_duration)
             .progressive_lockout(true)
             .build(),
-        ComplianceProfile::FedRampHigh => LockoutPolicy::strict(),
+        ComplianceProfile::FedRampHigh => LockoutPolicy::builder()
+            .max_attempts(max_attempts)
+            .lockout_duration(lockout_duration) // 3 hours
+            .progressive_lockout(true)
+            .build(),
         ComplianceProfile::Custom => LockoutPolicy::relaxed(),
     }
 }
@@ -839,22 +861,32 @@ mod tests {
 
     #[test]
     fn test_profile_factory_functions() {
-        // Test session policy
+        // Test session policy - uses profile.idle_timeout() (STIG UBTU-22-412020)
         let session = session_policy_for_profile(ComplianceProfile::FedRampHigh);
-        assert_eq!(session.idle_timeout, Duration::from_secs(600));
+        assert_eq!(session.idle_timeout, Duration::from_secs(600)); // 10 min for High
         assert_eq!(session.max_lifetime, Duration::from_secs(4 * 60 * 60));
 
-        // Test password policy
+        let session_mod = session_policy_for_profile(ComplianceProfile::FedRampModerate);
+        assert_eq!(session_mod.idle_timeout, Duration::from_secs(15 * 60)); // 15 min STIG
+
+        // Test password policy - uses profile.min_password_length() (STIG UBTU-22-611035)
         let password = password_policy_for_profile(ComplianceProfile::FedRampHigh);
         assert_eq!(password.min_length, 15);
         assert!(password.check_common_passwords);
 
-        // Test lockout policy
+        // STIG requires 15 chars for Moderate too
+        let password_mod = password_policy_for_profile(ComplianceProfile::FedRampModerate);
+        assert_eq!(password_mod.min_length, 15); // STIG-compliant
+
+        // Test lockout policy - uses profile.max_login_attempts() (STIG UBTU-22-411045: 3 attempts)
         let lockout = lockout_policy_for_profile(ComplianceProfile::FedRampModerate);
         assert_eq!(lockout.max_attempts, 3);
+        assert_eq!(lockout.lockout_duration, Duration::from_secs(30 * 60)); // 30 min STIG
 
+        // STIG requires 3 attempts for all FedRAMP profiles
         let lockout_low = lockout_policy_for_profile(ComplianceProfile::FedRampLow);
-        assert_eq!(lockout_low.max_attempts, 5);
+        assert_eq!(lockout_low.max_attempts, 3); // STIG-compliant (was 5)
+        assert_eq!(lockout_low.lockout_duration, Duration::from_secs(30 * 60)); // 30 min STIG
 
         // Test encryption config
         let encryption = encryption_config_for_profile(ComplianceProfile::FedRampHigh);
