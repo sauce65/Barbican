@@ -96,7 +96,12 @@ barbican/
 │   │   ├── systemd-hardening.nix # Process isolation (AC-6, SC-39)
 │   │   ├── vault-pki.nix         # Certificate management (SC-12, SC-17)
 │   │   ├── doctor.nix            # Diagnostic health checks (CM-4, SI-6)
-│   │   └── oidc-provider.nix     # Keycloak OIDC setup (IA-2, AC-2)
+│   │   ├── oidc-provider.nix     # Keycloak OIDC setup (IA-2, AC-2)
+│   │   ├── keycloak-vm.nix       # Keycloak VM deployment (IA-2, FAPI 2.0)
+│   │   ├── cluster.nix           # Multi-VM cluster orchestration (SC-7, SC-32)
+│   │   ├── cluster-output.nix    # Cluster deployment artifacts
+│   │   ├── usb-protection.nix    # USBguard device control (CM-8, SC-41)
+│   │   └── mandatory-access-control.nix # AppArmor MAC (AC-3(3), AC-6)
 │   ├── tests/                    # NixOS VM tests
 │   ├── lib/                      # Nix library functions
 │   │   ├── network-zones.nix     # Network segmentation helpers
@@ -348,6 +353,9 @@ barbican.nixosModules.systemdHardening
 barbican.nixosModules.vaultPki
 barbican.nixosModules.doctor
 barbican.nixosModules.oidcProvider
+barbican.nixosModules.keycloakVm
+barbican.nixosModules.cluster
+barbican.nixosModules.clusterOutput
 barbican.nixosModules.usbProtection
 barbican.nixosModules.mandatoryAccessControl
 ```

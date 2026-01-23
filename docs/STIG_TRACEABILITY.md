@@ -182,6 +182,8 @@ In addition to Ubuntu mappings, Barbican implements controls from the [Anduril N
 | V-268081 | Lock after 3 failed attempts (15 min) | AC-7 | Medium | `nix/modules/secure-users.nix` |
 | V-268134 | Enforce 15-character password minimum | IA-5(1) | High | `src/password.rs:PasswordPolicy` |
 | V-268139 | Enable USBguard | CM-8 | Medium | `nix/modules/usb-protection.nix` |
+| V-268160 | Enable NX memory protection | SI-16 | Medium | `nix/modules/kernel-hardening.nix` |
+| V-268161 | Enable ASLR | SI-16 | Medium | `nix/modules/kernel-hardening.nix` |
 | V-268173 | Configure AppArmor MAC | AC-3 | Medium | `nix/modules/mandatory-access-control.nix` |
 
 ---
@@ -190,12 +192,13 @@ In addition to Ubuntu mappings, Barbican implements controls from the [Anduril N
 
 | Category | Count |
 |----------|-------|
-| **Total STIG Rules** | 54+ |
-| **CAT I (High)** | 16 |
-| **CAT II (Medium)** | 36 |
-| **CAT III (Low)** | 2 |
+| **Total Documented Rules** | 60+ |
+| **Rules in mappings.rs** | 41 |
+| **CAT I (High)** | 14 |
+| **CAT II (Medium)** | 26 |
+| **CAT III (Low)** | 1 |
 | **Rust Modules** | 10 |
-| **NixOS Modules** | 11 |
+| **NixOS Modules** | 19 |
 
 ## Using STIG Mappings in Code
 
