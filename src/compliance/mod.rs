@@ -45,6 +45,9 @@ pub mod artifacts;
 #[cfg(feature = "compliance-artifacts")]
 pub mod control_tests;
 
+#[cfg(feature = "stig")]
+pub mod stig;
+
 pub use config::{config, init, ComplianceConfig};
 pub use profile::ComplianceProfile;
 pub use validation::{ComplianceError, ComplianceReport, ComplianceValidator, ControlStatus};

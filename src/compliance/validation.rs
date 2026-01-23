@@ -758,7 +758,8 @@ mod tests {
         let config = ComplianceConfig::from_profile(ComplianceProfile::FedRampModerate);
         let mut validator = ComplianceValidator::new(&config);
 
-        validator.validate_password_policy(12, true);
+        // FedRAMP Moderate requires 15 character minimum per STIG UBTU-22-611035
+        validator.validate_password_policy(15, true);
         let report = validator.finish();
         assert!(report.is_compliant());
     }

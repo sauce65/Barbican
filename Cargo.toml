@@ -30,6 +30,8 @@ compliance-artifacts = ["dep:chrono", "dep:thiserror"]
 # FIPS 140-3 validated cryptography (SC-13 for FedRAMP High)
 # Uses AWS-LC which is FIPS 140-3 validated (Certificate #4631)
 fips = ["dep:aws-lc-rs"]
+# STIG loader for ComplianceAsCode content parsing
+stig = ["dep:serde_yaml"]
 
 [dependencies]
 # Web framework
@@ -92,6 +94,9 @@ thiserror = { version = "2.0", optional = true }
 # FIPS 140-3 validated cryptography (optional, for FedRAMP High)
 aws-lc-rs = { version = "1", optional = true, features = ["fips"] }
 
+# STIG/ComplianceAsCode parsing (optional)
+serde_yaml = { version = "0.9", optional = true }
+
 # CLI binaries
 [[bin]]
 name = "generate_observability_stack"
@@ -101,6 +106,18 @@ path = "src/bin/generate_observability_stack.rs"
 [[example]]
 name = "generate_compliance_report"
 required-features = ["compliance-artifacts"]
+
+[[example]]
+name = "stig_loader"
+required-features = ["stig"]
+
+[[example]]
+name = "stig_config_gen"
+required-features = ["stig"]
+
+[[example]]
+name = "verify_profiles"
+required-features = ["stig"]
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

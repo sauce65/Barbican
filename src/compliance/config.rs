@@ -273,7 +273,8 @@ mod tests {
         assert!(!config.require_hardware_mfa);
         assert!(!config.require_encryption_at_rest);
         assert_eq!(config.password_min_length, 8);
-        assert_eq!(config.max_login_attempts, 5);
+        // STIG UBTU-22-411045: 3 attempts for ALL FedRAMP levels
+        assert_eq!(config.max_login_attempts, 3);
         assert_eq!(config.min_retention_days, 30);
     }
 
@@ -283,7 +284,8 @@ mod tests {
         assert!(config.require_mfa);
         assert!(!config.require_hardware_mfa);
         assert!(config.require_encryption_at_rest);
-        assert_eq!(config.password_min_length, 12);
+        // STIG UBTU-22-611035: 15 characters for FedRAMP Moderate/High
+        assert_eq!(config.password_min_length, 15);
         assert_eq!(config.max_login_attempts, 3);
         assert_eq!(config.min_retention_days, 90);
     }
@@ -295,14 +297,16 @@ mod tests {
         assert!(config.require_hardware_mfa);
         assert!(config.require_encryption_at_rest);
         assert!(config.require_mtls);
-        assert_eq!(config.password_min_length, 14);
+        // STIG UBTU-22-611035: 15 characters for FedRAMP Moderate/High
+        assert_eq!(config.password_min_length, 15);
         assert_eq!(config.max_login_attempts, 3);
         assert_eq!(config.min_retention_days, 365);
+        // FedRAMP High: 10-minute max session and idle timeout
         assert_eq!(
             config.session_max_lifetime,
             Duration::from_secs(10 * 60)
         );
-        assert_eq!(config.session_idle_timeout, Duration::from_secs(5 * 60));
+        assert_eq!(config.session_idle_timeout, Duration::from_secs(10 * 60));
     }
 
     #[test]
@@ -310,7 +314,8 @@ mod tests {
         let config = ComplianceConfig::from_profile(ComplianceProfile::Soc2);
         assert!(config.require_mfa);
         assert!(config.require_encryption_at_rest);
-        assert_eq!(config.password_min_length, 12);
+        // SOC 2 aligns with FedRAMP Moderate: 15 characters
+        assert_eq!(config.password_min_length, 15);
         assert_eq!(config.min_retention_days, 90);
     }
 
