@@ -1,11 +1,15 @@
 # Barbican Security Module: Hardened Nginx Reverse Proxy
 #
-# Provides a NIST 800-53 compliant nginx reverse proxy with:
-# - SC-8: TLS 1.2+ only with approved cipher suites
-# - SC-8(1): NIST SP 800-52B cryptographic protection
-# - IA-3: mTLS client certificate authentication
-# - SC-5: Rate limiting for DoS protection
-# - AU-2, AU-3: Security event logging
+# STIG Implementation:
+#   CIS-NGINX-2.1: Use TLS 1.2 or greater (SC-8)
+#   CIS-NGINX-2.2: Use approved cipher suites (SC-8)
+#   CIS-NGINX-2.3: Set HSTS header (SC-8)
+#   CIS-NGINX-2.4: Disable insecure protocols (SC-8)
+#   CIS-NGINX-2.5: Enable client certificate validation (IA-3)
+#   CIS-NGINX-3.1: Rate limit connections (SC-5)
+#   CIS-NGINX-4.1: Log access and errors (AU-2, AU-3)
+#
+# NIST Controls: SC-8, SC-8(1), IA-3, SC-5, AU-2, AU-3
 #
 # Integrates with Vault PKI for automatic certificate management.
 { config, lib, pkgs, ... }:

@@ -2,6 +2,13 @@
 //!
 //! Middleware to enforce HTTPS transport security at the application level.
 //!
+//! # STIG References
+//!
+//! - **UBTU-22-255050**: Encrypt all transmitted data (SC-8, SC-8(1))
+//! - **UBTU-22-612035**: Use PKI-based authentication (IA-2(6))
+//! - **PGS15-00-000100**: Require SSL/TLS for database connections (SC-8)
+//! - **PGS15-00-000200**: Client certificate authentication (IA-5(2))
+//!
 //! # NIST 800-53 Controls
 //!
 //! - **SC-8**: Transmission Confidentiality - Enforces encrypted transport

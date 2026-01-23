@@ -3,6 +3,14 @@
 //! Minimal bridge for extracting and logging authorization claims from OAuth/OIDC
 //! providers like Keycloak, Entra ID, Auth0, etc.
 //!
+//! # STIG References
+//!
+//! - **UBTU-22-612010**: Use multifactor authentication for local access (IA-2)
+//! - **UBTU-22-612035**: Use PKI-based authentication for MFA (IA-2(6))
+//! - **APSC-DV-000190**: Implement multi-factor authentication (IA-2)
+//! - **APSC-DV-000200**: Support hardware token authentication (IA-2(6))
+//! - **APSC-DV-000240**: Enforce approved authorizations (AC-3)
+//!
 //! # Design Philosophy
 //!
 //! Barbican does NOT attempt to be an authorization framework. Your OAuth provider

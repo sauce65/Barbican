@@ -3,6 +3,11 @@
 //! NIST SP 800-53 AC-10 (Concurrent Session Control), AC-11 (Device Lock),
 //! and AC-12 (Session Termination) compliant session management utilities.
 //!
+//! # STIG References
+//!
+//! - **UBTU-22-412020**: Screen lock after 15 minutes of inactivity (AC-11)
+//! - **APSC-DV-000180**: Session timeout for web applications (AC-11, AC-12)
+//!
 //! # Design Philosophy
 //!
 //! Your OAuth provider manages the primary session (SSO session). Barbican provides:

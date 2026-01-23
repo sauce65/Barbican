@@ -129,7 +129,8 @@ barbican/
 ├── flake.nix                     # Main Nix flake
 ├── Cargo.toml                    # Workspace manifest
 └── docs/
-    └── AUDIT_GUIDE.md            # Compliance audit guide
+    ├── AUDIT_GUIDE.md            # Compliance audit guide
+    └── STIG_TRACEABILITY.md      # STIG rule to implementation mapping
 ```
 
 ## Design Philosophy
@@ -161,6 +162,44 @@ All components are configured for maximum security. Users opt-out of protections
 
 - **Application layer** (Rust): auth, validation, encryption, session management
 - **Infrastructure layer** (NixOS): firewall, kernel hardening, PostgreSQL, SSH
+
+## STIG Traceability
+
+Barbican maps all security controls to official STIG rule IDs for audit compliance:
+
+| STIG | Version | Scope |
+|------|---------|-------|
+| Ubuntu 22.04 LTS STIG | V2R3 | OS-level security (UBTU-22-*) |
+| PostgreSQL 15 STIG | V2R6 | Database security (PGS15-00-*) |
+| Application Security STIG | V5R3 | Application security (APSC-DV-*) |
+| CIS Nginx Benchmark | 2.0 | Reverse proxy (CIS-NGINX-*) |
+
+See `docs/STIG_TRACEABILITY.md` for the complete mapping matrix.
+
+### Programmatic Access
+
+```rust
+use barbican::compliance::stig::mappings::{get_rule, rules_for_nist};
+
+// Look up a STIG rule
+if let Some(rule) = get_rule("UBTU-22-411045") {
+    println!("{}: {}", rule.id, rule.title);
+}
+
+// Find rules for a NIST control
+let ac7_rules = rules_for_nist("AC-7");
+```
+
+### BarbicanParam STIG Mappings
+
+Each configuration parameter includes STIG traceability:
+
+```rust
+use barbican::compliance::stig::config_gen::BarbicanParam;
+
+let param = BarbicanParam::MaxLoginAttempts;
+let rules = param.stig_rules(); // ["UBTU-22-411045", "APSC-DV-000210"]
+```
 
 ## Key Patterns
 
@@ -309,6 +348,8 @@ barbican.nixosModules.systemdHardening
 barbican.nixosModules.vaultPki
 barbican.nixosModules.doctor
 barbican.nixosModules.oidcProvider
+barbican.nixosModules.usbProtection
+barbican.nixosModules.mandatoryAccessControl
 ```
 
 ### FedRAMP Security Profiles

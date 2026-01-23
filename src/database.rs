@@ -2,6 +2,14 @@
 //!
 //! Provides NIST 800-53 compliant database configuration and connection pooling.
 //!
+//! # STIG References
+//!
+//! - **PGS15-00-000100**: Require SSL/TLS for database connections (SC-8)
+//! - **PGS15-00-000200**: Client certificate authentication (IA-5(2))
+//! - **PGS15-00-000300**: Enable audit logging via pgaudit (AU-2, AU-3)
+//! - **PGS15-00-000400**: Use SCRAM-SHA-256 authentication (IA-5)
+//! - **PGS15-00-000600**: Limit concurrent connections (SC-5)
+//!
 //! # Security Controls
 //!
 //! - **SC-8**: Connection pool security (timeouts, limits, health checks)

@@ -1,6 +1,16 @@
 # Barbican Security Module: Hardened SSH
-# Addresses: CRT-010 (SSH without rate limiting)
-# Standards: NIST AC-7, IA-5(1), CIS 5.2.x
+#
+# STIG Implementation:
+#   UBTU-22-255010: Use FIPS 140-3 compliant cryptography (AC-17(2), SC-8)
+#   UBTU-22-255015: Use strong key exchange algorithms (SC-8)
+#   UBTU-22-255020: Use approved ciphers (SC-8)
+#   UBTU-22-255025: Use approved MACs (SC-8)
+#   UBTU-22-255030: Disable X11 forwarding (CM-7)
+#   UBTU-22-255035: Disable TCP forwarding (CM-7)
+#   UBTU-22-255040: Set client alive interval (SC-10)
+#
+# NIST Controls: AC-7, AC-17(2), SC-8, SC-10, CM-7, IA-5(1)
+# Legacy: CRT-010
 { config, lib, pkgs, ... }:
 
 with lib;

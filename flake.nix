@@ -60,6 +60,8 @@
         keycloakVm = import ./nix/modules/keycloak-vm.nix;            # IA-2, FAPI 2.0
         cluster = import ./nix/modules/cluster.nix;                    # SC-7, SC-32, AC-4
         clusterOutput = import ./nix/modules/cluster-output.nix;       # Cluster deployment artifacts
+        usbProtection = import ./nix/modules/usb-protection.nix;       # CM-8, SC-41: USBguard
+        mandatoryAccessControl = import ./nix/modules/mandatory-access-control.nix; # AC-3(3): AppArmor
 
         # FedRAMP Security Profiles (align with Rust ComplianceProfile enum)
         # These profiles match the *_for_profile() functions in src/integration.rs
@@ -93,6 +95,8 @@
               ./nix/modules/keycloak-vm.nix
               ./nix/modules/cluster.nix
               ./nix/modules/cluster-output.nix
+              ./nix/modules/usb-protection.nix
+              ./nix/modules/mandatory-access-control.nix
             ];
           };
       };

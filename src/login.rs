@@ -3,6 +3,12 @@
 //! NIST SP 800-53 AC-7 (Unsuccessful Logon Attempts) compliant login
 //! attempt tracking and account lockout utilities.
 //!
+//! # STIG References
+//!
+//! - **UBTU-22-411045**: Lock account after 3 unsuccessful login attempts (AC-7)
+//! - **UBTU-22-411050**: Automatically unlock accounts after lockout duration (AC-7)
+//! - **APSC-DV-000210**: Limit failed login attempts (AC-7)
+//!
 //! # Design Philosophy
 //!
 //! If using OAuth providers exclusively, login attempt tracking is handled

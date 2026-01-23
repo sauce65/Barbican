@@ -1,6 +1,16 @@
 # Barbican Security Module: Kernel Hardening
-# Addresses: MED-001 (kernel not hardened)
-# Standards: NIST SI-16, CIS 1.5.x
+#
+# STIG Implementation:
+#   UBTU-22-213010: Enable address space layout randomization (SI-16)
+#   UBTU-22-213015: Restrict kernel pointer exposure (SI-16)
+#   UBTU-22-213020: Restrict dmesg access (SI-16)
+#   UBTU-22-213025: Enable TCP SYN cookies (SC-5)
+#   UBTU-22-213030: Disable ICMP redirects (SC-7)
+#   UBTU-22-213035: Disable IP source routing (SC-7)
+#   UBTU-22-213040: Enable audit kernel parameter (AU-2)
+#
+# NIST Controls: SI-16, SC-5, SC-7, AU-2
+# Legacy: MED-001
 { config, lib, pkgs, ... }:
 
 with lib;

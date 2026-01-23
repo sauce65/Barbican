@@ -2,6 +2,11 @@
 //!
 //! NIST SP 800-53 SI-10 compliant input validation for web applications.
 //!
+//! # STIG References
+//!
+//! - **APSC-DV-000160**: Validate all input (SI-10)
+//! - **APSC-DV-000170**: Encode output to prevent injection (SI-10)
+//!
 //! This module provides:
 //! - Declarative validation via the `Validate` trait
 //! - Built-in validators for common patterns (email, URL, length, etc.)

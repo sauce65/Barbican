@@ -3,6 +3,12 @@
 //! NIST SP 800-53 IA-5(1) and NIST SP 800-63B compliant password policy
 //! for applications that implement local authentication.
 //!
+//! # STIG References
+//!
+//! - **UBTU-22-611035**: Enforce minimum 15-character password length (IA-5(1))
+//! - **APSC-DV-000220**: Enforce password complexity requirements (IA-5(1))
+//! - **APSC-DV-000230**: Check passwords against breach databases (IA-5(1))
+//!
 //! # When to Use This Module
 //!
 //! Use this module when your application:

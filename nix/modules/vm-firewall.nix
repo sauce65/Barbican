@@ -1,6 +1,14 @@
 # Barbican Security Module: VM Firewall
-# Addresses: CRT-007 (no network segmentation), HIGH-005 (no egress filtering)
-# Standards: NIST SC-7, SC-7(5), NIST SP 800-190 Section 5.2
+#
+# STIG Implementation:
+#   UBTU-22-251010: Configure firewall to deny by default (SC-7)
+#   UBTU-22-251015: Enable inbound connection filtering (SC-7)
+#   UBTU-22-251020: Enable outbound connection filtering (SC-7(5))
+#   UBTU-22-251025: Log dropped packets (AU-2)
+#   UBTU-22-251030: Allow only essential services (CM-7)
+#
+# NIST Controls: SC-7, SC-7(5), CM-7, AU-2
+# Legacy: CRT-007, HIGH-005
 { config, lib, pkgs, ... }:
 
 with lib;

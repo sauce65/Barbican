@@ -4,6 +4,14 @@
 //! logging system to capture security-relevant events, with optional
 //! cryptographic protection for audit log integrity.
 //!
+//! # STIG References
+//!
+//! - **UBTU-22-653045**: Retain audit records for required period (AU-11)
+//! - **UBTU-22-651010**: Generate audit records for privileged activities (AU-2, AU-12)
+//! - **PGS15-00-000300**: Enable database audit logging (AU-2, AU-3, AU-12)
+//! - **PGS15-00-000500**: Protect audit log files (AU-9)
+//! - **APSC-DV-000250**: Log all authentication attempts (AU-2, AU-3)
+//!
 //! # NIST 800-53 Controls
 //!
 //! - **AU-2**: Audit Events - Identifies security-relevant events

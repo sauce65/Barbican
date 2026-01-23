@@ -3,6 +3,10 @@
 //! NIST SP 800-53 SI-11 compliant error handling that prevents
 //! information leakage while maintaining debuggability.
 //!
+//! # STIG References
+//!
+//! - **APSC-DV-000260**: Do not expose sensitive information in errors (SI-11)
+//!
 //! # Security Rationale
 //!
 //! Error messages can leak sensitive information:

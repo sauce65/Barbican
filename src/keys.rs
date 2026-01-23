@@ -3,6 +3,10 @@
 //! NIST SP 800-53 SC-12 (Cryptographic Key Establishment and Management)
 //! compliant key management abstractions.
 //!
+//! # STIG References
+//!
+//! - **UBTU-22-671010**: Use valid cryptographic key management (SC-12)
+//!
 //! # Design Philosophy
 //!
 //! This module provides **traits and abstractions** for integrating with

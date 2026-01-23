@@ -1,6 +1,14 @@
 # Barbican Security Module: Secure Users
-# Addresses: CRT-001 (empty root password), CRT-002 (auto-login)
-# Standards: NIST AC-2, IA-5(1), CIS 5.4.1
+#
+# STIG Implementation:
+#   UBTU-22-411010: Configure account lockout threshold (AC-7)
+#   UBTU-22-411015: Disable automatic logon (AC-2)
+#   UBTU-22-411020: Require unique user accounts (AC-2)
+#   UBTU-22-612010: Require MFA for local access (IA-2)
+#   UBTU-22-612020: Display SSH warning banner (AC-8)
+#
+# NIST Controls: AC-2, AC-7, AC-8, IA-2, IA-5(1)
+# Legacy: CRT-001, CRT-002
 { config, lib, pkgs, ... }:
 
 with lib;

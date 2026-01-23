@@ -79,6 +79,79 @@ impl BarbicanParam {
         ]
     }
 
+    /// Get the STIG rule IDs this parameter maps to
+    ///
+    /// Returns official STIG rule identifiers from:
+    /// - Ubuntu 22.04 STIG V2R3 (UBTU-22-*)
+    /// - PostgreSQL 15 STIG V2R6 (PGS15-00-*)
+    /// - Application Security STIG V5R3 (APSC-DV-*)
+    pub fn stig_rules(&self) -> &'static [&'static str] {
+        match self {
+            // AC-11: Session Lock
+            Self::SessionIdleTimeout => &[
+                "UBTU-22-412020", // Ubuntu: Screen lock after 15 minutes
+                "APSC-DV-000180", // AppSec: Session timeout for web applications
+            ],
+            // AC-12: Session Termination
+            Self::SessionMaxLifetime => &[
+                "APSC-DV-000180", // AppSec: Session timeout for web applications
+            ],
+            Self::ReauthTimeout => &[
+                "APSC-DV-000180", // AppSec: Session timeout for web applications
+            ],
+            // AC-7: Unsuccessful Logon Attempts
+            Self::MaxLoginAttempts => &[
+                "UBTU-22-411045", // Ubuntu: Lock after 3 failed attempts
+                "APSC-DV-000210", // AppSec: Limit login attempts
+            ],
+            Self::LockoutDuration => &[
+                "UBTU-22-411050", // Ubuntu: Lockout duration
+            ],
+            // IA-2: Identification and Authentication
+            Self::RequireMfa => &[
+                "UBTU-22-612010", // Ubuntu: MFA for local users
+                "APSC-DV-000190", // AppSec: Use MFA
+            ],
+            Self::RequireHardwareMfa => &[
+                "APSC-DV-000200", // AppSec: Hardware token authentication
+            ],
+            // IA-5: Authenticator Management
+            Self::PasswordMinLength => &[
+                "UBTU-22-611035", // Ubuntu: Minimum password length 15 chars
+                "APSC-DV-000220", // AppSec: Enforce password complexity
+            ],
+            Self::PasswordCheckBreachDb => &[
+                "APSC-DV-000230", // AppSec: Check passwords against breach databases
+            ],
+            // SC-8: Transmission Confidentiality and Integrity
+            Self::RequireTls => &[
+                "UBTU-22-255050", // Ubuntu: Encrypt transmitted data
+                "PGS15-00-000100", // PostgreSQL: Require SSL/TLS connections
+            ],
+            Self::RequireMtls => &[
+                "UBTU-22-612035", // Ubuntu: PKI-based authentication
+                "PGS15-00-000200", // PostgreSQL: Client certificate authentication
+            ],
+            // SC-12: Cryptographic Key Establishment and Management
+            Self::KeyRotationInterval => &[
+                "UBTU-22-671010", // Ubuntu: Key rotation
+            ],
+            // SC-28: Protection of Information at Rest
+            Self::RequireEncryptionAtRest => &[
+                "UBTU-22-231010", // Ubuntu: Encrypt partitions
+            ],
+            // AC-4: Information Flow Enforcement
+            Self::RequireTenantIsolation => &[
+                "APSC-DV-000160", // AppSec: Enforce information flow policies
+            ],
+            // AU-11: Audit Record Retention
+            Self::MinRetentionDays => &[
+                "UBTU-22-653045", // Ubuntu: Audit log retention
+                "PGS15-00-000300", // PostgreSQL: Enable pgaudit logging
+            ],
+        }
+    }
+
     /// Get the NIST control this parameter maps to
     pub fn nist_control(&self) -> &'static str {
         match self {
@@ -534,5 +607,50 @@ mod tests {
         assert_eq!(BarbicanParam::MaxLoginAttempts.nist_control(), "AC-7");
         assert_eq!(BarbicanParam::MaxLoginAttempts.toml_key(), "max_login_attempts");
         assert!(!BarbicanParam::MaxLoginAttempts.description().is_empty());
+    }
+
+    #[test]
+    fn test_stig_rules_mappings() {
+        // Verify specific STIG rule mappings
+        let rules = BarbicanParam::MaxLoginAttempts.stig_rules();
+        assert!(rules.contains(&"UBTU-22-411045"));
+        assert!(rules.contains(&"APSC-DV-000210"));
+
+        let rules = BarbicanParam::SessionIdleTimeout.stig_rules();
+        assert!(rules.contains(&"UBTU-22-412020"));
+        assert!(rules.contains(&"APSC-DV-000180"));
+
+        let rules = BarbicanParam::RequireTls.stig_rules();
+        assert!(rules.contains(&"PGS15-00-000100"));
+    }
+
+    #[test]
+    fn test_all_params_have_stig_mappings() {
+        // Verify that every parameter has at least one STIG mapping
+        for param in BarbicanParam::all() {
+            let rules = param.stig_rules();
+            assert!(
+                !rules.is_empty(),
+                "Parameter {:?} has no STIG rule mappings",
+                param
+            );
+        }
+    }
+
+    #[test]
+    fn test_stig_rule_id_format() {
+        // Verify STIG rule IDs follow expected patterns
+        for param in BarbicanParam::all() {
+            for rule in param.stig_rules() {
+                let valid_prefix = rule.starts_with("UBTU-22-")
+                    || rule.starts_with("PGS15-")
+                    || rule.starts_with("APSC-DV-");
+                assert!(
+                    valid_prefix,
+                    "Invalid STIG rule ID format: {} for {:?}",
+                    rule, param
+                );
+            }
+        }
     }
 }

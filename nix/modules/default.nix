@@ -18,4 +18,6 @@
   vaultPki = import ./vault-pki.nix;  # SC-12, SC-17: PKI/Key Management
   doctor = import ./doctor.nix;  # CM-4, SI-6: Diagnostic health checks
   oidcProvider = import ./oidc-provider.nix;  # IA-2, AC-2: OIDC/Keycloak
+  usbProtection = import ./usb-protection.nix;  # CM-8, SC-41: USBguard device control
+  mandatoryAccessControl = import ./mandatory-access-control.nix;  # AC-3(3), AC-6: AppArmor MAC
 }

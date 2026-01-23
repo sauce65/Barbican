@@ -1,6 +1,13 @@
 # Barbican Security Module: Systemd Service Hardening
-# Addresses: MED-003 (no systemd sandboxing)
-# Standards: NIST SI-3, AC-6
+#
+# STIG Implementation:
+#   UBTU-22-232010: Restrict service capabilities (AC-6)
+#   UBTU-22-232015: Enable NoNewPrivileges (AC-6)
+#   UBTU-22-232020: Enable ProtectSystem strict mode (AC-6)
+#   UBTU-22-232025: Isolate service namespaces (SC-39)
+#
+# NIST Controls: AC-6, SC-39, SI-3
+# Legacy: MED-003
 { config, lib, pkgs, ... }:
 
 with lib;

@@ -3,6 +3,11 @@
 //! NIST SP 800-53 SC-28 compliant encryption utilities for protecting
 //! data at rest in applications and databases.
 //!
+//! # STIG References
+//!
+//! - **UBTU-22-231010**: Encrypt partitions containing sensitive data (SC-28)
+//! - **APSC-DV-000270**: Use FIPS 140-2 validated cryptography (SC-13)
+//!
 //! # Control Requirements
 //!
 //! - **SC-28**: "Protect the confidentiality and integrity of information at rest."

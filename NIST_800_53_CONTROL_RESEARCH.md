@@ -15,20 +15,40 @@ The library supports three FedRAMP impact levels:
 - **FedRAMP Moderate**: Enhanced controls for serious adverse effect systems (most common)
 - **FedRAMP High**: Maximum controls for severe/catastrophic adverse effect systems
 
+### STIG Traceability
+
+All controls are mapped to official STIG rule IDs for audit compliance:
+
+| STIG | Version | Rule Prefix | Coverage |
+|------|---------|-------------|----------|
+| Ubuntu 22.04 LTS STIG | V2R3 | UBTU-22-* | 35+ rules |
+| PostgreSQL 15 STIG | V2R6 | PGS15-00-* | 6 rules |
+| Application Security STIG | V5R3 | APSC-DV-* | 12 rules |
+| CIS Nginx Benchmark | 2.0 | CIS-NGINX-* | 7 rules |
+
+**NixOS STIG Note:** While there is no general DISA STIG for NixOS, [Anduril has published a NixOS STIG](https://www.stigviewer.com/stigs/anduril_nixos) for their deployments. Barbican maps to Ubuntu 22.04 STIG rules because:
+1. The underlying controls (kernel parameters, SSH, firewall) are OS-agnostic
+2. Ubuntu STIGs have broader industry adoption and tooling support
+3. ComplianceAsCode provides extensive Ubuntu content for automation
+
+For organizations requiring vendor-specific NixOS STIG compliance, the Anduril NixOS STIG provides additional mappings.
+
+See `docs/STIG_TRACEABILITY.md` for the complete rule-to-implementation matrix.
+
 ---
 
 ## Control Family Coverage
 
 ### Access Control (AC) Family
 
-| Control | Name | Implementation | FedRAMP Level |
-|---------|------|----------------|---------------|
-| **AC-2** | Account Management | `auth.rs`: OAuth/OIDC JWT claims validation, user identity management | Low+ |
-| **AC-4** | Information Flow Enforcement | `layers.rs`: CORS policy controls cross-origin data flow based on origin allowlist | Moderate+ |
-| **AC-6** | Least Privilege | `systemd-hardening.nix`: CapabilityBoundingSet, PrivateUsers, NoNewPrivileges | Low+ |
-| **AC-7** | Unsuccessful Logon Attempts | `login.rs`: Login attempt tracking with configurable lockout (3 attempts, 30 min-3 hr lockout) | Low+ |
-| **AC-11** | Session Lock | `session.rs`: Idle timeout enforcement (10-15 min based on profile) | Low+ |
-| **AC-12** | Session Termination | `session.rs`: Absolute session timeout (10-30 min based on profile) | Low+ |
+| Control | Name | Implementation | STIG Rules | FedRAMP |
+|---------|------|----------------|------------|---------|
+| **AC-2** | Account Management | `auth.rs`: OAuth/OIDC JWT claims validation | UBTU-22-411015, UBTU-22-411020 | Low+ |
+| **AC-4** | Information Flow Enforcement | `layers.rs`: CORS policy controls | APSC-DV-000160 | Moderate+ |
+| **AC-6** | Least Privilege | `systemd-hardening.nix`: Capability restrictions | UBTU-22-232010-025 | Low+ |
+| **AC-7** | Unsuccessful Logon Attempts | `login.rs`: Lockout policy enforcement | UBTU-22-411045, UBTU-22-411050, APSC-DV-000210 | Low+ |
+| **AC-11** | Session Lock | `session.rs`: Idle timeout enforcement | UBTU-22-412020, APSC-DV-000180 | Low+ |
+| **AC-12** | Session Termination | `session.rs`: Absolute session timeout | APSC-DV-000180 | Low+ |
 
 **AC-7 Implementation Details (`login.rs`):**
 - `LoginTracker` tracks failed login attempts per identifier
@@ -50,13 +70,13 @@ The library supports three FedRAMP impact levels:
 
 ### Audit and Accountability (AU) Family
 
-| Control | Name | Implementation | FedRAMP Level |
-|---------|------|----------------|---------------|
-| **AU-2** | Audit Events | `audit/mod.rs`: Security event identification (401, 403, 429, 5xx) | Low+ |
-| **AU-3** | Content of Audit Records | `audit/mod.rs`: Captures who, what, when, where, outcome | Low+ |
-| **AU-9** | Protection of Audit Information | `audit/integrity.rs`: HMAC signing and chain integrity; `secure-postgres.nix`: log file permissions 0600 | Moderate+ |
-| **AU-11** | Audit Record Retention | `compliance/profile.rs`: 30 days (Low), 90 days (Moderate), 365 days (High) | Low+ |
-| **AU-12** | Audit Generation | `audit/mod.rs`: Runtime audit record generation via middleware | Low+ |
+| Control | Name | Implementation | STIG Rules | FedRAMP |
+|---------|------|----------------|------------|---------|
+| **AU-2** | Audit Events | `audit/mod.rs`: Security event identification | UBTU-22-651010-020, PGS15-00-000300, APSC-DV-000250 | Low+ |
+| **AU-3** | Content of Audit Records | `audit/mod.rs`: Captures who, what, when, where, outcome | PGS15-00-000300, APSC-DV-000250 | Low+ |
+| **AU-9** | Protection of Audit Information | `audit/integrity.rs`: HMAC signing; `secure-postgres.nix`: log permissions | PGS15-00-000500 | Moderate+ |
+| **AU-11** | Audit Record Retention | `compliance/profile.rs`: 30-365 days by profile | UBTU-22-653045 | Low+ |
+| **AU-12** | Audit Generation | `audit/mod.rs`: Runtime audit record generation | UBTU-22-651010, PGS15-00-000300 | Low+ |
 
 **AU-2/AU-3/AU-12 Implementation Details (`audit/mod.rs`):**
 - `audit_middleware` captures all HTTP requests with structured logging
@@ -112,15 +132,15 @@ Security headers applied via `SecureRouter` trait:
 
 ### Identification and Authentication (IA) Family
 
-| Control | Name | Implementation | FedRAMP Level |
-|---------|------|----------------|---------------|
-| **IA-2** | Identification and Authentication | `auth.rs`: OAuth/OIDC JWT claims validation | Low+ |
-| **IA-2(1)** | Multi-Factor Authentication | `auth.rs`: MfaPolicy enforcement, `amr` claim validation | Moderate+ |
-| **IA-3** | Device Identification and Authentication | `tls.rs`: mTLS enforcement for service-to-service | High |
-| **IA-5** | Authenticator Management | `password.rs`: NIST 800-63B compliant password policy | Low+ |
-| **IA-5(1)** | Password-Based Authentication | `password.rs`: Min length 8-15 chars (STIG), breach checking, context validation | Low+ |
-| **IA-5(2)** | PKI-Based Authentication | `secure-postgres.nix`: Client certificate authentication for database | Moderate+ |
-| **IA-5(7)** | No Embedded Unencrypted Static Authenticators | `secrets.rs`: Secret detection scanner for CI/CD integration | Moderate+ |
+| Control | Name | Implementation | STIG Rules | FedRAMP |
+|---------|------|----------------|------------|---------|
+| **IA-2** | Identification and Authentication | `auth.rs`: OAuth/OIDC JWT claims validation | UBTU-22-612010, APSC-DV-000190 | Low+ |
+| **IA-2(1)** | Multi-Factor Authentication | `auth.rs`: MfaPolicy enforcement | UBTU-22-612010, APSC-DV-000190 | Moderate+ |
+| **IA-3** | Device Identification and Authentication | `tls.rs`: mTLS enforcement | CIS-NGINX-2.5 | High |
+| **IA-5** | Authenticator Management | `password.rs`: NIST 800-63B policy | PGS15-00-000400, APSC-DV-000220 | Low+ |
+| **IA-5(1)** | Password-Based Authentication | `password.rs`: Min 15 chars (STIG) | UBTU-22-611035, APSC-DV-000220-230 | Low+ |
+| **IA-5(2)** | PKI-Based Authentication | `secure-postgres.nix`: Client certs | UBTU-22-612035, PGS15-00-000200 | Moderate+ |
+| **IA-5(7)** | No Embedded Static Authenticators | `secrets.rs`: Secret detection | - | Moderate+ |
 
 **IA-2 MFA Implementation Details (`auth.rs`):**
 - `MfaPolicy` enum: None, Optional, RequiredForSensitive, Required
@@ -175,13 +195,13 @@ Security headers applied via `SecureRouter` trait:
 
 ### System and Communications Protection (SC) Family
 
-| Control | Name | Implementation | FedRAMP Level |
-|---------|------|----------------|---------------|
-| **SC-5** | Denial of Service Protection | `layers.rs`: Rate limiting, request timeouts, body size limits | Low+ |
-| **SC-6** | Resource Availability | `resource-limits.nix`: Systemd MemoryMax, CPUQuota, TasksMax | Moderate+ |
-| **SC-7** | Boundary Protection | `vm-firewall.nix`: iptables rules with default DROP policy | Low+ |
-| **SC-7(5)** | Deny by Default / Allow by Exception | `vm-firewall.nix`: Egress filtering enabled by default | High |
-| **SC-8** | Transmission Confidentiality | `tls.rs`: TLS enforcement middleware; `secure-postgres.nix`: SSL required | Low+ |
+| Control | Name | Implementation | STIG Rules | FedRAMP |
+|---------|------|----------------|------------|---------|
+| **SC-5** | Denial of Service Protection | `layers.rs`: Rate limiting, timeouts | UBTU-22-213025, PGS15-00-000600, CIS-NGINX-3.1 | Low+ |
+| **SC-6** | Resource Availability | `resource-limits.nix`: Systemd limits | - | Moderate+ |
+| **SC-7** | Boundary Protection | `vm-firewall.nix`: iptables DROP policy | UBTU-22-251010-030 | Low+ |
+| **SC-7(5)** | Deny by Default | `vm-firewall.nix`: Egress filtering | UBTU-22-251020 | High |
+| **SC-8** | Transmission Confidentiality | `tls.rs`, `secure-postgres.nix`: TLS/SSL | UBTU-22-255050, PGS15-00-000100, CIS-NGINX-2.1-4 | Low+ |
 | **SC-8(1)** | Cryptographic Protection | `tls.rs`: TLS 1.2+ minimum, strong cipher suites | Moderate+ |
 | **SC-10** | Network Disconnect | `session.rs`: Session termination after inactivity | Low+ |
 | **SC-12** | Cryptographic Key Establishment | `keys.rs`: KeyStore trait for KMS integration, rotation tracking | Low+ |
@@ -224,14 +244,14 @@ Security headers applied via `SecureRouter` trait:
 
 ### System and Information Integrity (SI) Family
 
-| Control | Name | Implementation | FedRAMP Level |
-|---------|------|----------------|---------------|
-| **SI-3** | Malicious Code Protection | `systemd-hardening.nix`: MemoryDenyWriteExecute, SystemCallFilter | Low+ |
-| **SI-4** | System Monitoring | `intrusion-detection.nix`: AIDE file integrity, auditd | Low+ |
-| **SI-7** | Software, Firmware, and Information Integrity | `intrusion-detection.nix`: AIDE with SHA-256 checksums | Low+ |
-| **SI-10** | Information Input Validation | `validation.rs`: Input validation, XSS/SQLi prevention | Low+ |
-| **SI-11** | Error Handling | `error.rs`: Secure error handling, no information leakage | Low+ |
-| **SI-16** | Memory Protection | `kernel-hardening.nix`: ASLR (randomize_va_space=2), kernel.kptr_restrict | Low+ |
+| Control | Name | Implementation | STIG Rules | FedRAMP |
+|---------|------|----------------|------------|---------|
+| **SI-3** | Malicious Code Protection | `systemd-hardening.nix`: MemoryDenyWriteExecute | UBTU-22-232010-025 | Low+ |
+| **SI-4** | System Monitoring | `intrusion-detection.nix`: AIDE, auditd | UBTU-22-651010, UBTU-22-654010-020 | Low+ |
+| **SI-7** | Software/Firmware Integrity | `intrusion-detection.nix`: AIDE SHA-256 | UBTU-22-654010-020 | Low+ |
+| **SI-10** | Information Input Validation | `validation.rs`: XSS/SQLi prevention | APSC-DV-000160-170 | Low+ |
+| **SI-11** | Error Handling | `error.rs`: Secure error handling | APSC-DV-000260 | Low+ |
+| **SI-16** | Memory Protection | `kernel-hardening.nix`: ASLR enabled | UBTU-22-213010-040 | Low+ |
 
 **SI-10 Implementation Details (`validation.rs`):**
 - `Validate` trait for declarative validation

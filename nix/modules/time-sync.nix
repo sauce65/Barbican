@@ -1,6 +1,12 @@
 # Barbican Security Module: Time Synchronization
-# Addresses: HIGH-011 (no time synchronization)
-# Standards: NIST AU-8, CIS 2.2.1.x
+#
+# STIG Implementation:
+#   UBTU-22-252010: Synchronize time with authoritative source (AU-8)
+#   UBTU-22-252015: Configure multiple time sources (AU-8(1))
+#   UBTU-22-252020: Enable NTP authentication when available (AU-8(1))
+#
+# NIST Controls: AU-8, AU-8(1)
+# Legacy: HIGH-011
 { config, lib, pkgs, ... }:
 
 with lib;

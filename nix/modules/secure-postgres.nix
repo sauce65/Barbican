@@ -1,6 +1,15 @@
 # Barbican Security Module: Secure PostgreSQL
-# Addresses: CRT-003 (trust auth), CRT-011 (listen all), CRT-012 (no audit), CRT-013 (no TLS)
-# Standards: NIST IA-5, IA-5(2), SC-8, AU-2, AU-9, CIS PostgreSQL
+#
+# STIG Implementation:
+#   PGS15-00-000100: Require SSL/TLS connections (SC-8)
+#   PGS15-00-000200: Client certificate authentication (IA-5(2))
+#   PGS15-00-000300: Enable pgaudit logging (AU-2)
+#   PGS15-00-000400: SCRAM-SHA-256 authentication (IA-5)
+#   PGS15-00-000500: Protect audit log files (AU-9)
+#   PGS15-00-000600: Limit concurrent connections (SC-5)
+#
+# NIST Controls: IA-5, IA-5(2), SC-8, AU-2, AU-9, SC-5, SC-39
+# Legacy: CRT-003, CRT-011, CRT-012, CRT-013
 { config, lib, pkgs, ... }:
 
 with lib;

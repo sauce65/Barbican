@@ -1,6 +1,16 @@
 # Barbican Security Module: Intrusion Detection
-# Addresses: CRT-015 (no intrusion detection), CRT-016 (VM images not integrity protected)
-# Standards: NIST SI-4, SI-7, FedRAMP SI-4
+#
+# STIG Implementation:
+#   UBTU-22-651010: Generate audit records for privileged activities (AU-2, AU-12)
+#   UBTU-22-651015: Audit all executions (AU-2)
+#   UBTU-22-651020: Audit file deletions (AU-2)
+#   UBTU-22-651025: Configure auditd to use disk buffer (AU-5)
+#   UBTU-22-654010: Enable AIDE file integrity monitoring (SI-7)
+#   UBTU-22-654015: Initialize AIDE database (SI-7)
+#   UBTU-22-654020: Configure AIDE for critical file monitoring (SI-7)
+#
+# NIST Controls: SI-4, SI-7, AU-2, AU-5, AU-12
+# Legacy: CRT-015, CRT-016
 { config, lib, pkgs, ... }:
 
 with lib;
