@@ -93,12 +93,17 @@ mod toml_writer;
 mod variable;
 mod verify;
 
+// Primary public API
 pub use error::{GeneratorError, Result};
-pub use generator::{CoverageReport, MappedParameter, StigConfigGenerator};
-pub use profile_parser::{ProfileCollection, StigProfile};
-pub use registry::{BarbicanParam, MappingRegistry, ParameterMapping, ValueTransform};
-pub use variable::{VariableCollection, VariableDefinition, VariableType, VariableValue};
-pub use verify::{
-    ComparisonStatus, DeviationCategory, DeviationJustification, ParameterComparison,
-    ProfileVerifier, VerificationReport,
-};
+pub use generator::{CoverageReport, StigConfigGenerator};
+pub use profile_parser::StigProfile;
+pub use registry::BarbicanParam;
+pub use variable::VariableDefinition;
+pub use verify::{ProfileVerifier, VerificationReport};
+
+// Internal types exposed for advanced use cases
+pub(crate) use generator::MappedParameter;
+pub(crate) use profile_parser::ProfileCollection;
+pub(crate) use registry::{MappingRegistry, ParameterMapping, ValueTransform};
+pub(crate) use variable::{VariableCollection, VariableType, VariableValue};
+pub(crate) use verify::{ComparisonStatus, DeviationCategory, DeviationJustification, ParameterComparison};
