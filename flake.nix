@@ -109,7 +109,7 @@
           realm = import ./nix/lib/keycloak-realm-json.nix { lib = nixpkgs.lib; };
         };
 
-        # Cluster orchestration libraries
+        # Cluster orchestration libraries (VM-centric, for QEMU deployments)
         cluster = rec {
           constraints = import ./nix/lib/cluster-constraints.nix { lib = nixpkgs.lib; };
           images = import ./nix/lib/cluster-images.nix { lib = nixpkgs.lib; };
@@ -119,6 +119,11 @@
           # Main entry point for creating clusters
           inherit (builder) mkCluster;
         };
+
+        # Topology validation libraries (deployment-target agnostic)
+        # Use these for validating EC2, bare-metal, or any multi-machine topology
+        topology = import ./nix/lib/topology-validator.nix { lib = nixpkgs.lib; };
+        isolation = import ./nix/lib/isolation-boundaries.nix { lib = nixpkgs.lib; };
       };
 
     in
