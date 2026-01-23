@@ -72,14 +72,16 @@ async fn main() {
 
 ### Compliance Profiles
 
-Barbican supports three FedRAMP impact levels with pre-configured security settings:
+Barbican supports three FedRAMP impact levels with pre-configured security settings derived from NIST 800-53 Rev 5 and DISA STIGs:
 
 | Setting | Low | Moderate | High |
 |---------|-----|----------|------|
 | Session Timeout | 30 min | 15 min | 10 min |
-| Idle Timeout | 15 min | 10 min | 5 min |
+| Idle Timeout | 15 min | 15 min | 10 min |
 | MFA Required | Privileged only | All users | All users |
-| Min Password Length | 8 chars | 12 chars | 14 chars |
+| Min Password Length | 8 chars | 15 chars | 15 chars |
+| Max Login Attempts | 3 | 3 | 3 |
+| Lockout Duration | 30 min | 30 min | 3 hours |
 | mTLS Required | No | No | Yes |
 | Encryption at Rest | No | Yes | Yes |
 | Key Rotation | 90 days | 90 days | 30 days |
@@ -214,6 +216,7 @@ barbican = {
 | `hibp` | Have I Been Pwned password checking (IA-5(1)) |
 | `compliance-artifacts` | Generate auditor-verifiable test reports |
 | `fips` | FIPS 140-3 validated crypto via AWS-LC (SC-13) |
+| `stig` | STIG/ComplianceAsCode parsing and config generation |
 
 ## Examples
 

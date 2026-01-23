@@ -40,15 +40,17 @@ Barbican is a security infrastructure library that implements NIST SP 800-53 Rev
 
 ### Profile Requirements Quick Reference
 
+Values derived from NIST 800-53 Rev 5 and DISA STIGs.
+
 | Control | FedRAMP Low | FedRAMP Moderate | FedRAMP High |
 |---------|-------------|------------------|--------------|
-| AC-7: Max login attempts | 5 | 3 | 3 |
-| AC-7: Lockout duration | 15 min | 30 min | 30 min |
-| AC-11: Idle timeout | 15 min | 10 min | 5 min |
+| AC-7: Max login attempts | 3 | 3 | 3 |
+| AC-7: Lockout duration | 30 min | 30 min | 3 hours |
+| AC-11: Idle timeout | 15 min | 15 min | 10 min |
 | AC-12: Session max | 30 min | 15 min | 10 min |
 | AU-11: Log retention | 30 days | 90 days | 365 days |
 | IA-2(1): MFA required | Privileged only | All users | All users |
-| IA-5: Password min length | 8 chars | 12 chars | 14 chars |
+| IA-5: Password min length | 8 chars | 15 chars | 15 chars |
 | SC-7: Egress filtering | Optional | Recommended | Required |
 | SC-8: mTLS | Optional | Optional | Required |
 | SC-13: FIPS crypto | Optional | Recommended | Required |
@@ -656,9 +658,9 @@ For each control, verify:
 
 | Profile | Max Attempts | Lockout Duration |
 |---------|--------------|------------------|
-| Low | 5 | 15 min |
+| Low | 3 | 30 min |
 | Moderate | 3 | 30 min |
-| High | 3 | 30 min |
+| High | 3 | 3 hours |
 
 **Verification:**
 ```bash
@@ -686,8 +688,8 @@ cat compliance-artifacts/*.json | jq '.artifacts[] | select(.control_id == "AC-7
 | Profile | Idle Timeout |
 |---------|--------------|
 | Low | 15 min (900s) |
-| Moderate | 10 min (600s) |
-| High | 5 min (300s) |
+| Moderate | 15 min (900s) |
+| High | 10 min (600s) |
 
 **Verification:**
 ```bash
@@ -828,13 +830,13 @@ cat compliance-artifacts/*.json | jq '.artifacts[] | select(.control_id == "IA-2
 
 #### IA-5: Authenticator Management (Password Policy)
 
-**Requirement:** Enforce password requirements per NIST 800-63B.
+**Requirement:** Enforce password requirements per NIST 800-63B and DISA STIG.
 
 | Profile | Min Length |
 |---------|------------|
 | Low | 8 chars |
-| Moderate | 12 chars |
-| High | 14 chars |
+| Moderate | 15 chars |
+| High | 15 chars |
 
 **Verification:**
 ```bash
@@ -1198,8 +1200,8 @@ curl -s -H "Authorization: Bearer $TOKEN" https://<host>/api/protected
 ```
 
 **Checklist:**
-- [ ] Idle timeout enforced (5 min for High, 10 min for Moderate)
-- [ ] Max session lifetime enforced (10 min for High, 15 min for Moderate)
+- [ ] Idle timeout enforced (10 min for High, 15 min for Moderate/Low)
+- [ ] Max session lifetime enforced (10 min for High, 15 min for Moderate, 30 min for Low)
 - [ ] Session invalidated after timeout
 
 ### Step 5.6: Verify Login Lockout (AC-7)
@@ -1223,9 +1225,9 @@ sudo journalctl -u <app-name> --since "5 minutes ago" | grep -i "lockout\|locked
 ```
 
 **Checklist:**
-- [ ] Account locked after 3 failed attempts (Moderate/High) or 5 (Low)
+- [ ] Account locked after 3 failed attempts (all profiles)
 - [ ] Lockout event logged
-- [ ] Lockout duration correct (30 min for Moderate/High)
+- [ ] Lockout duration correct (30 min for Low/Moderate, 3 hours for High)
 
 ### Step 5.7: Verify Audit Logging (AU-2, AU-3, AU-9)
 

@@ -27,13 +27,15 @@ Barbican is a **security compliance library** implementing **56+ NIST SP 800-53 
 
 ## FedRAMP Profile Defaults
 
+Values derived from NIST 800-53 Rev 5 and DISA STIGs (Ubuntu 22.04 STIG).
+
 | Control | Low | Moderate | High |
 |---------|:---:|:--------:|:----:|
 | Session timeout | 30 min | 15 min | 10 min |
-| Idle timeout | 15 min | 10 min | 5 min |
+| Idle timeout | 15 min | 15 min | 10 min |
 | MFA required | Privileged | All users | All users |
-| Password minimum | 8 chars | 12 chars | 14 chars |
-| Account lockout | 5 tries/15 min | 3 tries/30 min | 3 tries/30 min |
+| Password minimum | 8 chars | 15 chars | 15 chars |
+| Account lockout | 3 tries/30 min | 3 tries/30 min | 3 tries/3 hr |
 | Encryption at rest | Optional | Required | Required |
 | FIPS cryptography | Optional | Recommended | Required |
 

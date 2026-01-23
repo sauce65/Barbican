@@ -26,16 +26,16 @@ The library supports three FedRAMP impact levels:
 | **AC-2** | Account Management | `auth.rs`: OAuth/OIDC JWT claims validation, user identity management | Low+ |
 | **AC-4** | Information Flow Enforcement | `layers.rs`: CORS policy controls cross-origin data flow based on origin allowlist | Moderate+ |
 | **AC-6** | Least Privilege | `systemd-hardening.nix`: CapabilityBoundingSet, PrivateUsers, NoNewPrivileges | Low+ |
-| **AC-7** | Unsuccessful Logon Attempts | `login.rs`: Login attempt tracking with configurable lockout (3-5 attempts, 15-30 min lockout) | Low+ |
-| **AC-11** | Session Lock | `session.rs`: Idle timeout enforcement (5-15 min based on profile) | Low+ |
+| **AC-7** | Unsuccessful Logon Attempts | `login.rs`: Login attempt tracking with configurable lockout (3 attempts, 30 min-3 hr lockout) | Low+ |
+| **AC-11** | Session Lock | `session.rs`: Idle timeout enforcement (10-15 min based on profile) | Low+ |
 | **AC-12** | Session Termination | `session.rs`: Absolute session timeout (10-30 min based on profile) | Low+ |
 
 **AC-7 Implementation Details (`login.rs`):**
 - `LoginTracker` tracks failed login attempts per identifier
 - `LockoutPolicy` configures max attempts and lockout duration
 - Middleware automatically enforces on auth endpoints (`/login`, `/auth/token`, `/oauth/token`)
-- FedRAMP Low: 5 attempts, 15 min lockout
-- FedRAMP Moderate/High: 3 attempts, 30 min lockout
+- FedRAMP Low/Moderate: 3 attempts, 30 min lockout
+- FedRAMP High: 3 attempts, 3 hour lockout (admin release)
 
 **AC-11/AC-12 Implementation Details (`session.rs`):**
 - `SessionPolicy` builder pattern for timeout configuration
@@ -43,8 +43,8 @@ The library supports three FedRAMP impact levels:
 - Enforcement middleware for Axum integration
 - Profile-based timeouts:
   - FedRAMP Low: 30 min session / 15 min idle
-  - FedRAMP Moderate: 15 min session / 10 min idle
-  - FedRAMP High: 10 min session / 5 min idle
+  - FedRAMP Moderate: 15 min session / 15 min idle
+  - FedRAMP High: 10 min session / 10 min idle
 
 ---
 
@@ -118,7 +118,7 @@ Security headers applied via `SecureRouter` trait:
 | **IA-2(1)** | Multi-Factor Authentication | `auth.rs`: MfaPolicy enforcement, `amr` claim validation | Moderate+ |
 | **IA-3** | Device Identification and Authentication | `tls.rs`: mTLS enforcement for service-to-service | High |
 | **IA-5** | Authenticator Management | `password.rs`: NIST 800-63B compliant password policy | Low+ |
-| **IA-5(1)** | Password-Based Authentication | `password.rs`: Min length 8-14 chars, breach checking, context validation | Low+ |
+| **IA-5(1)** | Password-Based Authentication | `password.rs`: Min length 8-15 chars (STIG), breach checking, context validation | Low+ |
 | **IA-5(2)** | PKI-Based Authentication | `secure-postgres.nix`: Client certificate authentication for database | Moderate+ |
 | **IA-5(7)** | No Embedded Unencrypted Static Authenticators | `secrets.rs`: Secret detection scanner for CI/CD integration | Moderate+ |
 
@@ -132,7 +132,7 @@ Security headers applied via `SecureRouter` trait:
 
 **IA-5(1) Password Policy (`password.rs`):**
 - NIST 800-63B compliant validation
-- Minimum length: 8 (Low), 12 (Moderate), 14 (High)
+- Minimum length: 8 (Low), 15 (Moderate/High per DISA STIG UBTU-22-611035)
 - Breach database checking (Moderate+)
 - Context validation (username, email in password)
 - No arbitrary complexity requirements (per NIST guidance)
@@ -415,12 +415,14 @@ Controls: SC-12, SC-12(1), SC-17, AU-2, AU-12, IA-5(2)
 
 ## Compliance Profile Matrix
 
-| Profile | Session Timeout | Idle Timeout | MFA Required | Min Password | Key Rotation | mTLS | Encryption at Rest |
-|---------|-----------------|--------------|--------------|--------------|--------------|------|-------------------|
-| FedRAMP Low | 30 min | 15 min | No* | 8 chars | 90 days | No | No |
-| FedRAMP Moderate | 15 min | 10 min | Yes | 12 chars | 90 days | No | Yes |
-| FedRAMP High | 10 min | 5 min | Yes | 14 chars | 30 days | Yes | Yes |
-| SOC 2 | 15 min | 10 min | Yes | 12 chars | 90 days | No | Yes |
+Values derived from NIST 800-53 Rev 5 and DISA STIGs.
+
+| Profile | Session Timeout | Idle Timeout | MFA Required | Min Password | Max Attempts | Lockout | Key Rotation | mTLS | Encryption at Rest |
+|---------|-----------------|--------------|--------------|--------------|--------------|---------|--------------|------|-------------------|
+| FedRAMP Low | 30 min | 15 min | No* | 8 chars | 3 | 30 min | 90 days | No | No |
+| FedRAMP Moderate | 15 min | 15 min | Yes | 15 chars | 3 | 30 min | 90 days | No | Yes |
+| FedRAMP High | 10 min | 10 min | Yes | 15 chars | 3 | 3 hr | 30 days | Yes | Yes |
+| SOC 2 | 15 min | 15 min | Yes | 15 chars | 3 | 30 min | 90 days | No | Yes |
 
 *FedRAMP Low requires MFA only for privileged users
 

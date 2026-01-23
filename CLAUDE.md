@@ -46,7 +46,23 @@ barbican/
 │   │   └── integrity.rs          # HMAC chain for tamper detection (AU-9)
 │   ├── compliance/               # Compliance profile system
 │   │   ├── mod.rs                # Profile exports
-│   │   └── profile.rs            # FedRAMP profile definitions
+│   │   ├── profile.rs            # FedRAMP profile definitions
+│   │   └── stig/                 # STIG/ComplianceAsCode integration
+│   │       ├── mod.rs            # STIG module exports
+│   │       ├── loader.rs         # STIG YAML loader
+│   │       ├── control.rs        # Control definitions
+│   │       ├── rule.rs           # Rule parsing
+│   │       ├── types.rs          # NIST control types
+│   │       ├── validator.rs      # STIG compliance validation
+│   │       └── config_gen/       # Configuration generation from STIG
+│   │           ├── mod.rs        # Config gen exports
+│   │           ├── generator.rs  # Main generator pipeline
+│   │           ├── variable.rs   # Variable definition parser
+│   │           ├── profile_parser.rs # Profile parser
+│   │           ├── registry.rs   # NIST → Barbican mapping
+│   │           ├── verify.rs     # Profile verification
+│   │           ├── toml_writer.rs # TOML output
+│   │           └── error.rs      # Error types
 │   └── observability/            # Logging/metrics subsystem
 │       └── mod.rs                # Loki, OTLP, Prometheus integration
 │
@@ -168,10 +184,18 @@ let app = Router::new()
 Each module has `::fedramp_low()`, `::fedramp_moderate()`, `::fedramp_high()` constructors:
 
 ```rust
-let session_policy = SessionPolicy::fedramp_moderate(); // 15 min session, 10 min idle
-let password_policy = PasswordPolicy::fedramp_moderate(); // 12 char min
+let session_policy = SessionPolicy::fedramp_moderate(); // 15 min session, 15 min idle
+let password_policy = PasswordPolicy::fedramp_moderate(); // 15 char min (STIG)
 let lockout_policy = LockoutPolicy::fedramp_moderate(); // 3 attempts, 30 min
 ```
+
+Profile values are derived from NIST 800-53 Rev 5 and DISA STIGs:
+
+| Profile | Session | Idle | Password | Attempts | Lockout |
+|---------|---------|------|----------|----------|---------|
+| Low | 30m | 15m | 8 | 3 | 30m |
+| Moderate | 15m | 15m | 15 | 3 | 30m |
+| High | 10m | 10m | 15 | 3 | 3h |
 
 ### NixOS Module Options
 
@@ -338,6 +362,7 @@ In `Cargo.toml`:
 | `hibp` | Have I Been Pwned password checking |
 | `compliance-artifacts` | Generate audit evidence files |
 | `fips` | FIPS 140-3 crypto via AWS-LC |
+| `stig` | STIG/ComplianceAsCode parsing and config generation |
 
 ## Common Tasks
 
