@@ -484,8 +484,25 @@ nix flake check
 
 ## Documentation
 
+### Getting Started
+- [Integration Guide](docs/INTEGRATION_GUIDE.md) - Step-by-step guide to adding Barbican to your app
+- [API Reference](docs/API_REFERENCE.md) - Complete API documentation
+- [Configuration Reference](docs/CONFIGURATION_REFERENCE.md) - All barbican.toml options
+- [Development Mode](docs/DEVELOPMENT_MODE.md) - Running locally without full security stack
+- [Troubleshooting](docs/TROUBLESHOOTING.md) - Common issues and solutions
+
+### Compliance
 - [Audit Guide](docs/AUDIT_GUIDE.md) - Step-by-step compliance audit guide
+- [STIG Traceability](docs/STIG_TRACEABILITY.md) - STIG rule to implementation mapping
 - [NIST Control Research](NIST_800_53_CONTROL_RESEARCH.md) - Detailed control mapping
+
+### Examples
+- [Realistic App](examples/realistic-app/) - Complete task management API with all features
+- [FedRAMP Low](examples/fedramp-low/) - Basic security example
+- [FedRAMP Moderate](examples/fedramp-moderate/) - Standard security example
+- [FedRAMP High](examples/fedramp-high/) - Maximum security example
+
+### Internal
 - [LLM Context](CLAUDE.md) - AI assistant context for this codebase
 
 ## License
