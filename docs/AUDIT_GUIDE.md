@@ -12,10 +12,15 @@ A step-by-step guide for auditors assessing NIST SP 800-53 Rev 5 compliance of s
 6. [Phase 3: Configuration Verification](#phase-3-configuration-verification)
 7. [Phase 4: Control Family Audits](#phase-4-control-family-audits)
 8. [Phase 5: Production Runtime Verification](#phase-5-production-runtime-verification)
-9. [Phase 6: Evidence Collection](#phase-6-evidence-collection)
-10. [Phase 7: Report Generation](#phase-7-report-generation)
-11. [Control Reference](#control-reference)
-12. [Appendix](#appendix)
+9. [Phase 5a: Penetration Testing](#phase-5a-penetration-testing)
+10. [Phase 5b: Database Security Audit](#phase-5b-database-security-audit)
+11. [Phase 6: Evidence Collection](#phase-6-evidence-collection)
+12. [Phase 7: Report Generation](#phase-7-report-generation)
+13. [Control Reference](#control-reference)
+14. [STIG Traceability Matrix](#stig-traceability-matrix)
+15. [Independent Verification Tools](#independent-verification-tools)
+16. [Appendix A: DPE-Specific Audit Procedures](#appendix-a-dpe-specific-audit-procedures)
+17. [Appendix B: CI/CD Integration](#appendix-b-cicd-integration)
 
 ---
 
@@ -40,20 +45,28 @@ Barbican is a security infrastructure library that implements NIST SP 800-53 Rev
 
 ### Profile Requirements Quick Reference
 
-Values derived from NIST 800-53 Rev 5 and DISA STIGs.
+Values derived from NIST 800-53 Rev 5 and DISA STIGs. STIG references enable direct traceability to DoD security requirements.
 
-| Control | FedRAMP Low | FedRAMP Moderate | FedRAMP High |
-|---------|-------------|------------------|--------------|
-| AC-7: Max login attempts | 3 | 3 | 3 |
-| AC-7: Lockout duration | 30 min | 30 min | 3 hours |
-| AC-11: Idle timeout | 15 min | 15 min | 10 min |
-| AC-12: Session max | 30 min | 15 min | 10 min |
-| AU-11: Log retention | 30 days | 90 days | 365 days |
-| IA-2(1): MFA required | Privileged only | All users | All users |
-| IA-5: Password min length | 8 chars | 15 chars | 15 chars |
-| SC-7: Egress filtering | Optional | Recommended | Required |
-| SC-8: mTLS | Optional | Optional | Required |
-| SC-13: FIPS crypto | Optional | Recommended | Required |
+| Control | STIG Reference | FedRAMP Low | FedRAMP Moderate | FedRAMP High |
+|---------|----------------|-------------|------------------|--------------|
+| AC-7: Max login attempts | UBTU-22-411045 | 3 | 3 | 3 |
+| AC-7: Lockout duration | UBTU-22-411050 | 30 min | 30 min | 3 hours |
+| AC-10: Concurrent sessions | APSC-DV-000200 | 5 | 3 | 1 |
+| AC-11: Idle timeout | UBTU-22-412020 | 15 min | 15 min | 10 min |
+| AC-12: Session max | APSC-DV-000180 | 30 min | 15 min | 10 min |
+| AU-11: Log retention | UBTU-22-653045 | 30 days | 90 days | 365 days |
+| IA-2(1): MFA required | UBTU-22-612010 | Privileged only | All users | All users |
+| IA-5: Password min length | UBTU-22-611035 | 8 chars | 15 chars | 15 chars |
+| SC-7: Egress filtering | UBTU-22-251010 | Optional | Recommended | Required |
+| SC-8: TLS required | UBTU-22-255050 | Required | Required | Required |
+| SC-8(1): mTLS | UBTU-22-612035 | Optional | Optional | Required |
+| SC-13: FIPS crypto | FIPS 140-3 | Optional | Recommended | Required |
+| SC-28: Encryption at rest | UBTU-22-231010 | Optional | Required | Required |
+
+**STIG Sources:**
+- Ubuntu 22.04 LTS STIG V2R3 (UBTU-22-*)
+- Application Security STIG V5R3 (APSC-DV-*)
+- PostgreSQL 15 STIG V2R6 (PGS15-00-*)
 
 ---
 
@@ -1353,6 +1366,570 @@ lsmod | wc -l  # Document count for baseline
 
 ---
 
+## Phase 5a: Penetration Testing
+
+This phase performs **active attack simulation** to verify controls actually prevent exploitation.
+Configuration verification (Phase 5) confirms controls exist; penetration testing confirms they work.
+
+**IMPORTANT:** Obtain written authorization before penetration testing. Document all test activities.
+
+### Prerequisites
+
+- [ ] Written authorization from system owner
+- [ ] Test credentials (non-production or isolated environment preferred)
+- [ ] Security testing tools installed (see [Independent Verification Tools](#independent-verification-tools))
+- [ ] Network access to target system
+
+### Step 5a.1: Input Validation Testing (SI-10)
+
+**Objective:** Verify XSS, SQLi, and command injection are blocked.
+
+```bash
+# === XSS Testing ===
+# Test reflected XSS in query parameters
+curl -s "https://<host>/api/search?q=<script>alert(1)</script>" | grep -i "script"
+# Expected: Script tags should be escaped or rejected (no raw <script> in response)
+
+# Test stored XSS in JSON payloads
+curl -s -X POST "https://<host>/api/resource" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"name": "<img src=x onerror=alert(1)>", "description": "test"}' \
+  | jq .
+# Expected: 400 Bad Request with validation error, or HTML entities escaped
+
+# Test XSS in headers
+curl -s "https://<host>/api/resource" \
+  -H "X-Custom-Header: <script>alert(1)</script>" \
+  -H "Authorization: Bearer $TOKEN"
+# Expected: Header should not be reflected in response body
+
+# === SQL Injection Testing ===
+# Test classic SQLi in query parameters
+curl -s "https://<host>/api/users?id=1'%20OR%20'1'='1" \
+  -H "Authorization: Bearer $TOKEN"
+# Expected: 400 Bad Request or no data leakage
+
+# Test SQLi in JSON body
+curl -s -X POST "https://<host>/api/search" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"query": "test'\'' OR 1=1--"}'
+# Expected: 400 Bad Request with validation error
+
+# Test UNION-based SQLi
+curl -s "https://<host>/api/resource?sort=name%20UNION%20SELECT%20password%20FROM%20users--" \
+  -H "Authorization: Bearer $TOKEN"
+# Expected: 400 Bad Request or query rejected
+
+# === Command Injection Testing ===
+curl -s -X POST "https://<host>/api/process" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"filename": "test; cat /etc/passwd"}'
+# Expected: 400 Bad Request, no command execution
+
+curl -s -X POST "https://<host>/api/process" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"filename": "test$(whoami)"}'
+# Expected: 400 Bad Request, no command execution
+```
+
+**Checklist:**
+- [ ] XSS payloads rejected or escaped
+- [ ] SQL injection payloads rejected
+- [ ] Command injection payloads rejected
+- [ ] No error messages reveal internal details
+
+### Step 5a.2: Authentication Bypass Testing (IA-2, AC-3)
+
+**Objective:** Verify authentication cannot be bypassed.
+
+```bash
+# === Missing Authentication ===
+# Test protected endpoints without token
+curl -s "https://<host>/api/protected/resource"
+# Expected: 401 Unauthorized
+
+curl -s "https://<host>/api/admin/users"
+# Expected: 401 Unauthorized
+
+# === Invalid Token Testing ===
+# Test with malformed JWT
+curl -s "https://<host>/api/protected/resource" \
+  -H "Authorization: Bearer invalid.token.here"
+# Expected: 401 Unauthorized
+
+# Test with expired token (if you have one)
+curl -s "https://<host>/api/protected/resource" \
+  -H "Authorization: Bearer $EXPIRED_TOKEN"
+# Expected: 401 Unauthorized
+
+# Test JWT algorithm confusion (alg:none attack)
+# Generate a token with alg:none
+NONE_TOKEN=$(echo -n '{"alg":"none","typ":"JWT"}' | base64 -w0).$(echo -n '{"sub":"admin","role":"admin"}' | base64 -w0).
+curl -s "https://<host>/api/protected/resource" \
+  -H "Authorization: Bearer $NONE_TOKEN"
+# Expected: 401 Unauthorized
+
+# === Authorization Bypass (IDOR) ===
+# Test accessing another user's resource
+curl -s "https://<host>/api/users/OTHER_USER_ID/profile" \
+  -H "Authorization: Bearer $REGULAR_USER_TOKEN"
+# Expected: 403 Forbidden or 404 Not Found
+
+# Test privilege escalation
+curl -s -X POST "https://<host>/api/admin/users" \
+  -H "Authorization: Bearer $REGULAR_USER_TOKEN" \
+  -d '{"username": "hacker", "role": "admin"}'
+# Expected: 403 Forbidden
+```
+
+**Checklist:**
+- [ ] Unauthenticated requests rejected
+- [ ] Invalid tokens rejected
+- [ ] Algorithm confusion attacks blocked
+- [ ] IDOR attempts blocked
+- [ ] Privilege escalation prevented
+
+### Step 5a.3: Session Security Testing (AC-11, AC-12)
+
+**Objective:** Verify session controls are enforced.
+
+```bash
+# === Automated Session Timeout Test ===
+# This script tests idle timeout without manual waiting
+
+# Get a fresh session
+TOKEN=$(curl -s -X POST "https://<host>/api/auth/login" \
+  -H "Content-Type: application/json" \
+  -d '{"username":"testuser","password":"TestPassword123!"}' | jq -r '.access_token')
+
+echo "Token obtained, testing session validity..."
+
+# Verify token works
+curl -s "https://<host>/api/protected" -H "Authorization: Bearer $TOKEN" | jq -r '.status'
+# Expected: success
+
+# For FedRAMP High (10 min idle), wait and test
+# Note: In CI, use a pre-expired token from test fixtures instead
+echo "To fully test idle timeout, wait for configured duration and retry"
+
+# === Session Fixation Testing ===
+# Verify session ID changes after login
+PRE_LOGIN_COOKIE=$(curl -s -c - "https://<host>/login" | grep -i session)
+POST_LOGIN_COOKIE=$(curl -s -c - -X POST "https://<host>/api/auth/login" \
+  -H "Content-Type: application/json" \
+  -d '{"username":"testuser","password":"TestPassword123!"}' | grep -i session)
+
+if [ "$PRE_LOGIN_COOKIE" != "$POST_LOGIN_COOKIE" ]; then
+  echo "PASS: Session ID regenerated after login"
+else
+  echo "FAIL: Session fixation vulnerability - session ID not changed"
+fi
+
+# === Concurrent Session Testing (AC-10) ===
+# Login from multiple "devices"
+TOKEN1=$(curl -s -X POST "https://<host>/api/auth/login" \
+  -H "Content-Type: application/json" \
+  -H "X-Device-ID: device1" \
+  -d '{"username":"testuser","password":"TestPassword123!"}' | jq -r '.access_token')
+
+TOKEN2=$(curl -s -X POST "https://<host>/api/auth/login" \
+  -H "Content-Type: application/json" \
+  -H "X-Device-ID: device2" \
+  -d '{"username":"testuser","password":"TestPassword123!"}' | jq -r '.access_token')
+
+TOKEN3=$(curl -s -X POST "https://<host>/api/auth/login" \
+  -H "Content-Type: application/json" \
+  -H "X-Device-ID: device3" \
+  -d '{"username":"testuser","password":"TestPassword123!"}' | jq -r '.access_token')
+
+# For FedRAMP High (max 1 session), TOKEN1 should be invalidated
+# For FedRAMP Moderate (max 3 sessions), all should work
+curl -s "https://<host>/api/protected" -H "Authorization: Bearer $TOKEN1" | jq -r '.status'
+# FedRAMP High Expected: 401 Unauthorized (session superseded)
+# FedRAMP Moderate Expected: success
+```
+
+**Checklist:**
+- [ ] Session timeout enforced (tested with expired token or wait)
+- [ ] Session fixation prevented (ID changes on login)
+- [ ] Concurrent session limits enforced per profile
+
+### Step 5a.4: Rate Limiting and DoS Testing (SC-5)
+
+**Objective:** Verify rate limiting prevents abuse.
+
+```bash
+# === Rapid Request Testing ===
+# Send 100 requests rapidly and count responses
+echo "Testing rate limiting with 100 rapid requests..."
+for i in {1..100}; do
+  curl -s -o /dev/null -w "%{http_code}\n" "https://<host>/api/public/endpoint"
+done | sort | uniq -c
+
+# Expected output should show 429 (Too Many Requests) after threshold:
+#   75 200
+#   25 429
+
+# === Login Rate Limiting ===
+echo "Testing login rate limiting..."
+for i in {1..10}; do
+  curl -s -X POST "https://<host>/api/auth/login" \
+    -H "Content-Type: application/json" \
+    -d '{"username":"ratelimit-test","password":"wrong"}' \
+    -o /dev/null -w "%{http_code}\n"
+done | sort | uniq -c
+
+# Expected: 429 responses after 3-5 attempts (before lockout kicks in)
+
+# === Large Payload Testing ===
+# Test body size limits
+dd if=/dev/zero bs=1M count=10 2>/dev/null | \
+  curl -s -X POST "https://<host>/api/upload" \
+    -H "Content-Type: application/octet-stream" \
+    -H "Authorization: Bearer $TOKEN" \
+    --data-binary @- \
+    -o /dev/null -w "%{http_code}\n"
+# Expected: 413 Payload Too Large
+
+# === Slowloris-style Testing (connection exhaustion) ===
+# Note: Use with caution, may trigger WAF alerts
+timeout 30 slowhttptest -c 100 -H -g -o slowloris_report -i 10 -r 50 -t GET \
+  -u "https://<host>/api/endpoint" 2>/dev/null || echo "slowhttptest not installed or blocked"
+```
+
+**Checklist:**
+- [ ] Request rate limiting active (429 responses)
+- [ ] Login rate limiting separate from general rate limiting
+- [ ] Large payloads rejected
+- [ ] Slow connection attacks mitigated
+
+### Step 5a.5: Network Security Testing (SC-7, SC-8)
+
+**Objective:** Verify network-level controls.
+
+```bash
+# === Port Scanning ===
+# Verify only expected ports are open
+nmap -sT -p- --min-rate 1000 <host> -oN nmap_full_scan.txt
+# Expected: Only 22 (SSH), 443 (HTTPS), and application-specific ports
+
+# Quick scan of common ports
+nmap -sT -F <host>
+# Document all open ports
+
+# === TLS Configuration Testing ===
+# Test TLS versions (should reject TLS 1.0, 1.1)
+openssl s_client -connect <host>:443 -tls1 </dev/null 2>&1 | grep -i "handshake"
+# Expected: Handshake failure (TLS 1.0 rejected)
+
+openssl s_client -connect <host>:443 -tls1_1 </dev/null 2>&1 | grep -i "handshake"
+# Expected: Handshake failure (TLS 1.1 rejected)
+
+openssl s_client -connect <host>:443 -tls1_2 </dev/null 2>&1 | grep -i "protocol"
+# Expected: TLSv1.2 (success)
+
+# Test cipher suites
+nmap --script ssl-enum-ciphers -p 443 <host>
+# Expected: Only strong ciphers (AES-GCM, ChaCha20), no DES/RC4/MD5
+
+# Use testssl.sh for comprehensive TLS audit
+testssl.sh --severity HIGH <host>:443 > tls_audit_report.txt
+# Expected: No HIGH or CRITICAL findings
+
+# === Certificate Validation ===
+openssl s_client -connect <host>:443 </dev/null 2>/dev/null | \
+  openssl x509 -noout -dates -subject -issuer
+# Verify: Not expired, correct subject, trusted issuer
+
+# Test certificate chain
+openssl s_client -connect <host>:443 -showcerts </dev/null 2>/dev/null | \
+  grep -E "^(Certificate chain| [0-9]+ s:|   i:)"
+# Expected: Complete chain to trusted root
+
+# === Egress Testing (from within production system) ===
+ssh <host> << 'EOF'
+# Test if arbitrary outbound connections are blocked
+timeout 5 curl -s http://example.com && echo "FAIL: Egress not filtered" || echo "PASS: Egress filtered"
+timeout 5 curl -s https://ifconfig.me && echo "FAIL: Egress not filtered" || echo "PASS: Egress filtered"
+
+# Test DNS exfiltration
+timeout 5 nslookup test.example.com && echo "DNS allowed" || echo "DNS restricted"
+EOF
+```
+
+**Checklist:**
+- [ ] Only expected ports open (document all)
+- [ ] TLS 1.0/1.1 rejected
+- [ ] Only strong cipher suites enabled
+- [ ] Certificate valid and chain complete
+- [ ] Egress filtering active (FedRAMP High)
+
+### Step 5a.6: Secrets and Sensitive Data Testing (IA-5(7))
+
+**Objective:** Verify secrets are not exposed.
+
+```bash
+# === API Response Secrets Check ===
+# Check error responses don't leak secrets
+curl -s "https://<host>/api/nonexistent" | grep -iE "(password|secret|key|token|api_key)"
+# Expected: No matches
+
+# Check verbose errors don't expose internals
+curl -s "https://<host>/api/cause-error" | grep -iE "(stack|trace|exception|sql|query)"
+# Expected: No stack traces or SQL in production
+
+# === Git History Scanning ===
+# Scan for secrets in repository history
+cd /path/to/repo
+gitleaks detect --source . --report-path gitleaks_report.json
+# Expected: No secrets detected
+
+# Alternative: use trufflehog
+trufflehog git file://. --json > trufflehog_report.json
+# Expected: No high-confidence secrets
+
+# === Environment Variable Check (on production system) ===
+ssh <host> << 'EOF'
+# Check if secrets are in environment (they shouldn't be visible)
+env | grep -iE "(password|secret|api_key)" && \
+  echo "WARNING: Secrets in environment" || \
+  echo "PASS: No secrets in environment"
+
+# Check systemd service doesn't expose secrets
+systemctl show <app-name> | grep -i environment
+EOF
+
+# === Response Header Check ===
+curl -s -I "https://<host>/api/endpoint" | grep -iE "(server|x-powered-by|x-aspnet)"
+# Expected: No version information disclosed
+```
+
+**Checklist:**
+- [ ] Error responses don't leak secrets
+- [ ] No stack traces in production errors
+- [ ] No secrets in git history
+- [ ] Secrets not exposed via environment
+- [ ] Server headers don't disclose versions
+
+---
+
+## Phase 5b: Database Security Audit
+
+Comprehensive PostgreSQL security verification per STIG PGS15-00-*.
+
+### Step 5b.1: Authentication Configuration (PGS15-00-000100)
+
+```bash
+# === pg_hba.conf Review ===
+ssh <host> << 'EOF'
+sudo cat /var/lib/postgresql/*/data/pg_hba.conf | grep -v "^#" | grep -v "^$"
+EOF
+
+# Expected configuration (FedRAMP Moderate/High):
+# TYPE  DATABASE  USER      ADDRESS        METHOD
+# local all       postgres                 peer
+# host  all       all       127.0.0.1/32   scram-sha-256
+# hostssl all     all       0.0.0.0/0      scram-sha-256 clientcert=verify-full
+
+# FAIL conditions:
+# - Any "trust" method
+# - "md5" instead of "scram-sha-256"
+# - "host" instead of "hostssl" for remote connections
+# - Missing "clientcert=verify-full" for FedRAMP High
+
+# === Password Authentication Verification ===
+# Test that password authentication is required
+ssh <host> << 'EOF'
+# This should fail without password
+PGPASSWORD='' psql -U testuser -h localhost -d postgres -c "SELECT 1;" 2>&1
+# Expected: authentication failed
+
+# Verify scram-sha-256 is enforced
+sudo -u postgres psql -c "SHOW password_encryption;"
+# Expected: scram-sha-256
+EOF
+```
+
+**Checklist:**
+- [ ] No "trust" authentication method
+- [ ] scram-sha-256 password encryption
+- [ ] hostssl required for remote connections
+- [ ] Client certificates required (FedRAMP High)
+
+### Step 5b.2: SSL/TLS Configuration (PGS15-00-000200)
+
+```bash
+ssh <host> << 'EOF'
+# === SSL Configuration ===
+sudo -u postgres psql << 'SQL'
+SHOW ssl;
+SHOW ssl_cert_file;
+SHOW ssl_key_file;
+SHOW ssl_ca_file;
+SHOW ssl_min_protocol_version;
+SHOW ssl_ciphers;
+SQL
+EOF
+
+# Expected:
+# ssl = on
+# ssl_min_protocol_version = TLSv1.2
+# ssl_ciphers = HIGH:!aNULL:!MD5 (or more restrictive)
+
+# === Test SSL Connection ===
+# Connect and verify SSL is used
+ssh <host> << 'EOF'
+psql "host=localhost dbname=postgres user=testuser sslmode=verify-full" \
+  -c "SELECT ssl_is_used();"
+EOF
+# Expected: t (true)
+
+# === Certificate Validation ===
+ssh <host> << 'EOF'
+# Check certificate expiration
+sudo openssl x509 -in /var/lib/postgresql/*/data/server.crt -noout -dates
+# Verify not expired and not expiring within 30 days
+EOF
+```
+
+**Checklist:**
+- [ ] SSL enabled
+- [ ] TLS 1.2 minimum enforced
+- [ ] Strong cipher suites only
+- [ ] Server certificate valid
+- [ ] CA certificate configured
+
+### Step 5b.3: Audit Logging (PGS15-00-000300)
+
+```bash
+ssh <host> << 'EOF'
+# === pgaudit Configuration ===
+sudo -u postgres psql << 'SQL'
+SHOW shared_preload_libraries;
+-- Expected: includes 'pgaudit'
+
+SHOW pgaudit.log;
+-- Expected: 'all' or at minimum 'ddl,write,role'
+
+SHOW pgaudit.log_catalog;
+SHOW pgaudit.log_parameter;
+SHOW pgaudit.log_statement_once;
+SHOW log_destination;
+SHOW log_directory;
+SHOW log_filename;
+SQL
+EOF
+
+# Expected:
+# pgaudit.log = all (or ddl,write,role)
+# pgaudit.log_parameter = on
+# log_destination includes 'stderr' or 'syslog'
+
+# === Verify Audit Logs Being Generated ===
+ssh <host> << 'EOF'
+# Check recent audit entries
+sudo cat /var/log/postgresql/postgresql-*.log | grep -i "AUDIT" | tail -20
+
+# Verify DDL is logged
+sudo -u postgres psql -c "CREATE TABLE audit_test (id int);"
+sudo -u postgres psql -c "DROP TABLE audit_test;"
+sudo cat /var/log/postgresql/postgresql-*.log | grep -i "audit_test"
+# Expected: CREATE TABLE and DROP TABLE audit entries
+EOF
+
+# === Log File Permissions ===
+ssh <host> << 'EOF'
+ls -la /var/log/postgresql/
+# Expected: Owned by postgres, mode 0600 or 0640
+EOF
+```
+
+**Checklist:**
+- [ ] pgaudit extension loaded
+- [ ] DDL, DML, and role changes logged
+- [ ] Log parameters included
+- [ ] Logs being written
+- [ ] Log file permissions restrictive
+
+### Step 5b.4: Role and Permission Audit (PGS15-00-000400)
+
+```bash
+ssh <host> << 'EOF'
+sudo -u postgres psql << 'SQL'
+-- List all roles and their attributes
+SELECT rolname, rolsuper, rolcreaterole, rolcreatedb, rolreplication, rolbypassrls
+FROM pg_roles
+WHERE rolname NOT LIKE 'pg_%'
+ORDER BY rolsuper DESC, rolname;
+
+-- Check for excessive superuser accounts
+SELECT count(*) as superuser_count FROM pg_roles WHERE rolsuper = true;
+-- Expected: 1 (only postgres)
+
+-- Check password expiration
+SELECT rolname, rolvaliduntil FROM pg_roles WHERE rolpassword IS NOT NULL;
+-- Expected: Expiration dates set for service accounts
+
+-- Check for public schema permissions
+SELECT grantee, privilege_type
+FROM information_schema.role_table_grants
+WHERE table_schema = 'public';
+-- Review for excessive permissions
+
+-- Check for default privileges
+SELECT * FROM pg_default_acl;
+SQL
+EOF
+```
+
+**Checklist:**
+- [ ] Only one superuser account (postgres)
+- [ ] Service accounts have minimal required permissions
+- [ ] Password expiration configured
+- [ ] Public schema permissions restricted
+- [ ] No excessive default privileges
+
+### Step 5b.5: Connection Security (PGS15-00-000500)
+
+```bash
+ssh <host> << 'EOF'
+sudo -u postgres psql << 'SQL'
+-- Connection limits
+SHOW max_connections;
+-- Document limit
+
+-- Per-role connection limits
+SELECT rolname, rolconnlimit FROM pg_roles WHERE rolconnlimit != -1;
+
+-- Current connections
+SELECT count(*), usename, state FROM pg_stat_activity GROUP BY usename, state;
+
+-- Idle connection timeout
+SHOW idle_in_transaction_session_timeout;
+-- Expected: > 0 (not disabled)
+
+SHOW statement_timeout;
+-- Expected: > 0 (not disabled)
+SQL
+EOF
+
+# === Test Connection Limits ===
+# Attempt to exceed connection limit (adjust number based on max_connections)
+# This is a stress test - use with caution
+```
+
+**Checklist:**
+- [ ] max_connections appropriately limited
+- [ ] Per-role connection limits set
+- [ ] Idle transaction timeout configured
+- [ ] Statement timeout configured
+
+---
+
 ## Phase 6: Evidence Collection
 
 ### Step 6.1: Export Compliance Artifacts
@@ -1637,7 +2214,565 @@ Reviewer: ______________________ Date: _________
 
 ---
 
-## Appendix
+## STIG Traceability Matrix
+
+This matrix maps Barbican controls to their authoritative STIG sources, enabling auditors to trace implementations back to DoD-approved security requirements.
+
+### Ubuntu 22.04 STIG (V2R3)
+
+| STIG Rule | Title | NIST Control | Barbican Implementation |
+|-----------|-------|--------------|-------------------------|
+| UBTU-22-411045 | Account lockout after 3 failed attempts | AC-7(a) | `login.rs:LockoutPolicy::max_attempts()` |
+| UBTU-22-411050 | Lockout duration must be configured | AC-7(b) | `login.rs:LockoutPolicy::lockout_duration()` |
+| UBTU-22-412020 | Session timeout after inactivity | AC-11, AC-12 | `session.rs:SessionPolicy::idle_timeout()` |
+| UBTU-22-611035 | Minimum password length | IA-5(1)(a) | `password.rs:PasswordPolicy::min_length()` |
+| UBTU-22-612010 | MFA for privileged accounts | IA-2(1) | `auth.rs:require_mfa` config option |
+| UBTU-22-612035 | Certificate-based authentication | IA-2(12) | `tls.rs:require_client_cert()` |
+| UBTU-22-231010 | Encryption at rest | SC-28 | `encryption.rs:FieldEncryption` |
+| UBTU-22-255050 | TLS for data in transit | SC-8 | `tls.rs:TlsConfig`, `secure-postgres.nix` |
+| UBTU-22-653045 | Audit log retention | AU-11 | `audit/mod.rs:retention_days` config |
+| UBTU-22-671010 | Cryptographic key management | SC-12 | `keys.rs:KeyManager` |
+
+### PostgreSQL 15 STIG (V2R6)
+
+| STIG Rule | Title | NIST Control | Barbican Implementation |
+|-----------|-------|--------------|-------------------------|
+| PGS15-00-000100 | SSL/TLS required for connections | SC-8 | `secure-postgres.nix:enableSSL` |
+| PGS15-00-000200 | Client certificate authentication | IA-5(2) | `secure-postgres.nix:enableClientCert` |
+| PGS15-00-000300 | Audit logging enabled | AU-2, AU-3 | `secure-postgres.nix:pgaudit` |
+| PGS15-00-000400 | SCRAM-SHA-256 authentication | IA-5(1) | `secure-postgres.nix:passwordEncryption` |
+| PGS15-00-000500 | Connection limits enforced | SC-5 | `secure-postgres.nix:maxConnections` |
+| PGS15-00-000600 | No trust authentication | IA-5 | `secure-postgres.nix:pg_hba.conf` |
+
+### Application Security STIG (V5R3)
+
+| STIG Rule | Title | NIST Control | Barbican Implementation |
+|-----------|-------|--------------|-------------------------|
+| APSC-DV-000160 | Input validation | SI-10 | `validation.rs:Validate trait` |
+| APSC-DV-000170 | Output encoding | SI-10 | `validation.rs:html_escape()` |
+| APSC-DV-000180 | Session timeout | AC-12 | `session.rs:SessionPolicy` |
+| APSC-DV-000190 | MFA for web applications | IA-2(1) | `auth.rs:MfaRequirement` |
+| APSC-DV-000200 | Concurrent session limits | AC-10 | `session.rs:max_concurrent_sessions` |
+| APSC-DV-000210 | Account lockout | AC-7 | `login.rs:LockoutPolicy` |
+| APSC-DV-000220 | Password complexity | IA-5(1) | `password.rs:PasswordPolicy` |
+| APSC-DV-000230 | Secure cookie attributes | SC-8 | `session.rs:cookie_secure, cookie_http_only` |
+| APSC-DV-000240 | HTTPS enforcement | SC-8(1) | `tls.rs:TlsEnforcement` |
+| APSC-DV-000250 | Error message sanitization | SI-11 | `error.rs:SecureError` |
+
+### Verification Commands
+
+```bash
+# Verify STIG mapping coverage
+grep -r "UBTU-22\|PGS15\|APSC-DV" src/ nix/modules/ | wc -l
+
+# List all STIG references in codebase
+grep -roh "UBTU-22-[0-9]\+\|PGS15-00-[0-9]\+\|APSC-DV-[0-9]\+" src/ nix/modules/ | sort -u
+
+# Cross-reference with ComplianceAsCode
+# Download: https://github.com/ComplianceAsCode/content
+# Verify rule IDs exist in official STIG content
+```
+
+---
+
+## Independent Verification Tools
+
+These external tools provide independent verification of security controls without relying on Barbican's own test output.
+
+### Network Security Tools
+
+#### Port Scanning (SC-7)
+
+```bash
+# Verify only expected ports are open
+nmap -sT -sU -p- --min-rate=1000 TARGET_HOST
+
+# Expected results for hardened system:
+# - 22/tcp (SSH) - if remote access enabled
+# - 443/tcp (HTTPS) - application port
+# - 5432/tcp (PostgreSQL) - if exposed (should be internal only)
+
+# Verify no unexpected services
+nmap -sV -sC TARGET_HOST
+```
+
+#### TLS Configuration (SC-8)
+
+```bash
+# Comprehensive TLS audit
+testssl.sh --severity HIGH TARGET_HOST:443
+
+# Expected: No HIGH or CRITICAL findings
+# Required checks:
+# - TLS 1.2+ only
+# - Strong cipher suites (AES-256-GCM, CHACHA20-POLY1305)
+# - Valid certificate chain
+# - HSTS header present
+
+# Alternative: sslyze
+sslyze --regular TARGET_HOST:443
+```
+
+### Web Application Security Tools
+
+#### OWASP ZAP (SI-10, AC-3)
+
+```bash
+# Automated security scan
+docker run -t owasp/zap2docker-stable zap-baseline.py \
+  -t https://TARGET_HOST \
+  -r zap-report.html
+
+# Review for:
+# - XSS vulnerabilities
+# - SQL injection points
+# - Missing security headers
+# - Session management issues
+```
+
+#### Nikto Web Scanner
+
+```bash
+# Web server vulnerability scan
+nikto -h https://TARGET_HOST -ssl
+
+# Check for:
+# - Dangerous HTTP methods enabled
+# - Information disclosure
+# - Default/backup files exposed
+```
+
+### Database Security Tools
+
+#### pgAudit Verification
+
+```bash
+# Verify pgAudit is logging
+sudo -u postgres psql -c "SHOW shared_preload_libraries;"
+# Expected: 'pgaudit' in list
+
+# Check audit log output
+sudo journalctl -u postgresql | grep -i "AUDIT:"
+```
+
+#### pg_hba.conf Analyzer
+
+```bash
+# Dump and review authentication rules
+sudo -u postgres cat /var/lib/postgresql/*/pg_hba.conf
+
+# Verify:
+# - No 'trust' entries
+# - scram-sha-256 for password auth
+# - cert for client certificate auth
+# - hostssl for remote connections
+```
+
+### Secret Detection Tools
+
+#### Gitleaks
+
+```bash
+# Scan repository for secrets
+gitleaks detect --source . --report-format json --report-path gitleaks-report.json
+
+# Expected: No findings or only false positives documented in .gitleaks.toml
+```
+
+#### TruffleHog
+
+```bash
+# Deep history scan
+trufflehog git file://. --json > trufflehog-report.json
+
+# Review all findings - even historical secrets require rotation
+```
+
+### Infrastructure Verification
+
+#### Lynis Security Audit
+
+```bash
+# Comprehensive Linux security audit
+lynis audit system --quick
+
+# Review hardening index score
+# FedRAMP High should target >80
+```
+
+#### OpenSCAP
+
+```bash
+# STIG compliance scan
+oscap xccdf eval \
+  --profile xccdf_org.ssgproject.content_profile_stig \
+  --results results.xml \
+  --report report.html \
+  /usr/share/xml/scap/ssg/content/ssg-ubuntu2204-ds.xml
+```
+
+### Verification Checklist
+
+| Tool | Control Family | Expected Result |
+|------|----------------|-----------------|
+| nmap | SC-7 | Only documented ports open |
+| testssl.sh | SC-8 | No HIGH/CRITICAL findings |
+| OWASP ZAP | SI-10, AC-3 | No HIGH/CRITICAL alerts |
+| gitleaks | IA-5(7) | No secrets detected |
+| lynis | Multiple | Hardening index >70 (Low), >75 (Mod), >80 (High) |
+| OpenSCAP | Multiple | STIG profile compliance >90% |
+
+---
+
+## Appendix A: DPE-Specific Audit Procedures
+
+The Deployment Platform Engine (DPE) is the reference implementation of Barbican. These procedures supplement the main audit guide with DPE-specific verification steps.
+
+### DPE Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     DPE Server (dpe-server)                 │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐ │
+│  │   Auth API  │  │  Deploy API │  │   Cluster Manager   │ │
+│  │  (Barbican) │  │  (Barbican) │  │                     │ │
+│  └─────────────┘  └─────────────┘  └─────────────────────┘ │
+│                           │                                 │
+│  ┌────────────────────────┴────────────────────────────┐   │
+│  │              Barbican Security Layer                 │   │
+│  │  - Input Validation (SI-10)                          │   │
+│  │  - Authentication (IA-2)                             │   │
+│  │  - Session Management (AC-10, AC-11, AC-12)          │   │
+│  │  - Rate Limiting (SC-5)                              │   │
+│  │  - Audit Logging (AU-2, AU-3, AU-12)                 │   │
+│  └──────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### DPE-Specific Control Verification
+
+#### Step A.1: Verify Barbican Integration
+
+```bash
+# Check Barbican dependency version
+cd /path/to/dpe
+grep barbican Cargo.toml
+# Expected: barbican with security features enabled
+
+# Verify Barbican features
+grep -A5 '\[dependencies.barbican\]' Cargo.toml
+# Expected features: postgres, compliance-artifacts, stig
+```
+
+#### Step A.2: Verify Auth Handler Security
+
+```bash
+# Check login handler uses Barbican's LoginTracker
+grep -n "LoginTracker\|LockoutPolicy" crates/dpe-server/src/server/api/auth/
+
+# Verify password validation uses Barbican
+grep -n "PasswordPolicy\|validate_password" crates/dpe-server/src/server/api/auth/
+
+# Check ValidatedJson is used for input validation
+grep -n "ValidatedJson" crates/dpe-server/src/server/api/
+```
+
+#### Step A.3: Test DPE Authentication Controls
+
+```bash
+# Test account lockout (AC-7)
+DPE_URL="https://localhost:8080"
+
+# Attempt 4 failed logins (should lock account after 3)
+for i in {1..4}; do
+  curl -s -X POST "$DPE_URL/api/auth/login" \
+    -H "Content-Type: application/json" \
+    -d '{"username":"test@example.com","password":"wrong"}' | jq .
+done
+
+# Verify lockout response on 4th attempt
+# Expected: {"error":"account_locked","lockout_remaining_seconds":...}
+
+# Test password validation (IA-5)
+curl -s -X POST "$DPE_URL/api/auth/register" \
+  -H "Content-Type: application/json" \
+  -d '{"username":"test@example.com","password":"short"}' | jq .
+# Expected: {"error":"password_too_short",...}
+```
+
+#### Step A.4: Verify Input Validation
+
+```bash
+# Test XSS prevention in username field
+curl -s -X POST "$DPE_URL/api/auth/login" \
+  -H "Content-Type: application/json" \
+  -d '{"username":"<script>alert(1)</script>","password":"test"}' | jq .
+# Expected: Sanitized error, no script reflection
+
+# Test SQL injection prevention
+curl -s -X POST "$DPE_URL/api/auth/login" \
+  -H "Content-Type: application/json" \
+  -d "{\"username\":\"' OR '1'='1\",\"password\":\"test\"}" | jq .
+# Expected: Invalid credentials error, not SQL error
+```
+
+#### Step A.5: Verify Session Management
+
+```bash
+# Login and get session token
+TOKEN=$(curl -s -X POST "$DPE_URL/api/auth/login" \
+  -H "Content-Type: application/json" \
+  -d '{"username":"valid@example.com","password":"ValidPass123!"}' | jq -r .access_token)
+
+# Test session timeout (wait for idle timeout)
+# For FedRAMP Moderate: 15 minutes
+sleep 901  # 15 min + 1 sec
+
+curl -s -H "Authorization: Bearer $TOKEN" "$DPE_URL/api/profile" | jq .
+# Expected: {"error":"session_expired"} or 401 Unauthorized
+
+# Test concurrent session limit (AC-10)
+# Login multiple times and verify oldest sessions are invalidated
+```
+
+#### Step A.6: Verify Rate Limiting
+
+```bash
+# Test rate limiting on login endpoint
+for i in {1..150}; do
+  curl -s -w "%{http_code}\n" -o /dev/null -X POST "$DPE_URL/api/auth/login" \
+    -H "Content-Type: application/json" \
+    -d '{"username":"test@example.com","password":"test"}'
+done | sort | uniq -c
+# Expected: Some 429 (Too Many Requests) responses after threshold
+```
+
+### DPE Audit Evidence Checklist
+
+| Control | Verification Method | Evidence Location |
+|---------|---------------------|-------------------|
+| AC-7 | Login lockout test | Server logs, API responses |
+| AC-10 | Concurrent session test | Session store inspection |
+| AC-11 | Idle timeout test | Session expiry logs |
+| IA-2 | Authentication flow test | Auth handler code review |
+| IA-5(1) | Password policy test | Rejection of weak passwords |
+| SI-10 | Input validation test | No XSS/SQLi exploitation |
+| AU-2 | Audit log review | `/var/log/dpe/audit.log` |
+
+---
+
+## Appendix B: CI/CD Integration
+
+Integrate security auditing into your CI/CD pipeline for continuous compliance verification.
+
+### GitHub Actions Workflow
+
+```yaml
+name: Security Audit
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '0 0 * * 0'  # Weekly full audit
+
+jobs:
+  security-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-action@stable
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v25
+
+      # Dependency Vulnerability Scan (SR-3)
+      - name: Cargo Audit
+        run: |
+          cargo install cargo-audit
+          cargo audit --deny warnings
+
+      # Secret Detection (IA-5(7))
+      - name: Gitleaks Scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # SAST Analysis
+      - name: Clippy Security Lints
+        run: |
+          cargo clippy -- \
+            -D clippy::unwrap_used \
+            -D clippy::expect_used \
+            -D clippy::panic \
+            -W clippy::pedantic
+
+      # Compliance Artifact Generation
+      - name: Generate Compliance Artifacts
+        run: |
+          cargo test --features compliance-artifacts control_test
+
+      - name: Upload Compliance Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: compliance-artifacts
+          path: compliance-artifacts/
+
+      # NixOS Security Checks
+      - name: Nix Flake Check
+        run: nix flake check
+
+  container-scan:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Container
+        run: docker build -t app:${{ github.sha }} .
+
+      - name: Trivy Container Scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'app:${{ github.sha }}'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '1'
+
+  weekly-full-audit:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Full STIG Compliance Scan
+        run: |
+          nix develop -c cargo test --features "compliance-artifacts,stig" -- --include-ignored
+
+      - name: Generate Audit Report
+        run: |
+          cargo run --features compliance-artifacts --example generate_compliance_report -- \
+            --profile high \
+            --output compliance-report-$(date +%Y%m%d).json
+
+      - name: Upload Audit Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: weekly-audit-report
+          path: compliance-report-*.json
+          retention-days: 365
+```
+
+### GitLab CI Configuration
+
+```yaml
+stages:
+  - security
+  - compliance
+  - report
+
+variables:
+  CARGO_HOME: $CI_PROJECT_DIR/.cargo
+
+cargo-audit:
+  stage: security
+  script:
+    - cargo install cargo-audit
+    - cargo audit --deny warnings
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+secret-scan:
+  stage: security
+  image: zricethezav/gitleaks:latest
+  script:
+    - gitleaks detect --source . --verbose
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+compliance-artifacts:
+  stage: compliance
+  script:
+    - cargo test --features compliance-artifacts control_test
+  artifacts:
+    paths:
+      - compliance-artifacts/
+    expire_in: 1 year
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+weekly-audit:
+  stage: report
+  script:
+    - cargo run --features compliance-artifacts --example generate_compliance_report -- --profile high
+  artifacts:
+    paths:
+      - compliance-report-*.json
+    expire_in: 1 year
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+```
+
+### Pre-commit Hooks
+
+```yaml
+# .pre-commit-config.yaml
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.18.0
+    hooks:
+      - id: gitleaks
+
+  - repo: local
+    hooks:
+      - id: cargo-audit
+        name: cargo audit
+        entry: cargo audit --deny warnings
+        language: system
+        pass_filenames: false
+        files: Cargo\.(toml|lock)$
+
+      - id: security-clippy
+        name: security clippy
+        entry: cargo clippy -- -D clippy::unwrap_used
+        language: system
+        pass_filenames: false
+        types: [rust]
+```
+
+### Compliance Dashboard Integration
+
+```bash
+# Export compliance metrics to Prometheus
+cat compliance-artifacts/compliance-report.json | jq -r '
+  .artifacts[] |
+  "barbican_control_status{control=\"\(.control_id)\",family=\"\(.family)\"} \(if .passed then 1 else 0 end)"
+' > /var/lib/prometheus/textfile/barbican.prom
+
+# Grafana dashboard query examples:
+# - Compliance percentage: avg(barbican_control_status) * 100
+# - Failed controls: count(barbican_control_status == 0)
+# - Controls by family: sum by (family) (barbican_control_status)
+```
+
+### Audit Trail Requirements
+
+For FedRAMP audits, maintain these CI/CD artifacts:
+
+| Artifact | Retention | Purpose |
+|----------|-----------|---------|
+| `compliance-artifacts/*.json` | 1 year | Control test evidence |
+| `cargo-audit-report.json` | 90 days | Vulnerability scan results |
+| `gitleaks-report.json` | 90 days | Secret detection results |
+| `container-scan-report.json` | 90 days | Container vulnerability scan |
+| Pipeline logs | 1 year | Audit trail of all checks |
+
+---
+
+## Appendix C: Quick Reference
 
 ### Quick Reference Commands
 
@@ -1682,5 +2817,6 @@ cat compliance-artifacts/*.json | jq '.artifacts[] | select(.passed == false) | 
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2.0 | 2026-01-23 | Major enhancement: Added penetration testing (Phase 5a), database security audit (Phase 5b), STIG traceability matrix, independent verification tools, DPE-specific procedures (Appendix A), CI/CD integration (Appendix B) |
 | 1.1 | 2025-12-30 | Added Phase 1b for deploying audit targets when no production system exists |
 | 1.0 | 2025-12-30 | Initial workflow-based guide |
