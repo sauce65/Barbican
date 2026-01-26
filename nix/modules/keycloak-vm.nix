@@ -525,8 +525,12 @@ in {
         createLocally = cfg.database.createLocally;
       };
 
-      # Realm import via NixOS mechanism
-      realmFiles = attrValues realmFiles;
+      # Realm import: pass runtime paths (not store paths) to avoid
+      # systemd.tmpfiles.settings rejecting store-path context in attr names.
+      # The actual store-path content is deployed via tmpfiles.rules below.
+      realmFiles = mapAttrsToList (name: _:
+        "/run/keycloak/realm-sources/${name}-realm.json"
+      ) realmFiles;
 
       settings = {
         hostname = cfg.hostname;
@@ -587,6 +591,16 @@ in {
         JAVA_OPTS = concatStringsSep " " cfg.jvmOptions;
       };
     };
+
+    # Deploy realm JSON files from Nix store to runtime paths.
+    # services.keycloak.realmFiles points to these runtime paths (context-free),
+    # while these rules handle the actual store-path symlinks.
+    systemd.tmpfiles.rules = mkIf (cfg.realms != {}) (
+      [ "d /run/keycloak/realm-sources 0755 root root -" ]
+      ++ mapAttrsToList (name: file:
+        "L+ /run/keycloak/realm-sources/${name}-realm.json - - - - ${file}"
+      ) realmFiles
+    );
 
     networking.firewall.allowedTCPPorts =
       (optional (cfg.profile == "development") cfg.httpPort)
