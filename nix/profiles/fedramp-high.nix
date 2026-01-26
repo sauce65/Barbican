@@ -24,6 +24,7 @@
 
 {
   imports = [
+    ../lib/profile-meta.nix
     ../modules/secure-users.nix
     ../modules/hardened-ssh.nix
     ../modules/secure-postgres.nix
@@ -41,6 +42,26 @@
   ];
 
   barbican = {
+    profile = {
+      name = "fedramp-high";
+      includedModules = [
+        "secure-users"
+        "hardened-ssh"
+        "secure-postgres"
+        "kernel-hardening"
+        "time-sync"
+        "resource-limits"
+        "vm-firewall"
+        "intrusion-detection"
+        "vault-pki"
+        "systemd-hardening"
+        "secrets-management"
+        "log-forwarding"
+        "vulnerability-scanning"
+        "audit-archival"
+      ];
+    };
+
     # AC-2: Account Management
     secureUsers = {
       enable = true;

@@ -21,6 +21,7 @@
 
 {
   imports = [
+    ../lib/profile-meta.nix
     # Core modules (enabled for FedRAMP Low)
     ../modules/secure-users.nix
     ../modules/hardened-ssh.nix
@@ -34,6 +35,19 @@
   ];
 
   barbican = {
+    profile = {
+      name = "fedramp-low";
+      includedModules = [
+        "secure-users"
+        "hardened-ssh"
+        "kernel-hardening"
+        "time-sync"
+        "vm-firewall"
+        "secure-postgres"
+        "vault-pki"
+      ];
+    };
+
     # AC-2: Account Management
     secureUsers = {
       enable = true;

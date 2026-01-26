@@ -294,6 +294,9 @@ let
       warn "NTP not synchronized"
     fi
 
+    # ===== CONFIG-AWARE CHECKS =====
+    ${configChecks}
+
     # ===== SUMMARY =====
     echo ""
     echo -e "${colors.blue}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${colors.reset}"
@@ -312,6 +315,47 @@ let
       exit 0
     fi
   '';
+
+  # Config-aware checks generated from NixOS module state
+  configChecks =
+    let
+      # Safe attribute access
+      atPath = path: default: lib.attrByPath path default config;
+
+      vmFirewallEnabled = atPath [ "barbican" "vmFirewall" "enable" ] false;
+      nftablesEnabled = atPath [ "networking" "nftables" "enable" ] false;
+
+      keycloakEnabled = atPath [ "barbican" "keycloak" "enable" ] false;
+      keycloakMgmtPort = toString (atPath [ "barbican" "keycloak" "ports" "management" ] 9000);
+      keycloakHostname = atPath [ "barbican" "keycloak" "hostname" ] "localhost";
+      keycloakSelfSigned = atPath [ "barbican" "keycloak" "tls" "selfSigned" ] false;
+    in
+    # nftables conflict detection
+    (optionalString (vmFirewallEnabled && nftablesEnabled) ''
+      section "Configuration Conflicts"
+      fail "barbican.vmFirewall and networking.nftables are both enabled (iptables vs nftables conflict)"
+    '')
+    # Keycloak health check
+    + (optionalString keycloakEnabled ''
+      section "Keycloak (IA-2)"
+
+      # Check management port for health (try HTTPS first, fall back to HTTP)
+      kc_health=""
+      kc_health=$(${pkgs.curl}/bin/curl -sk "https://localhost:${keycloakMgmtPort}/health/ready" 2>/dev/null) || \
+        kc_health=$(${pkgs.curl}/bin/curl -s "http://localhost:${keycloakMgmtPort}/health/ready" 2>/dev/null) || true
+
+      if echo "$kc_health" | ${pkgs.jq}/bin/jq -e '.status == "UP"' &>/dev/null; then
+        pass "Keycloak health (port ${keycloakMgmtPort}): UP"
+      elif [ -n "$kc_health" ]; then
+        warn "Keycloak health (port ${keycloakMgmtPort}): responded but not UP — $kc_health"
+      else
+        fail "Keycloak health (port ${keycloakMgmtPort}): no response"
+      fi
+    '')
+    # Keycloak self-signed cert expiry check
+    + (optionalString (keycloakEnabled && keycloakSelfSigned) ''
+      check_cert "/run/keycloak/certs/cert.pem" "Keycloak self-signed TLS"
+    '');
 
 in {
   options.barbican.doctor = {

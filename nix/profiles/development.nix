@@ -27,6 +27,7 @@
 
 {
   imports = [
+    ../lib/profile-meta.nix
     # Core modules (enabled for development)
     ../modules/secure-users.nix
     ../modules/time-sync.nix
@@ -40,6 +41,19 @@
   ];
 
   barbican = {
+    profile = {
+      name = "development";
+      includedModules = [
+        "secure-users"
+        "time-sync"
+        "secure-postgres"
+        "vault-pki"
+        "vm-firewall"
+        "hardened-ssh"
+        "kernel-hardening"
+      ];
+    };
+
     secureUsers = {
       enable = true;
       # Allow empty authorized keys in development profile

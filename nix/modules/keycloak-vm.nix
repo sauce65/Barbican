@@ -191,6 +191,14 @@ in {
       description = "HTTPS port";
     };
 
+    ports = {
+      management = mkOption {
+        type = types.port;
+        default = 9000;
+        description = "Keycloak management port (health checks, metrics)";
+      };
+    };
+
     # Database configuration
     database = {
       type = mkOption {
@@ -301,6 +309,17 @@ in {
         type = types.nullOr types.path;
         default = null;
         description = "Path to TLS private key file. When set, skips Vault PKI cert fetch.";
+      };
+
+      selfSigned = mkOption {
+        type = types.bool;
+        default = false;
+        description = ''
+          Generate a P-384 EC self-signed certificate at service preStart.
+          The cert is written to /run/keycloak/certs/ (RuntimeDirectory) which
+          works with DynamicUser=true. Mutually exclusive with certFile/keyFile
+          and vault.enable.
+        '';
       };
 
       mtls = {
@@ -555,12 +574,14 @@ in {
         hostname-strict = cfg.profile != "development";
         hostname-strict-https = cfg.tls.enable;
 
-        # TLS - support both external certs (vault-pki client) and self-managed
+        # TLS - support self-signed, external certs (vault-pki client), and Vault-managed
         https-certificate-file = mkIf cfg.tls.enable
-          (if cfg.tls.certFile != null then cfg.tls.certFile
+          (if cfg.tls.selfSigned then "/run/keycloak/certs/cert.pem"
+           else if cfg.tls.certFile != null then cfg.tls.certFile
            else "/run/keycloak/certs/server.crt");
         https-certificate-key-file = mkIf cfg.tls.enable
-          (if cfg.tls.keyFile != null then cfg.tls.keyFile
+          (if cfg.tls.selfSigned then "/run/keycloak/certs/key.pem"
+           else if cfg.tls.keyFile != null then cfg.tls.keyFile
            else "/run/keycloak/certs/server.key");
 
         # MTLS
@@ -569,6 +590,7 @@ in {
         https-trust-store-password = mkIf cfg.tls.mtls.enable cfg.tls.mtls.truststorePassword;
 
         features = "token-exchange,admin-fine-grained-authz,dpop";
+        http-management-port = cfg.ports.management;
         health-enabled = true;
         metrics-enabled = true;
         log-level = "INFO";
@@ -585,9 +607,10 @@ in {
       preStart =
         let
           needsVaultInject = cfg.vault.enable && cfg.realms != {};
-          needsTlsFetch = cfg.tls.enable && cfg.tls.certFile == null;
+          needsSelfSigned = cfg.tls.enable && cfg.tls.selfSigned;
+          needsTlsFetch = cfg.tls.enable && cfg.tls.certFile == null && !cfg.tls.selfSigned;
           needsTruststore = cfg.tls.mtls.enable && cfg.tls.certFile != null;
-          needsPreStart = needsVaultInject || needsTlsFetch || needsTruststore;
+          needsPreStart = needsVaultInject || needsSelfSigned || needsTlsFetch || needsTruststore;
           # CA chain source: Vault PKI writes ca-chain.crt when fetching certs;
           # when using external certs, use mtls.caCertFile from vault-fetch-ca
           caCertSource =
@@ -607,6 +630,23 @@ in {
                   ${vaultInjectScript} "$realm_file"
                 fi
               done
+            fi
+          ''}
+
+          ${optionalString needsSelfSigned ''
+            # Generate self-signed P-384 EC certificate in RuntimeDirectory
+            CERT_DIR="/run/keycloak/certs"
+            mkdir -p "$CERT_DIR"
+            if [ ! -f "$CERT_DIR/cert.pem" ] || [ ! -f "$CERT_DIR/key.pem" ]; then
+              ${pkgs.openssl}/bin/openssl req -x509 -newkey ec \
+                -pkeyopt ec_paramgen_curve:P-384 \
+                -keyout "$CERT_DIR/key.pem" -out "$CERT_DIR/cert.pem" \
+                -days 365 -nodes \
+                -subj "/CN=${cfg.hostname}/O=Barbican" \
+                -addext "subjectAltName=DNS:${cfg.hostname},DNS:localhost,IP:127.0.0.1"
+              chmod 600 "$CERT_DIR/key.pem"
+              chmod 644 "$CERT_DIR/cert.pem"
+              echo "Self-signed TLS certificate generated for ${cfg.hostname}"
             fi
           ''}
 
@@ -653,7 +693,8 @@ in {
 
     networking.firewall.allowedTCPPorts =
       (optional (cfg.profile == "development") cfg.httpPort)
-      ++ (optional cfg.tls.enable cfg.httpsPort);
+      ++ (optional cfg.tls.enable cfg.httpsPort)
+      ++ [ cfg.ports.management ];
 
     environment.systemPackages = with pkgs; [ curl jq openssl ];
 
@@ -669,6 +710,14 @@ in {
       {
         assertion = cfg.database.passwordFile != null || cfg.profile == "development";
         message = "Database password must be configured for non-development profiles";
+      }
+      {
+        assertion = !(cfg.tls.selfSigned && cfg.tls.certFile != null);
+        message = "barbican.keycloak.tls.selfSigned is mutually exclusive with tls.certFile/keyFile";
+      }
+      {
+        assertion = !(cfg.tls.selfSigned && cfg.vault.enable);
+        message = "barbican.keycloak.tls.selfSigned is mutually exclusive with vault.enable (Vault manages its own certs)";
       }
     ];
   };

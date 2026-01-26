@@ -97,6 +97,17 @@ in {
   };
 
   config = mkIf cfg.enable {
+    assertions = [
+      {
+        assertion = !(config.networking.nftables.enable or false);
+        message = ''
+          barbican.vmFirewall uses iptables extraCommands which is incompatible
+          with networking.nftables.enable = true. Disable nftables or use a
+          different firewall module.
+        '';
+      }
+    ];
+
     networking.firewall = {
       enable = true;
 
