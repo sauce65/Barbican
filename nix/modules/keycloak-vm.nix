@@ -310,6 +310,16 @@ in {
           description = "Enable MTLS for client authentication";
         };
 
+        caCertFile = mkOption {
+          type = types.nullOr types.path;
+          default = null;
+          description = ''
+            Path to CA certificate chain PEM file for building the client truststore.
+            Required when using external TLS certs (certFile != null) with mTLS.
+            When null and certFile is also null, the CA chain from Vault PKI is used.
+          '';
+        };
+
         truststorePassword = mkOption {
           type = types.str;
           default = "changeit";
@@ -568,30 +578,64 @@ in {
       initialAdminPassword = mkIf (cfg.admin.passwordFile == null) "admin";
     };
 
-    # Vault integration - only for secret injection into realm JSON files
+    # Keycloak pre-start: Vault secret injection, TLS cert fetch, and mTLS truststore
     systemd.services.keycloak = {
       wants = [ "network-online.target" ];
       after = [ "network-online.target" ];
-      preStart = mkIf (cfg.vault.enable && cfg.realms != {}) ''
-        # Inject Vault secrets into realm import files
-        IMPORT_DIR="/run/keycloak/data/import"
-        if [ -d "$IMPORT_DIR" ]; then
-          for realm_file in "$IMPORT_DIR"/*.json; do
-            [ -f "$realm_file" ] || continue
-            # Convert symlink to writable copy
-            if [ -L "$realm_file" ]; then
-              cp --remove-destination "$(readlink -f "$realm_file")" "$realm_file"
+      preStart =
+        let
+          needsVaultInject = cfg.vault.enable && cfg.realms != {};
+          needsTlsFetch = cfg.tls.enable && cfg.tls.certFile == null;
+          needsTruststore = cfg.tls.mtls.enable && cfg.tls.certFile != null;
+          needsPreStart = needsVaultInject || needsTlsFetch || needsTruststore;
+          # CA chain source: Vault PKI writes ca-chain.crt when fetching certs;
+          # when using external certs, use mtls.caCertFile from vault-fetch-ca
+          caCertSource =
+            if cfg.tls.mtls.caCertFile != null then toString cfg.tls.mtls.caCertFile
+            else "/var/lib/keycloak/certs/ca-chain.crt";
+        in mkIf needsPreStart ''
+          ${optionalString needsVaultInject ''
+            # Inject Vault secrets into realm import files
+            IMPORT_DIR="/run/keycloak/data/import"
+            if [ -d "$IMPORT_DIR" ]; then
+              for realm_file in "$IMPORT_DIR"/*.json; do
+                [ -f "$realm_file" ] || continue
+                if [ -L "$realm_file" ]; then
+                  cp --remove-destination "$(readlink -f "$realm_file")" "$realm_file"
+                fi
+                if ${pkgs.gnugrep}/bin/grep -q 'VAULT:' "$realm_file" 2>/dev/null; then
+                  ${vaultInjectScript} "$realm_file"
+                fi
+              done
             fi
-            # Check for VAULT: placeholders
-            if ${pkgs.gnugrep}/bin/grep -q 'VAULT:' "$realm_file" 2>/dev/null; then
-              ${vaultInjectScript} "$realm_file"
-            fi
-          done
-        fi
+          ''}
 
-        # Fetch TLS certs from Vault PKI (only when not using external certs)
-        ${optionalString (cfg.tls.enable && cfg.tls.certFile == null) "${tlsCertScript}"}
-      '';
+          ${optionalString needsTlsFetch ''
+            # Fetch TLS certs from Vault PKI (only when not using external certs)
+            ${tlsCertScript}
+          ''}
+
+          ${optionalString needsTruststore ''
+            # Generate mTLS truststore from CA chain (external cert mode)
+            CERT_DIR="/var/lib/keycloak/certs"
+            mkdir -p "$CERT_DIR"
+            TRUSTSTORE="$CERT_DIR/truststore.p12"
+            rm -f "$TRUSTSTORE"
+
+            if [ -f "${caCertSource}" ]; then
+              ${pkgs.openssl}/bin/openssl pkcs12 -export \
+                -in "${caCertSource}" \
+                -nokeys \
+                -out "$TRUSTSTORE" \
+                -passout pass:${cfg.tls.mtls.truststorePassword}
+              chmod 600 "$TRUSTSTORE"
+              chown keycloak:keycloak "$TRUSTSTORE"
+              echo "mTLS truststore generated from ${caCertSource}"
+            else
+              echo "WARNING: CA cert file not found at ${caCertSource}, mTLS truststore not generated"
+            fi
+          ''}
+        '';
       environment = {
         JAVA_OPTS = concatStringsSep " " cfg.jvmOptions;
       };
