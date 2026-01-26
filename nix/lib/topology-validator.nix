@@ -1,13 +1,13 @@
 # Barbican Topology Validator
 #
 # Validates a deployment topology against isolation boundary requirements.
-# This is the interface between infrastructure provisioning (ao-infra, Terraform)
+# This is the interface between infrastructure provisioning (e.g., Terraform)
 # and security compliance validation (Barbican).
 #
 # The validator is deployment-target agnostic. It takes a topology declaration
 # and checks whether the placement satisfies FedRAMP isolation requirements.
 #
-# Usage from ao-infra:
+# Usage from an infrastructure provisioner:
 #   barbican.lib.topology.validate {
 #     profile = "fedramp-moderate";
 #     topology = { machines = { ... }; };
@@ -254,8 +254,8 @@ in rec {
   # Topology Helpers
   # ==========================================================================
 
-  # Create topology from ao-infra machine definitions
-  fromAoInfraMachines = { machines, serviceMapping }:
+  # Create topology from external provisioner machine definitions
+  fromProvisionerMachines = { machines, serviceMapping }:
     # serviceMapping = { "machine-name" = { vms = { ... }; services = [...]; }; }
     {
       machines = mapAttrs (name: machine:
