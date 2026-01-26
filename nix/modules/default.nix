@@ -20,4 +20,7 @@
   oidcProvider = import ./oidc-provider.nix;  # IA-2, AC-2: OIDC/Keycloak
   usbProtection = import ./usb-protection.nix;  # CM-8, SC-41: USBguard device control
   mandatoryAccessControl = import ./mandatory-access-control.nix;  # AC-3(3), AC-6: AppArmor MAC
+  logForwarding = import ./log-forwarding.nix;  # AU-4, AU-6, SI-4: Centralized log forwarding
+  vulnerabilityScanning = import ./vulnerability-scanning.nix;  # RA-5, SI-2: CVE scanning
+  auditArchival = import ./audit-archival.nix;  # AU-9(2), AU-11: Audit log archival
 }

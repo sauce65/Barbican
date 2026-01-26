@@ -62,6 +62,9 @@
         clusterOutput = import ./nix/modules/cluster-output.nix;       # Cluster deployment artifacts
         usbProtection = import ./nix/modules/usb-protection.nix;       # CM-8, SC-41: USBguard
         mandatoryAccessControl = import ./nix/modules/mandatory-access-control.nix; # AC-3(3): AppArmor
+        logForwarding = import ./nix/modules/log-forwarding.nix;      # AU-4, AU-6, SI-4
+        vulnerabilityScanning = import ./nix/modules/vulnerability-scanning.nix; # RA-5, SI-2
+        auditArchival = import ./nix/modules/audit-archival.nix;      # AU-9(2), AU-11
 
         # FedRAMP Security Profiles (align with Rust ComplianceProfile enum)
         # These profiles match the *_for_profile() functions in src/integration.rs
@@ -97,6 +100,9 @@
               ./nix/modules/cluster-output.nix
               ./nix/modules/usb-protection.nix
               ./nix/modules/mandatory-access-control.nix
+              ./nix/modules/log-forwarding.nix
+              ./nix/modules/vulnerability-scanning.nix
+              ./nix/modules/audit-archival.nix
             ];
           };
       };

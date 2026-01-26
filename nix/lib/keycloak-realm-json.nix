@@ -133,6 +133,11 @@ rec {
           serviceAccountsEnabled = clientCfg.serviceAccountsEnabled or false;
           mtlsEnabled = clientCfg.mtls or mtlsEnabled;
           fapiCompliant = clientCfg.fapi or (profile != "development");
+          clientAuthMethod = clientCfg.clientAuthMethod or (
+            if (clientCfg.mtls or mtlsEnabled) then "client-x509"
+            else if (clientCfg.public or false) then "none"
+            else "client-secret"
+          );
         }
       ) clients;
 
@@ -206,6 +211,11 @@ rec {
     serviceAccountsEnabled ? false,
     mtlsEnabled ? false,
     fapiCompliant ? true,
+    clientAuthMethod ? (
+      if mtlsEnabled then "client-x509"
+      else if publicClient then "none"
+      else "client-secret"
+    ),
   }: {
     inherit clientId name;
     enabled = true;
@@ -216,11 +226,10 @@ rec {
     bearerOnly = false;
     consentRequired = false;
 
-    # Authentication
+    # Authentication - support private-key-jwt via client-secret-jwt authenticator
     clientAuthenticatorType =
-      if mtlsEnabled then "client-x509"
-      else if publicClient then "none"
-      else "client-secret";
+      if clientAuthMethod == "private-key-jwt" then "client-secret-jwt"
+      else clientAuthMethod;
 
     # Secret (will be replaced from Vault if secretFromVault is set)
     secret =
@@ -266,6 +275,8 @@ rec {
     } // optionalAttrs mtlsEnabled {
       "x509.subjectdn" = "";  # Will be configured per-client
       "x509.allow.regex.pattern.comparison" = "false";
+    } // optionalAttrs (clientAuthMethod == "private-key-jwt") {
+      "token.endpoint.auth.signing.alg" = "PS256";
     };
 
     # Default scopes

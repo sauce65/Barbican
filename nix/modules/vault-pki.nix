@@ -264,6 +264,63 @@ in {
       };
     };
 
+    # TLS Configuration
+    tls = {
+      enable = mkOption {
+        type = types.bool;
+        default = cfg.mode == "production";
+        description = "Enable TLS for Vault listener";
+      };
+
+      certFile = mkOption {
+        type = types.nullOr types.path;
+        default = null;
+        description = "Path to TLS certificate file";
+      };
+
+      keyFile = mkOption {
+        type = types.nullOr types.path;
+        default = null;
+        description = "Path to TLS private key file";
+      };
+
+      minVersion = mkOption {
+        type = types.str;
+        default = "tls12";
+        description = "Minimum TLS version (tls12 or tls13)";
+      };
+    };
+
+    # Init Configuration (for production unsealing)
+    init = {
+      secretShares = mkOption {
+        type = types.int;
+        default = 5;
+        description = "Number of key shares for Shamir's secret sharing";
+      };
+
+      secretThreshold = mkOption {
+        type = types.int;
+        default = 3;
+        description = "Number of key shares required to unseal";
+      };
+    };
+
+    # Token Bootstrap Configuration
+    tokenBootstrap = {
+      method = mkOption {
+        type = types.enum [ "dev-token" "approle" "token-file" ];
+        default = if cfg.mode == "dev" then "dev-token" else "token-file";
+        description = "Method for obtaining Vault token for PKI setup";
+      };
+
+      tokenFile = mkOption {
+        type = types.nullOr types.path;
+        default = null;
+        description = "Path to file containing Vault root/admin token (for token-file method)";
+      };
+    };
+
     # Storage path for production mode
     storagePath = mkOption {
       type = types.path;
@@ -464,6 +521,15 @@ in {
           cluster_addr = "${cfg.ha.clusterAddr}"
           ''}
 
+          ${optionalString cfg.tls.enable ''
+          listener "tcp" {
+            address       = "${cfg.address}"
+            tls_cert_file = "${toString cfg.tls.certFile}"
+            tls_key_file  = "${toString cfg.tls.keyFile}"
+            tls_min_version = "${cfg.tls.minVersion}"
+          }
+          ''}
+
           ${optionalString cfg.autoUnseal.enable (
             if cfg.autoUnseal.type == "awskms" then ''
           seal "awskms" {
@@ -485,25 +551,147 @@ in {
       in mkForce "${vaultPackage}/bin/vault server -dev -dev-root-token-id=barbican-dev -dev-listen-address=${cfg.address}"
     );
 
-    # PKI setup service (runs after Vault starts)
-    systemd.services.vault-pki-setup = mkIf (cfg.mode == "dev") {
-      description = "Barbican Vault PKI Setup";
+    # Vault init service (production only - initializes Vault with Shamir keys)
+    systemd.services.vault-init = mkIf (cfg.mode == "production" && !cfg.autoUnseal.enable) {
+      description = "Barbican Vault Initialization";
       after = [ "vault.service" ];
       wants = [ "vault.service" ];
       wantedBy = [ "multi-user.target" ];
 
       environment = {
         VAULT_ADDR = cfg.apiAddr;
-        VAULT_TOKEN = "barbican-dev";  # Only for dev mode
+      } // optionalAttrs cfg.tls.enable {
+        VAULT_CACERT = toString cfg.tls.certFile;
       };
+
+      path = [ pkgs.vault pkgs.jq pkgs.coreutils ];
 
       serviceConfig = {
         Type = "oneshot";
         RemainAfterExit = true;
-        ExecStart = "${pkiSetupScript}";
         User = "vault";
         Group = "vault";
       };
+
+      script = ''
+        set -euo pipefail
+
+        INIT_DIR="${cfg.storagePath}/init"
+        mkdir -p "$INIT_DIR"
+
+        # Skip if already initialized
+        if vault status 2>/dev/null | grep -q "Initialized.*true"; then
+          echo "Vault already initialized"
+          exit 0
+        fi
+
+        # Wait for Vault to be reachable
+        until vault status 2>&1 | grep -q "Initialized"; do
+          echo "Waiting for Vault..."
+          sleep 2
+        done
+
+        echo "Initializing Vault with ${toString cfg.init.secretShares} shares, threshold ${toString cfg.init.secretThreshold}..."
+        vault operator init \
+          -key-shares=${toString cfg.init.secretShares} \
+          -key-threshold=${toString cfg.init.secretThreshold} \
+          -format=json > "$INIT_DIR/init-keys.json"
+
+        chmod 600 "$INIT_DIR/init-keys.json"
+        echo "Vault initialized. Keys written to $INIT_DIR/init-keys.json"
+        echo "WARNING: Secure these keys immediately and remove from disk."
+      '';
+    };
+
+    # Vault unseal service (production only - unseals using stored keys)
+    systemd.services.vault-unseal = mkIf (cfg.mode == "production" && !cfg.autoUnseal.enable) {
+      description = "Barbican Vault Unseal";
+      after = [ "vault.service" "vault-init.service" ];
+      wants = [ "vault.service" ];
+      wantedBy = [ "multi-user.target" ];
+
+      environment = {
+        VAULT_ADDR = cfg.apiAddr;
+      } // optionalAttrs cfg.tls.enable {
+        VAULT_CACERT = toString cfg.tls.certFile;
+      };
+
+      path = [ pkgs.vault pkgs.jq ];
+
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+        User = "vault";
+        Group = "vault";
+      };
+
+      script = ''
+        set -euo pipefail
+
+        INIT_DIR="${cfg.storagePath}/init"
+
+        # Wait for Vault to be reachable
+        until vault status 2>&1 | grep -q "Sealed"; do
+          echo "Waiting for Vault to report seal status..."
+          sleep 2
+        done
+
+        # Check if already unsealed
+        if vault status 2>/dev/null | grep -q "Sealed.*false"; then
+          echo "Vault already unsealed"
+          exit 0
+        fi
+
+        if [ ! -f "$INIT_DIR/init-keys.json" ]; then
+          echo "ERROR: No init keys found at $INIT_DIR/init-keys.json"
+          echo "Vault must be unsealed manually."
+          exit 1
+        fi
+
+        echo "Unsealing Vault..."
+        THRESHOLD=${toString cfg.init.secretThreshold}
+        for i in $(seq 0 $((THRESHOLD - 1))); do
+          KEY=$(jq -r ".unseal_keys_b64[$i]" "$INIT_DIR/init-keys.json")
+          vault operator unseal "$KEY"
+        done
+
+        echo "Vault unsealed successfully"
+      '';
+    };
+
+    # PKI setup service (runs after Vault starts and is unsealed)
+    systemd.services.vault-pki-setup = {
+      description = "Barbican Vault PKI Setup";
+      after = [ "vault.service" ]
+        ++ optional (cfg.mode == "production" && !cfg.autoUnseal.enable) "vault-unseal.service";
+      wants = [ "vault.service" ];
+      wantedBy = [ "multi-user.target" ];
+
+      environment = {
+        VAULT_ADDR = cfg.apiAddr;
+      } // optionalAttrs (cfg.tokenBootstrap.method == "dev-token") {
+        VAULT_TOKEN = "barbican-dev";
+      } // optionalAttrs cfg.tls.enable {
+        VAULT_CACERT = toString cfg.tls.certFile;
+      };
+
+      serviceConfig = mkMerge [
+        {
+          Type = "oneshot";
+          RemainAfterExit = true;
+          ExecStart = "${pkiSetupScript}";
+          User = "vault";
+          Group = "vault";
+        }
+        (mkIf (cfg.tokenBootstrap.method == "token-file" && cfg.tokenBootstrap.tokenFile != null) {
+          ExecStart = mkForce (let
+            wrapperScript = pkgs.writeShellScript "vault-pki-setup-wrapper" ''
+              export VAULT_TOKEN=$(cat ${toString cfg.tokenBootstrap.tokenFile})
+              exec ${pkiSetupScript}
+            '';
+          in "${wrapperScript}");
+        })
+      ];
     };
 
     # Firewall rules for Vault
@@ -527,6 +715,14 @@ in {
       {
         assertion = !cfg.ha.enable || cfg.ha.clusterAddr != null;
         message = "HA mode requires clusterAddr to be set";
+      }
+      {
+        assertion = cfg.mode == "dev" || !cfg.tls.enable || (cfg.tls.certFile != null && cfg.tls.keyFile != null);
+        message = "Production TLS requires both certFile and keyFile to be set";
+      }
+      {
+        assertion = cfg.tokenBootstrap.method != "token-file" || cfg.tokenBootstrap.tokenFile != null;
+        message = "token-file bootstrap method requires tokenFile to be set";
       }
     ];
   })

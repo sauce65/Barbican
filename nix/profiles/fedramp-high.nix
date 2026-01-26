@@ -16,9 +16,10 @@
 #   Key Rotation: 30 days (SC-12)
 #
 # Controls implemented:
-#   AC-2, AC-6, AC-7, AC-10, AC-11, AC-12, AU-2, AU-3, AU-8, AU-9,
-#   IA-3, IA-5, IA-5(2), SC-7, SC-7(5), SC-8, SC-12, SC-17, SC-28, SC-39,
-#   SI-4, SI-7, SI-16
+#   AC-2, AC-6, AC-7, AC-10, AC-11, AC-12, AU-2, AU-3, AU-4, AU-6,
+#   AU-8, AU-9, AU-9(2), AU-11, IA-3, IA-5, IA-5(2), RA-5,
+#   SC-7, SC-7(5), SC-8, SC-12, SC-17, SC-28, SC-39,
+#   SI-2, SI-4, SI-7, SI-16
 { config, lib, pkgs, ... }:
 
 {
@@ -33,6 +34,10 @@
     ../modules/intrusion-detection.nix
     ../modules/vault-pki.nix
     ../modules/systemd-hardening.nix
+    ../modules/secrets-management.nix      # IA-5, SC-28
+    ../modules/log-forwarding.nix          # AU-4, AU-6, SI-4
+    ../modules/vulnerability-scanning.nix  # RA-5, SI-2
+    ../modules/audit-archival.nix          # AU-9(2), AU-11
   ];
 
   barbican = {
@@ -136,6 +141,39 @@
 
     # SC-39: Process Isolation (systemd hardening for all services)
     systemdHardening.enable = true;
+
+    # IA-5, SC-28: Secrets Management
+    secrets = {
+      enable = true;
+      provider = "sops-nix";
+    };
+
+    # SC-8, SC-12: Vault TLS (production defaults)
+    vault.tls = {
+      enable = true;
+      minVersion = "tls13";
+    };
+    vault.tokenBootstrap.method = "token-file";
+
+    # AU-4, AU-6, SI-4: Centralized Log Forwarding
+    logForwarding = {
+      enable = lib.mkDefault false;  # Consumer must set lokiUrl
+      profile = "high";
+    };
+
+    # RA-5, SI-2: Vulnerability Scanning (daily for High)
+    vulnScanning = {
+      enable = true;
+      profile = "high";
+    };
+
+    # AU-9(2), AU-11: Audit Log Archival
+    auditArchival = {
+      enable = lib.mkDefault false;  # Consumer must configure sources + keys
+      enableEncryption = true;
+      enableHmacSigning = true;
+      retentionDays = 365;
+    };
   };
 
   # Set environment variable so Rust code uses matching profile

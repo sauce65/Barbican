@@ -435,6 +435,11 @@ in {
                   default = cfg.profile != "development";
                   description = "Enable FAPI 2.0 compliance for this client";
                 };
+                clientAuthMethod = mkOption {
+                  type = types.enum [ "client-secret" "client-x509" "private-key-jwt" ];
+                  default = if cfg.tls.mtls.enable then "client-x509" else "client-secret";
+                  description = "Client authentication method (FAPI 2.0)";
+                };
               };
             });
             default = {};
