@@ -379,6 +379,29 @@ in {
               description = "Services that require this certificate";
               example = [ "postgresql.service" ];
             };
+
+            copyToRuntime = mkOption {
+              type = types.nullOr (types.submodule {
+                options = {
+                  service = mkOption {
+                    type = types.str;
+                    description = "Target systemd service name (without .service suffix)";
+                    example = "keycloak";
+                  };
+                  directory = mkOption {
+                    type = types.str;
+                    default = "tls";
+                    description = "Subdirectory within the service's RuntimeDirectory";
+                  };
+                };
+              });
+              default = null;
+              description = ''
+                Copy certificates into a service's RuntimeDirectory via ExecStartPre.
+                Use this for services with DynamicUser=true that cannot read files
+                from the standard certificate output directory.
+              '';
+            };
           };
         });
         default = {};
@@ -661,5 +684,33 @@ in {
       }
     ];
   })
+
+    # =========================================================================
+    # DynamicUser Runtime Certificate Copy
+    # For services using DynamicUser=true that can't read root-owned cert files
+    # =========================================================================
+    (mkIf cfg.client.enable (
+      let
+        runtimeCerts = filterAttrs (_: c: c.copyToRuntime != null) cfg.client.certificates;
+      in
+      mkIf (runtimeCerts != { }) {
+        systemd.services = mapAttrs' (
+          name: certCfg:
+          let
+            rt = certCfg.copyToRuntime;
+            copyScript = pkgs.writeShellScript "copy-${name}-certs-to-runtime" ''
+              mkdir -p /run/${rt.service}/${rt.directory}
+              cp ${certCfg.outputDir}/${certCfg.certFile} /run/${rt.service}/${rt.directory}/${certCfg.certFile}
+              cp ${certCfg.outputDir}/${certCfg.keyFile} /run/${rt.service}/${rt.directory}/${certCfg.keyFile}
+              chmod 644 /run/${rt.service}/${rt.directory}/${certCfg.certFile}
+              chmod 644 /run/${rt.service}/${rt.directory}/${certCfg.keyFile}
+            '';
+          in
+          nameValuePair rt.service {
+            serviceConfig.ExecStartPre = [ "+${copyScript}" ];
+          }
+        ) runtimeCerts;
+      }
+    ))
   ];
 }
