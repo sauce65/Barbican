@@ -37,13 +37,15 @@ let
       sync_period = currentProfile.positionsSyncTime;
     };
 
-    clients = [{
-      url = "${cfg.lokiUrl}/loki/api/v1/push";
-    } // optionalAttrs cfg.tls.enable {
-      tls_config = {
-        ca_file = toString cfg.tls.caCertFile;
-      };
-    }];
+    clients = [
+      ({
+        url = "${cfg.lokiUrl}/loki/api/v1/push";
+      } // optionalAttrs cfg.tls.enable {
+        tls_config = {
+          ca_file = toString cfg.tls.caCertFile;
+        };
+      })
+    ];
 
     scrape_configs =
       # Journal scraping
@@ -169,18 +171,17 @@ in {
       ];
     })
 
-    # Assertions
+    # Assertions and warnings
     {
       assertions = [
-        {
-          assertion = !currentProfile.requireTls || cfg.tls.enable;
-          message = "FedRAMP High profile requires TLS for log forwarding (AU-4)";
-        }
         {
           assertion = !cfg.tls.enable || cfg.tls.caCertFile != null;
           message = "TLS log forwarding requires caCertFile to be set";
         }
       ];
+
+      warnings = optional (currentProfile.requireTls && !cfg.tls.enable)
+        "barbican.logForwarding: FedRAMP High profile recommends TLS for log transport (AU-4). If using an encrypted overlay network (e.g. Tailscale), this warning can be ignored.";
     }
   ]);
 }
