@@ -103,7 +103,7 @@ let
   tlsCertScript = pkgs.writeShellScript "keycloak-tls-certs" ''
     set -euo pipefail
 
-    CERT_DIR="/var/lib/keycloak/certs"
+    CERT_DIR="/run/keycloak/certs"
     VAULT_ADDR="${cfg.vault.address}"
 
     mkdir -p "$CERT_DIR"
@@ -558,14 +558,14 @@ in {
         # TLS - support both external certs (vault-pki client) and self-managed
         https-certificate-file = mkIf cfg.tls.enable
           (if cfg.tls.certFile != null then cfg.tls.certFile
-           else "/var/lib/keycloak/certs/server.crt");
+           else "/run/keycloak/certs/server.crt");
         https-certificate-key-file = mkIf cfg.tls.enable
           (if cfg.tls.keyFile != null then cfg.tls.keyFile
-           else "/var/lib/keycloak/certs/server.key");
+           else "/run/keycloak/certs/server.key");
 
         # MTLS
         https-client-auth = mkIf cfg.tls.mtls.enable cfg.tls.mtls.clientAuth;
-        https-trust-store-file = mkIf cfg.tls.mtls.enable "/var/lib/keycloak/certs/truststore.p12";
+        https-trust-store-file = mkIf cfg.tls.mtls.enable "/run/keycloak/certs/truststore.p12";
         https-trust-store-password = mkIf cfg.tls.mtls.enable cfg.tls.mtls.truststorePassword;
 
         features = "token-exchange,admin-fine-grained-authz,dpop";
@@ -592,7 +592,7 @@ in {
           # when using external certs, use mtls.caCertFile from vault-fetch-ca
           caCertSource =
             if cfg.tls.mtls.caCertFile != null then toString cfg.tls.mtls.caCertFile
-            else "/var/lib/keycloak/certs/ca-chain.crt";
+            else "/run/keycloak/certs/ca-chain.crt";
         in mkIf needsPreStart ''
           ${optionalString needsVaultInject ''
             # Inject Vault secrets into realm import files
@@ -617,7 +617,8 @@ in {
 
           ${optionalString needsTruststore ''
             # Generate mTLS truststore from CA chain (external cert mode)
-            CERT_DIR="/var/lib/keycloak/certs"
+            # Use RuntimeDirectory (/run/keycloak) since DynamicUser=true makes /var/lib read-only
+            CERT_DIR="/run/keycloak/certs"
             mkdir -p "$CERT_DIR"
             TRUSTSTORE="$CERT_DIR/truststore.p12"
             rm -f "$TRUSTSTORE"
@@ -629,7 +630,6 @@ in {
                 -out "$TRUSTSTORE" \
                 -passout pass:${cfg.tls.mtls.truststorePassword}
               chmod 600 "$TRUSTSTORE"
-              chown keycloak:keycloak "$TRUSTSTORE"
               echo "mTLS truststore generated from ${caCertSource}"
             else
               echo "WARNING: CA cert file not found at ${caCertSource}, mTLS truststore not generated"
