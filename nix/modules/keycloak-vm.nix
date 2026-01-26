@@ -45,23 +45,15 @@ let
     pkgs.writeText "${realmName}-realm.json" (builtins.toJSON realmJson)
   ) realmJsons;
 
-  # Combined realm import directory
-  realmImportDir = pkgs.runCommand "keycloak-realms" {} ''
-    mkdir -p $out
-    ${concatStringsSep "\n" (mapAttrsToList (name: file: ''
-      cp ${file} $out/${name}-realm.json
-    '') realmFiles)}
-  '';
-
   # Helper to safely convert nullable paths/strings to shell-safe values
   toShellPath = v: if v == null then "" else toString v;
   toShellStr = v: if v == null then "" else v;
 
-  # Vault secret injection script
+  # Vault secret injection script - accepts a single realm file path as argument
   vaultInjectScript = pkgs.writeShellScript "keycloak-vault-inject" ''
     set -euo pipefail
 
-    REALM_DIR="/var/lib/keycloak/realms"
+    REALM_FILE="$1"
     VAULT_ADDR="${cfg.vault.address}"
 
     # Get Vault token (from file or AppRole)
@@ -85,36 +77,26 @@ let
 
     export VAULT_TOKEN
 
-    # Copy realm files to writable location
-    mkdir -p "$REALM_DIR"
-    cp -r ${realmImportDir}/* "$REALM_DIR/"
-    chmod -R u+w "$REALM_DIR"
+    # Inject secrets into the single file
+    echo "Processing $REALM_FILE..."
+    while IFS= read -r placeholder; do
+      secret_path="''${placeholder#VAULT:}"
+      echo "  Fetching: $secret_path"
 
-    # Inject secrets into each realm file
-    for realm_file in "$REALM_DIR"/*.json; do
-      echo "Processing $realm_file..."
+      secret_value=$(${pkgs.curl}/bin/curl -sf \
+        -H "X-Vault-Token: $VAULT_TOKEN" \
+        "$VAULT_ADDR/v1/$secret_path" \
+        | ${pkgs.jq}/bin/jq -r '.data.data.value // .data.value // empty')
 
-      # Find and replace VAULT: placeholders
-      while IFS= read -r placeholder; do
-        secret_path="''${placeholder#VAULT:}"
-        echo "  Fetching: $secret_path"
+      if [ -n "$secret_value" ]; then
+        escaped_value=$(printf '%s\n' "$secret_value" | sed 's/[&/\]/\\&/g')
+        ${pkgs.gnused}/bin/sed -i "s|VAULT:$secret_path|$escaped_value|g" "$REALM_FILE"
+      else
+        echo "  WARNING: Could not fetch $secret_path"
+      fi
+    done < <(${pkgs.gnugrep}/bin/grep -oh 'VAULT:[a-zA-Z0-9/_-]*' "$REALM_FILE" 2>/dev/null | sort -u || true)
 
-        secret_value=$(${pkgs.curl}/bin/curl -sf \
-          -H "X-Vault-Token: $VAULT_TOKEN" \
-          "$VAULT_ADDR/v1/$secret_path" \
-          | ${pkgs.jq}/bin/jq -r '.data.data.value // .data.value // empty')
-
-        if [ -n "$secret_value" ]; then
-          # Escape for sed
-          escaped_value=$(printf '%s\n' "$secret_value" | sed 's/[&/\]/\\&/g')
-          ${pkgs.gnused}/bin/sed -i "s|VAULT:$secret_path|$escaped_value|g" "$realm_file"
-        else
-          echo "  WARNING: Could not fetch $secret_path"
-        fi
-      done < <(${pkgs.gnugrep}/bin/grep -oh 'VAULT:[a-zA-Z0-9/_-]*' "$realm_file" 2>/dev/null | sort -u || true)
-    done
-
-    echo "Vault secret injection complete"
+    echo "Vault secret injection complete for $REALM_FILE"
   '';
 
   # TLS certificate fetch script (from Vault PKI)
@@ -212,8 +194,8 @@ in {
     # Database configuration
     database = {
       type = mkOption {
-        type = types.enum [ "postgres" "mariadb" ];
-        default = "postgres";
+        type = types.enum [ "postgresql" "mysql" "mariadb" ];
+        default = "postgresql";
         description = "Database type";
       };
 
@@ -252,6 +234,12 @@ in {
         default = null;
         description = "Vault path for database password";
         example = "secret/keycloak/database";
+      };
+
+      createLocally = mkOption {
+        type = types.bool;
+        default = true;
+        description = "Create database locally (set false for remote database)";
       };
     };
 
@@ -301,6 +289,18 @@ in {
         type = types.str;
         default = "720h";
         description = "Certificate TTL";
+      };
+
+      certFile = mkOption {
+        type = types.nullOr types.path;
+        default = null;
+        description = "Path to TLS certificate file. When set, skips Vault PKI cert fetch (use with vault-pki client module).";
+      };
+
+      keyFile = mkOption {
+        type = types.nullOr types.path;
+        default = null;
+        description = "Path to TLS private key file. When set, skips Vault PKI cert fetch.";
       };
 
       mtls = {
@@ -511,98 +511,100 @@ in {
   };
 
   config = mkIf cfg.enable {
-    # Use NixOS native Keycloak service
     services.keycloak = {
       enable = true;
+
+      # Database - use NixOS native options (not settings.db-*)
+      database = {
+        type = cfg.database.type;
+        host = cfg.database.host;
+        port = cfg.database.port;
+        name = cfg.database.name;
+        username = cfg.database.user;
+        passwordFile = cfg.database.passwordFile;
+        createLocally = cfg.database.createLocally;
+      };
+
+      # Realm import via NixOS mechanism
+      realmFiles = attrValues realmFiles;
 
       settings = {
         hostname = cfg.hostname;
         http-port = cfg.httpPort;
         https-port = cfg.httpsPort;
-
-        # Production mode unless development
         http-enabled = cfg.profile == "development";
         hostname-strict = cfg.profile != "development";
         hostname-strict-https = cfg.tls.enable;
 
-        # Database
-        db = cfg.database.type;
-        db-url-host = cfg.database.host;
-        db-url-port = toString cfg.database.port;
-        db-url-database = cfg.database.name;
-        db-username = cfg.database.user;
-
-        # TLS
-        https-certificate-file = mkIf cfg.tls.enable "/var/lib/keycloak/certs/server.crt";
-        https-certificate-key-file = mkIf cfg.tls.enable "/var/lib/keycloak/certs/server.key";
+        # TLS - support both external certs (vault-pki client) and self-managed
+        https-certificate-file = mkIf cfg.tls.enable
+          (if cfg.tls.certFile != null then cfg.tls.certFile
+           else "/var/lib/keycloak/certs/server.crt");
+        https-certificate-key-file = mkIf cfg.tls.enable
+          (if cfg.tls.keyFile != null then cfg.tls.keyFile
+           else "/var/lib/keycloak/certs/server.key");
 
         # MTLS
         https-client-auth = mkIf cfg.tls.mtls.enable cfg.tls.mtls.clientAuth;
         https-trust-store-file = mkIf cfg.tls.mtls.enable "/var/lib/keycloak/certs/truststore.p12";
         https-trust-store-password = mkIf cfg.tls.mtls.enable cfg.tls.mtls.truststorePassword;
 
-        # Features
         features = "token-exchange,admin-fine-grained-authz,dpop";
-
-        # Health and metrics
         health-enabled = true;
         metrics-enabled = true;
-
-        # Logging (AU-2, AU-3)
-        log-level = if cfg.profile == "development" then "INFO" else "INFO";
+        log-level = "INFO";
         log-format = "json";
       };
 
-      # Database password
-      database.passwordFile = cfg.database.passwordFile;
-
-      # Initial admin (only used on first boot)
       initialAdminPassword = mkIf (cfg.admin.passwordFile == null) "admin";
     };
 
-    # Systemd overrides for Vault integration
+    # Vault integration - only for secret injection into realm JSON files
     systemd.services.keycloak = {
       wants = [ "network-online.target" ];
-      after = [ "network-online.target" "vault-agent.service" ];
+      after = [ "network-online.target" ];
+      preStart = mkIf (cfg.vault.enable && cfg.realms != {}) ''
+        # Inject Vault secrets into realm import files
+        IMPORT_DIR="/run/keycloak/data/import"
+        if [ -d "$IMPORT_DIR" ]; then
+          for realm_file in "$IMPORT_DIR"/*.json; do
+            [ -f "$realm_file" ] || continue
+            # Convert symlink to writable copy
+            if [ -L "$realm_file" ]; then
+              cp --remove-destination "$(readlink -f "$realm_file")" "$realm_file"
+            fi
+            # Check for VAULT: placeholders
+            if ${pkgs.gnugrep}/bin/grep -q 'VAULT:' "$realm_file" 2>/dev/null; then
+              ${vaultInjectScript} "$realm_file"
+            fi
+          done
+        fi
 
-      preStart = mkIf cfg.vault.enable ''
-        # Inject secrets from Vault
-        ${vaultInjectScript}
-
-        # Fetch TLS certificates
-        ${optionalString cfg.tls.enable tlsCertScript}
+        # Fetch TLS certs from Vault PKI (only when not using external certs)
+        ${optionalString (cfg.tls.enable && cfg.tls.certFile == null) "${tlsCertScript}"}
       '';
-
       environment = {
         JAVA_OPTS = concatStringsSep " " cfg.jvmOptions;
-        KC_DIR = "/var/lib/keycloak/realms";
       };
     };
 
-    # Firewall
     networking.firewall.allowedTCPPorts =
       (optional (cfg.profile == "development") cfg.httpPort)
       ++ (optional cfg.tls.enable cfg.httpsPort);
 
-    # Required packages
-    environment.systemPackages = with pkgs; [
-      curl
-      jq
-      openssl
-    ];
+    environment.systemPackages = with pkgs; [ curl jq openssl ];
 
-    # Assertions
     assertions = [
       {
         assertion = cfg.profile == "development" || cfg.tls.enable;
         message = "TLS must be enabled for non-development profiles";
       }
       {
-        assertion = cfg.vault.enable -> (cfg.vault.tokenFile != null || cfg.vault.roleId != null);
+        assertion = !cfg.vault.enable || cfg.vault.tokenFile != null || cfg.vault.roleId != null;
         message = "Vault integration requires either tokenFile or roleId";
       }
       {
-        assertion = cfg.database.passwordFile != null || cfg.database.passwordFromVault != null || cfg.profile == "development";
+        assertion = cfg.database.passwordFile != null || cfg.profile == "development";
         message = "Database password must be configured for non-development profiles";
       }
     ];
