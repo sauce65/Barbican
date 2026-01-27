@@ -606,17 +606,32 @@ in {
       after = [ "network-online.target" ];
       preStart =
         let
+          needsRealmSetup = cfg.realms != {};
           needsVaultInject = cfg.vault.enable && cfg.realms != {};
           needsSelfSigned = cfg.tls.enable && cfg.tls.selfSigned;
           needsTlsFetch = cfg.tls.enable && cfg.tls.certFile == null && !cfg.tls.selfSigned;
           needsTruststore = cfg.tls.mtls.enable && cfg.tls.certFile != null;
-          needsPreStart = needsVaultInject || needsSelfSigned || needsTlsFetch || needsTruststore;
+          needsPreStart = needsRealmSetup || needsVaultInject || needsSelfSigned || needsTlsFetch || needsTruststore;
           # CA chain source: Vault PKI writes ca-chain.crt when fetching certs;
           # when using external certs, use mtls.caCertFile from vault-fetch-ca
           caCertSource =
             if cfg.tls.mtls.caCertFile != null then toString cfg.tls.mtls.caCertFile
             else "/run/keycloak/certs/ca-chain.crt";
         in mkIf needsPreStart ''
+          ${optionalString needsRealmSetup ''
+            # Deploy realm JSON files into Keycloak's import directory.
+            # The upstream NixOS module uses systemd.tmpfiles.settings to create
+            # symlinks in /run/keycloak/data/import/, but with DynamicUser=true
+            # the RuntimeDirectory is cleaned on service stop and recreated empty
+            # on start — losing the tmpfiles-created content. Recreate here so
+            # realm import works on every service start, not just at boot.
+            IMPORT_DIR="/run/keycloak/data/import"
+            mkdir -p "$IMPORT_DIR"
+            ${concatStringsSep "\n" (mapAttrsToList (name: file:
+              "ln -sf ${file} \"$IMPORT_DIR/${name}-realm.json\""
+            ) realmFiles)}
+          ''}
+
           ${optionalString needsVaultInject ''
             # Inject Vault secrets into realm import files
             IMPORT_DIR="/run/keycloak/data/import"
