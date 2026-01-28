@@ -32,6 +32,7 @@
     # Consumer apps can enable these if needed
     ../modules/secure-postgres.nix
     ../modules/vault-pki.nix
+    ../modules/ebs-recovery.nix
   ];
 
   barbican = {
@@ -91,6 +92,15 @@
       defaultPolicy = "drop";
       enableEgressFiltering = false;  # Not required for Low
       logDropped = false;             # Minimal logging for Low
+    };
+
+    # CP-9: EBS Recovery defaults for FedRAMP Low
+    # Not enabled by default - consumer must set awsRegion and enable
+    ebsRecovery = {
+      retentionDays = lib.mkDefault 7;
+      priority = lib.mkDefault "standard";
+      enableCrossRegionCopy = lib.mkDefault false;
+      enableRestoreTest = lib.mkDefault false;
     };
   };
 

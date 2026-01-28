@@ -33,6 +33,7 @@
     ../modules/vm-firewall.nix
     ../modules/intrusion-detection.nix
     ../modules/vault-pki.nix
+    ../modules/ebs-recovery.nix
   ];
 
   barbican = {
@@ -138,6 +139,16 @@
         maxCertTtl = "2160h";        # 90 days (match key rotation)
       };
       audit.enable = true;           # AU-2: Vault audit logging
+    };
+
+    # CP-9, CP-6: EBS Recovery defaults for FedRAMP Moderate
+    # Not enabled by default - consumer must set awsRegion and enable
+    ebsRecovery = {
+      retentionDays = lib.mkDefault 30;
+      priority = lib.mkDefault "standard";
+      enableCrossRegionCopy = lib.mkDefault true;
+      crossRegionRetentionDays = lib.mkDefault 30;
+      enableRestoreTest = lib.mkDefault false;
     };
   };
 

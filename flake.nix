@@ -65,6 +65,7 @@
         logForwarding = import ./nix/modules/log-forwarding.nix;      # AU-4, AU-6, SI-4
         vulnerabilityScanning = import ./nix/modules/vulnerability-scanning.nix; # RA-5, SI-2
         auditArchival = import ./nix/modules/audit-archival.nix;      # AU-9(2), AU-11
+        ebsRecovery = import ./nix/modules/ebs-recovery.nix;          # CP-9, CP-6, SC-28
 
         # FedRAMP Security Profiles (align with Rust ComplianceProfile enum)
         # These profiles match the *_for_profile() functions in src/integration.rs
@@ -103,6 +104,7 @@
               ./nix/modules/log-forwarding.nix
               ./nix/modules/vulnerability-scanning.nix
               ./nix/modules/audit-archival.nix
+              ./nix/modules/ebs-recovery.nix
             ];
           };
       };

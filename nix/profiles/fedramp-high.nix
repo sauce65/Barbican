@@ -39,6 +39,7 @@
     ../modules/log-forwarding.nix          # AU-4, AU-6, SI-4
     ../modules/vulnerability-scanning.nix  # RA-5, SI-2
     ../modules/audit-archival.nix          # AU-9(2), AU-11
+    ../modules/ebs-recovery.nix            # CP-9, CP-6, SC-28
   ];
 
   barbican = {
@@ -194,6 +195,17 @@
       enableEncryption = true;
       enableHmacSigning = true;
       retentionDays = 365;
+    };
+
+    # CP-9, CP-9(1), CP-6: EBS Recovery defaults for FedRAMP High
+    # Not enabled by default - consumer must set awsRegion and enable
+    ebsRecovery = {
+      retentionDays = lib.mkDefault 90;
+      priority = lib.mkDefault "critical";  # Every 6 hours
+      enableCrossRegionCopy = lib.mkDefault true;
+      crossRegionRetentionDays = lib.mkDefault 90;
+      enableRestoreTest = lib.mkDefault true;
+      restoreTestSchedule = lib.mkDefault "weekly";
     };
   };
 

@@ -329,6 +329,10 @@ let
       keycloakMgmtPort = toString (atPath [ "barbican" "keycloak" "ports" "management" ] 9000);
       keycloakHostname = atPath [ "barbican" "keycloak" "hostname" ] "localhost";
       keycloakSelfSigned = atPath [ "barbican" "keycloak" "tls" "selfSigned" ] false;
+
+      ebsRecoveryEnabled = atPath [ "barbican" "ebsRecovery" "enable" ] false;
+      ebsRecoveryRegion = atPath [ "barbican" "ebsRecovery" "awsRegion" ] "";
+      ebsRecoveryPriority = atPath [ "barbican" "ebsRecovery" "priority" ] "standard";
     in
     # nftables conflict detection
     (optionalString (vmFirewallEnabled && nftablesEnabled) ''
@@ -355,6 +359,51 @@ let
     # Keycloak self-signed cert expiry check
     + (optionalString (keycloakEnabled && keycloakSelfSigned) ''
       check_cert "/run/keycloak/certs/cert.pem" "Keycloak self-signed TLS"
+    '')
+    # EBS Recovery health check (CP-9)
+    + (optionalString ebsRecoveryEnabled ''
+      section "EBS Recovery (CP-9)"
+
+      # Check if snapshot timer is active
+      if systemctl is-active --quiet barbican-ebs-snapshot.timer 2>/dev/null; then
+        pass "EBS snapshot timer: active"
+      else
+        fail "EBS snapshot timer: not active"
+      fi
+
+      # Check for recent snapshots
+      HOSTNAME=$(hostname)
+      MAX_AGE_HOURS=${ if ebsRecoveryPriority == "critical" then "12" else if ebsRecoveryPriority == "standard" then "48" else "192" }
+
+      LATEST=$(${pkgs.awscli2}/bin/aws ec2 describe-snapshots \
+        --owner-ids self \
+        --filters \
+          "Name=tag:ManagedBy,Values=barbican" \
+          "Name=tag:Hostname,Values=$HOSTNAME" \
+        --query 'reverse(sort_by(Snapshots,&StartTime))[0].StartTime' \
+        --output text \
+        --region "${ebsRecoveryRegion}" 2>/dev/null || echo "None")
+
+      if [ "$LATEST" = "None" ] || [ -z "$LATEST" ]; then
+        warn "EBS snapshots: none found (may be first run)"
+      else
+        LATEST_EPOCH=$(date -d "$LATEST" +%s 2>/dev/null || echo 0)
+        NOW_EPOCH=$(date +%s)
+        AGE_HOURS=$(( (NOW_EPOCH - LATEST_EPOCH) / 3600 ))
+
+        if [ "$AGE_HOURS" -gt "$MAX_AGE_HOURS" ]; then
+          fail "EBS snapshots: stale ($AGE_HOURS hours old, threshold: $MAX_AGE_HOURS)"
+        else
+          pass "EBS snapshots: fresh ($AGE_HOURS hours old)"
+        fi
+      fi
+
+      # Check last run status
+      if systemctl show barbican-ebs-snapshot.service --property=ActiveState 2>/dev/null | grep -q "failed"; then
+        fail "EBS snapshot service: last run failed"
+      else
+        info "EBS snapshot service: no recent failures"
+      fi
     '');
 
 in {
